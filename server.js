@@ -218,7 +218,30 @@ app.post('/admin/scrape', requireAuth, async (req, res) => {
    ══════════════════════════════════════════ */
 app.get('/admin/production-status', requireAuth, async (req, res) => {
   const vertical = req.query.vertical || 'hotel';
-  if (!pool) return res.json({ error: 'Database not connected' });
+
+  // Hardcoded production values (always available, even without DB)
+  const prodConfig = {
+    model: 'gpt-5.4-mini',
+    temperature: 0.7,
+    vadSilenceFrames: 50,
+    sttModel: 'Deepgram Nova-2',
+    ttsModel: 'Cartesia Flash'
+  };
+
+  if (!pool) {
+    // Return hardcoded production defaults without DB stats
+    return res.json({
+      vertical: vertical,
+      model: prodConfig.model,
+      temperature: prodConfig.temperature,
+      vadSilenceFrames: prodConfig.vadSilenceFrames,
+      sttModel: prodConfig.sttModel,
+      ttsModel: prodConfig.ttsModel,
+      tenantCount: '—',
+      avgConversion: '—',
+      avgMinutes: '—'
+    });
+  }
 
   try {
     // Tenant count for this vertical
@@ -252,15 +275,6 @@ app.get('/admin/production-status', requireAuth, async (req, res) => {
       );
       avgMinutes = parseFloat(minRes.rows[0]?.avg_min || 0).toFixed(1);
     } catch(e) { /* column may not exist */ }
-
-    // Hardcoded production values (match production codebase)
-    const prodConfig = {
-      model: 'gpt-5.4-mini',
-      temperature: 0.7,
-      vadSilenceFrames: 50,
-      sttModel: 'Deepgram Nova-2',
-      ttsModel: 'Cartesia Flash'
-    };
 
     res.json({
       vertical: vertical,

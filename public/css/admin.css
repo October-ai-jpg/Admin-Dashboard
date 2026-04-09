@@ -729,82 +729,45 @@ body.sidebar-collapsed .main{margin-left:var(--sidebar-collapsed)}
 }
 
 /* ═══════════════════════════════════════
-   SPACE MAPPER (matches production client)
+   ROOM MAPPER (matches production rooms.html)
    ═══════════════════════════════════════ */
-.space-list{list-style:none;padding:0;margin:0}
-.space-item{
-  display:flex;align-items:center;gap:12px;
-  padding:12px 0;
-  border-bottom:1px dashed var(--border);
-  cursor:pointer;
-  transition:background 0.15s;
-}
-.space-item:hover{background:rgba(0,0,0,0.015);margin:0 -8px;padding:12px 8px;border-radius:8px}
-.space-dot{
-  width:8px;height:8px;
-  border-radius:50%;
-  flex-shrink:0;
-}
-.space-dot.connected{background:var(--green)}
-.space-dot.missing{background:#ccc}
-.space-name{font-size:13px;font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
-.space-sweep{font-size:11px;color:var(--muted);font-family:'SF Mono',Monaco,Consolas,monospace;overflow:hidden;text-overflow:ellipsis;max-width:120px}
-.space-empty{font-size:12px;color:var(--muted);padding:16px 0;text-align:center}
-
-.space-edit-panel{
+.room-mapper-howto{
   background:var(--cream);
   border:1px solid var(--border);
   border-radius:10px;
-  padding:16px;
-  margin-top:12px;
+  padding:12px 14px;
+  margin-bottom:12px;
 }
-.space-edit-panel .field-group{margin-bottom:12px}
-.space-edit-panel .field-group label{
-  font-size:11px;letter-spacing:0.06em;text-transform:uppercase;
-  color:var(--muted);margin-bottom:4px;display:block;font-weight:500;
-}
-.space-edit-panel .field-group input{
-  width:100%;padding:8px 12px;
-  border:1px solid var(--border);border-radius:8px;
-  font-size:13px;font-family:var(--sans);
-  outline:none;background:var(--white);
-  transition:border 0.2s;
-}
-.space-edit-panel .field-group input:focus{border-color:var(--black)}
 
-.sweep-extract-info{font-size:11px;margin-top:4px;display:none}
-.sweep-help-toggle{
-  font-size:11px;color:var(--muted);
-  background:none;border:none;cursor:pointer;
-  text-decoration:underline;margin-top:6px;
-  font-family:var(--sans);
-  padding:0;
-}
-.sweep-help-toggle:hover{color:var(--black)}
-.sweep-help-body{
-  display:none;
-  margin-top:8px;
-  background:var(--white);
+.room-card-list{margin-bottom:8px}
+
+.room-card{
+  background:var(--cream);
   border:1px solid var(--border);
   border-radius:8px;
-  padding:12px;
-  font-size:12px;
-  line-height:1.7;
-  color:var(--muted);
+  padding:10px 12px;
+  margin-bottom:6px;
+  position:relative;
+  cursor:pointer;
+  transition:border-color 0.15s;
 }
-.sweep-help-body.open{display:block}
-.sweep-help-body ol{margin-left:16px}
-.sweep-help-body code{
-  background:var(--cream-dark);
-  padding:1px 5px;border-radius:3px;
-  font-size:11px;
+.room-card:hover{border-color:var(--black)}
+.room-card-label{font-size:13px;font-weight:500;color:var(--black);padding-right:24px}
+.room-card-sweep{font-size:11px;color:var(--muted);font-family:'SF Mono',Monaco,Consolas,monospace;margin-top:3px}
+.room-card-delete{
+  position:absolute;top:8px;right:8px;
+  background:none;border:none;cursor:pointer;
+  font-size:12px;color:var(--muted);
+  opacity:0.4;transition:opacity 0.15s;
+  padding:2px 4px;
 }
+.room-card-delete:hover{opacity:1;color:var(--red)}
 
-.space-btn-row{display:flex;gap:8px;margin-top:12px}
+.room-empty-state{text-align:center;padding:16px 0}
 
 .space-add-btn{
   display:flex;align-items:center;justify-content:center;gap:4px;
-  width:100%;margin-top:12px;padding:8px 12px;
+  width:100%;margin-top:4px;padding:8px 12px;
   border:1px dashed var(--border);
   border-radius:8px;background:none;
   color:var(--muted);font-size:12px;
@@ -813,19 +776,23 @@ body.sidebar-collapsed .main{margin-left:var(--sidebar-collapsed)}
 }
 .space-add-btn:hover{border-color:var(--black);color:var(--black)}
 
-.space-goto{
-  width:26px;height:26px;
-  border:1px solid var(--border);
-  border-radius:6px;
-  background:var(--white);
-  color:var(--muted);
-  font-size:10px;
-  cursor:pointer;
-  display:grid;place-items:center;
-  flex-shrink:0;
-  transition:all 0.15s;
+/* Add Room Modal */
+.room-modal-overlay{
+  display:none;
+  position:fixed;inset:0;
+  background:rgba(0,0,0,0.5);
+  z-index:300;
+  align-items:center;justify-content:center;
+  padding:20px;
 }
-.space-goto:hover{background:var(--black);color:var(--white);border-color:var(--black)}
+.room-modal-overlay.open{display:flex}
+.room-modal{
+  background:var(--white);
+  border-radius:16px;
+  padding:28px;
+  width:100%;max-width:480px;
+  box-shadow:0 12px 40px rgba(0,0,0,0.2);
+}
 
 /* ═══════════════════════════════════════
    PRODUCTION REFERENCE BOX (always visible)
