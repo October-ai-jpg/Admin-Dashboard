@@ -220,6 +220,30 @@ app.post('/admin/scrape', requireAuth, async (req, res) => {
    ══════════════════════════════════════════ */
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB max
 
+/* Clean up raw extracted text (PDF artifacts, excessive whitespace, etc.) */
+function cleanExtractedText(raw) {
+  let t = raw;
+  // Normalise line endings
+  t = t.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  // Remove form-feed / page-break characters
+  t = t.replace(/\f/g, '\n\n');
+  // Remove null bytes and other control chars (keep \n \t)
+  t = t.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+  // Collapse runs of spaces/tabs on the same line
+  t = t.replace(/[ \t]+/g, ' ');
+  // Remove trailing spaces on each line
+  t = t.replace(/ +\n/g, '\n');
+  // Fix lines that were split mid-word by PDF extraction (word- \n continuation)
+  t = t.replace(/(\w)-\s*\n\s*(\w)/g, '$1$2');
+  // Merge lines that are part of the same paragraph (line doesn't end with punctuation or isn't short heading)
+  t = t.replace(/([^\n.!?:;])\n(?=[a-zæøå0-9(])/g, '$1 $2');
+  // Collapse 3+ blank lines into 2
+  t = t.replace(/\n{3,}/g, '\n\n');
+  // Trim leading/trailing whitespace
+  t = t.trim();
+  return t;
+}
+
 app.post('/admin/extract-file', requireAuth, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
@@ -229,11 +253,13 @@ app.post('/admin/extract-file', requireAuth, upload.single('file'), async (req, 
 
   try {
     let rawText = '';
+    let pages = 0;
 
     if (ext === '.pdf' || mimetype === 'application/pdf') {
       const data = await pdfParse(buffer);
       rawText = data.text || '';
-      console.log('[EXTRACT] PDF pages:', data.numpages, 'chars:', rawText.length);
+      pages = data.numpages || 0;
+      console.log('[EXTRACT] PDF pages:', pages, 'chars:', rawText.length);
     } else if (['.txt', '.csv', '.json', '.md', '.xml', '.html'].includes(ext)) {
       rawText = buffer.toString('utf-8');
     } else if (ext === '.docx') {
@@ -254,33 +280,40 @@ app.post('/admin/extract-file', requireAuth, upload.single('file'), async (req, 
     }
 
     if (!rawText.trim()) {
-      return res.json({ text: '', source: 'empty', filename: originalname });
+      return res.json({ text: '', source: 'empty', filename: originalname, pages });
     }
 
-    // Optionally structure with OpenAI (same as URL sync)
+    // Clean up raw text (remove PDF artifacts, fix line breaks, etc.)
+    rawText = cleanExtractedText(rawText);
+
+    // Optionally structure with OpenAI
     if (process.env.OPENAI_API_KEY && rawText.length > 100) {
-      const llmResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + process.env.OPENAI_API_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          messages: [
-            { role: 'system', content: 'Extract all useful business information from this document. Return as clean, structured text. Include: business name, description, services/products, rooms/spaces, pricing, hours, contact info, location, policies, and any other relevant details. Output text only, no markdown formatting.' },
-            { role: 'user', content: rawText.substring(0, 30000) }
-          ],
-          max_tokens: 2000,
-          temperature: 0.3
-        }),
-        signal: AbortSignal.timeout(25000)
-      });
-      if (llmResponse.ok) {
-        const llmData = await llmResponse.json();
-        const extracted = llmData.choices?.[0]?.message?.content || rawText;
-        return res.json({ text: extracted, source: 'extracted', filename: originalname });
+      try {
+        const llmResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + process.env.OPENAI_API_KEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [
+              { role: 'system', content: 'Extract all useful business information from this document. Return as clean, structured text. Include: business name, description, services/products, rooms/spaces, pricing, hours, contact info, location, policies, and any other relevant details. Output text only, no markdown formatting.' },
+              { role: 'user', content: rawText.substring(0, 30000) }
+            ],
+            max_tokens: 2000,
+            temperature: 0.3
+          }),
+          signal: AbortSignal.timeout(25000)
+        });
+        if (llmResponse.ok) {
+          const llmData = await llmResponse.json();
+          const extracted = llmData.choices?.[0]?.message?.content || rawText;
+          return res.json({ text: extracted, source: 'structured', filename: originalname, pages });
+        }
+      } catch(llmErr) {
+        console.log('[EXTRACT] GPT structuring failed, using cleaned text:', llmErr.message);
       }
     }
 
-    res.json({ text: rawText.substring(0, 50000), source: 'raw', filename: originalname });
+    res.json({ text: rawText.substring(0, 50000), source: 'cleaned', filename: originalname, pages });
   } catch(e) {
     console.error('[EXTRACT] Error:', e.message);
     res.status(500).json({ error: 'Could not extract text from this file: ' + e.message });

@@ -855,7 +855,7 @@ function loadSandbox() {
     // Property Data
     + '<div class="form-group">'
     + '<label class="form-label">Property Data <span class="sb-tooltip" data-tip="Business-specific data the agent can reference during conversations — e.g. room types, prices, facilities, policies. Injected into the LLM context alongside the system prompt.">?</span></label>'
-    + '<textarea class="form-textarea" id="sbData" rows="3" placeholder="Business data the agent references..."></textarea>'
+    + '<textarea class="form-textarea" id="sbData" rows="3" placeholder="Business data the agent references..." style="min-height:60px;max-height:300px;resize:vertical"></textarea>'
     + '<div style="display:flex;gap:8px;margin-top:8px;align-items:center">'
     + '<input class="form-input" id="sbSyncUrl" placeholder="https://example.com" style="flex:1;min-height:0;padding:7px 12px">'
     + '<button class="btn btn-outline btn-sm" onclick="syncFromURL()" id="sbSyncBtn">Sync</button>'
@@ -1189,32 +1189,37 @@ function uploadPropertyFile(input) {
   var file = input.files && input.files[0];
   if (!file) return;
   var btn = document.getElementById('sbUploadBtn');
-  btn.textContent = 'Uploading...';
+  var dataEl = document.getElementById('sbData');
+  btn.textContent = 'Extracting text…';
   btn.disabled = true;
+
+  function resetBtn() {
+    btn.textContent = '📄 Upload PDF / file';
+    btn.disabled = false;
+    input.value = '';
+  }
 
   // For plain text files: read client-side
   var ext = file.name.split('.').pop().toLowerCase();
   if (['txt', 'csv', 'json', 'md', 'xml'].indexOf(ext) !== -1) {
     var reader = new FileReader();
     reader.onload = function(e) {
-      document.getElementById('sbData').value = e.target.result || '';
+      dataEl.value = e.target.result || '';
+      dataEl.style.height = 'auto';
+      dataEl.style.height = Math.min(dataEl.scrollHeight, 300) + 'px';
       plog('FILE_UPLOAD', '', file.name, 'text file loaded (' + ext + ')');
-      showToast('Loaded: ' + file.name, 'success');
-      btn.textContent = '📄 Upload PDF / file';
-      btn.disabled = false;
-      input.value = '';
+      showToast('✓ Loaded: ' + file.name, 'success');
+      resetBtn();
     };
     reader.onerror = function() {
       showToast('Could not read file', 'error');
-      btn.textContent = '📄 Upload PDF / file';
-      btn.disabled = false;
-      input.value = '';
+      resetBtn();
     };
     reader.readAsText(file);
     return;
   }
 
-  // For PDF / DOCX: send to server
+  // For PDF / DOCX: send to server for extraction
   var formData = new FormData();
   formData.append('file', file);
   fetch('/admin/extract-file', {
@@ -1222,18 +1227,26 @@ function uploadPropertyFile(input) {
     headers: { 'x-admin-token': TOKEN },
     body: formData
   }).then(function(r) { return r.json(); }).then(function(data) {
-    btn.textContent = '📄 Upload PDF / file';
-    btn.disabled = false;
-    input.value = '';
+    resetBtn();
     if (data.error) { showToast(data.error, 'error'); return; }
-    document.getElementById('sbData').value = data.text || '';
-    plog('FILE_UPLOAD', '', file.name, data.source || 'raw');
-    showToast('Extracted from: ' + file.name, 'success');
-  }).catch(function() {
-    btn.textContent = '📄 Upload PDF / file';
-    btn.disabled = false;
-    input.value = '';
+    if (!data.text || !data.text.trim()) {
+      showToast('No text found in file — is it a scanned image PDF?', 'error');
+      return;
+    }
+    dataEl.value = data.text;
+    // Auto-expand textarea to fit content (up to max-height)
+    dataEl.style.height = 'auto';
+    dataEl.style.height = Math.min(dataEl.scrollHeight, 300) + 'px';
+    var info = '✓ ' + file.name;
+    if (data.pages) info += ' (' + data.pages + ' pages)';
+    if (data.source === 'structured') info += ' — AI-structured';
+    else info += ' — text extracted';
+    plog('FILE_UPLOAD', '', file.name, (data.source || 'raw') + (data.pages ? ', ' + data.pages + ' pages' : ''));
+    showToast(info, 'success');
+  }).catch(function(err) {
+    resetBtn();
     showToast('Failed to extract text from file', 'error');
+    console.error('[UPLOAD]', err);
   });
 }
 
