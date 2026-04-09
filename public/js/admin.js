@@ -556,7 +556,7 @@ function loadSandbox() {
     + '<div class="form-group"><label class="form-label">Vertical</label>'
     + '<select class="form-select" id="sbVertical"><option value="hotel">Hotel</option><option value="education">Education</option><option value="retail">Retail</option><option value="real_estate_sale">Real Estate (Sale)</option><option value="real_estate_development">Real Estate (Development)</option><option value="other">Other</option></select></div>'
     + '<div class="form-group"><label class="form-label">LLM Model</label>'
-    + '<select class="form-select" id="sbModel"><option value="gpt-4o-mini">gpt-4o-mini</option><option value="gpt-4o">gpt-4o</option><option value="gpt-4-turbo">gpt-4-turbo</option></select></div>'
+    + '<select class="form-select" id="sbModel"><option value="gpt-5.4-mini">gpt-5.4-mini</option><option value="gpt-4o-mini">gpt-4o-mini</option><option value="gpt-4o">gpt-4o</option><option value="gpt-4-turbo">gpt-4-turbo</option></select></div>'
     + '<div class="form-group"><label class="form-label">Temperature: <span id="sbTempVal">0.7</span></label>'
     + '<input type="range" id="sbTemp" min="0" max="1" step="0.1" value="0.7" style="width:100%" oninput="document.getElementById(\'sbTempVal\').textContent=this.value"></div>'
     + '<div class="form-group"><label class="form-label">System Prompt</label>'
