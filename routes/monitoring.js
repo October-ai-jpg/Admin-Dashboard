@@ -465,6 +465,8 @@ module.exports = function(pool) {
     try {
       const result = await query(`
         SELECT t.id, t.name, t.agent_name, t.property_data, t.room_mappings,
+               t.matterport_model_id, t.hotel_url,
+               COALESCE(t.conversion_url, t.booking_url) as conversion_url,
                cl.vertical
         FROM tenants t
         LEFT JOIN clients cl ON cl.id = t.client_id
@@ -472,7 +474,20 @@ module.exports = function(pool) {
       `);
       res.json(result.rows);
     } catch(e) {
-      res.json([]);
+      // If matterport_model_id column doesn't exist, retry without it
+      try {
+        const fallback = await query(`
+          SELECT t.id, t.name, t.agent_name, t.property_data, t.room_mappings,
+                 cl.vertical
+          FROM tenants t
+          LEFT JOIN clients cl ON cl.id = t.client_id
+          ORDER BY t.agent_name NULLS LAST, t.name
+        `);
+        res.json(fallback.rows);
+      } catch(e2) {
+        console.error('Tenants query error:', e2.message);
+        res.json([]);
+      }
     }
   });
 

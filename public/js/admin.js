@@ -533,173 +533,600 @@ function healthCard(name, status, id) {
 }
 
 /* ═══════════════════════════════════════════════
-   SANDBOX
+   SANDBOX — Full Agent Builder
    ═══════════════════════════════════════════════ */
 var sandboxWs = null;
 var isRecording = false;
-var mediaRecorder = null;
-var audioContext = null;
+var recordingStream = null;
+var recordingCtx = null;
+var recordingProcessor = null;
 var audioChunks = [];
+var playbackCtx = null;
+var incomingAudio = [];
+var debugLog = [];
+var wsReconnectAttempts = 0;
+var roomEditorMode = 'json'; // 'json' or 'visual'
+var cachedTenants = null;
 
 function loadSandbox() {
   var c = document.getElementById('page-sandbox');
 
-  var html = '<div class="page-label">AGENT BUILDER</div>'
+  // --- Error banner placeholder ---
+  var html = '<div id="sbKeyBanner"></div>'
+    + '<div class="page-label">AGENT BUILDER</div>'
     + '<h1 class="page-heading">Sandbox</h1>'
     + '<p class="page-sub">Test voice agents with your own configuration.</p>'
     + '<div class="sandbox-layout">'
-    // Left config panel
+
+    // ═══ LEFT: CONFIG PANEL ═══
     + '<div class="sandbox-config">'
-    + '<div class="form-group"><label class="form-label">Matterport Model ID</label>'
-    + '<div style="display:flex;gap:8px"><input class="form-input" id="sbModelId" placeholder="e.g. SxQL3iGyoDo" style="flex:1">'
-    + '<button class="btn btn-outline btn-sm" onclick="loadTour()">Load</button></div></div>'
-    + '<div class="form-group"><label class="form-label">Vertical</label>'
-    + '<select class="form-select" id="sbVertical"><option value="hotel">Hotel</option><option value="education">Education</option><option value="retail">Retail</option><option value="real_estate_sale">Real Estate (Sale)</option><option value="real_estate_development">Real Estate (Development)</option><option value="other">Other</option></select></div>'
-    + '<div class="form-group"><label class="form-label">LLM Model</label>'
-    + '<select class="form-select" id="sbModel"><option value="gpt-5.4-mini">gpt-5.4-mini</option><option value="gpt-4o-mini">gpt-4o-mini</option><option value="gpt-4o">gpt-4o</option><option value="gpt-4-turbo">gpt-4-turbo</option></select></div>'
-    + '<div class="form-group"><label class="form-label">Temperature: <span id="sbTempVal">0.7</span></label>'
-    + '<input type="range" id="sbTemp" min="0" max="1" step="0.1" value="0.7" style="width:100%" oninput="document.getElementById(\'sbTempVal\').textContent=this.value"></div>'
-    + '<div class="form-group"><label class="form-label">System Prompt</label>'
-    + '<textarea class="form-textarea" id="sbPrompt" rows="8" placeholder="Enter system prompt..."></textarea>'
-    + '<div style="display:flex;gap:8px;margin-top:8px">'
-    + '<button class="btn btn-outline btn-sm" onclick="resetPrompt()">Reset to default</button>'
-    + '<button class="btn btn-outline btn-sm" onclick="loadFromTenant()">Load from tenant</button></div></div>'
-    + '<div class="form-group"><label class="form-label">Property Data</label>'
-    + '<textarea class="form-textarea" id="sbData" rows="4" placeholder="Test property data..."></textarea></div>'
-    + '<div class="form-group"><label class="form-label">Room Mappings (JSON)</label>'
-    + '<textarea class="form-textarea" id="sbMappings" rows="3" placeholder=\'{"Room 1": "sweepId1"}\'></textarea></div>'
-    + '<button class="btn btn-dark" onclick="startSandboxSession()" style="width:100%">Start Test Session</button>'
+
+    // Matterport
+    + '<div class="form-group">'
+    + '<label class="form-label">Matterport Model ID <span class="sb-tooltip" data-tip="Paste a Matterport model ID or full URL. Find it in your Matterport account under the model\'s share link.">?</span></label>'
+    + '<div style="display:flex;gap:8px"><input class="form-input" id="sbModelId" placeholder="e.g. NCPe9NFNKew or full URL" style="flex:1">'
+    + '<button class="btn btn-outline btn-sm" onclick="loadTour()">Apply</button></div>'
     + '</div>'
-    // Right live panel
+
+    // Load from Tenant
+    + '<div class="form-group">'
+    + '<label class="form-label">Load from Tenant <span class="sb-tooltip" data-tip="Load all settings from an existing tenant in the database — populates model ID, property data, room mappings, and vertical.">?</span></label>'
+    + '<select class="form-select" id="sbTenantSelect" onchange="loadTenantData(this.value)"><option value="">— Select a tenant —</option></select>'
+    + '</div>'
+
+    // Vertical
+    + '<div class="form-group">'
+    + '<label class="form-label">Vertical <span class="sb-tooltip" data-tip="The business type. Determines the default system prompt and agent behavior.">?</span></label>'
+    + '<select class="form-select" id="sbVertical" onchange="resetPrompt()">'
+    + '<option value="hotel">Hotel</option><option value="education">Education</option><option value="retail">Retail</option>'
+    + '<option value="real_estate_sale">Real Estate (Sale)</option><option value="real_estate_development">Real Estate (Development)</option><option value="other">Other</option></select></div>'
+
+    // LLM Model
+    + '<div class="form-group">'
+    + '<label class="form-label">LLM Model <span class="sb-tooltip" data-tip="The OpenAI model used for generating responses. gpt-5.4-mini matches production.">?</span></label>'
+    + '<select class="form-select" id="sbModel"><option value="gpt-5.4-mini">gpt-5.4-mini (production)</option><option value="gpt-4o-mini">gpt-4o-mini</option><option value="gpt-4o">gpt-4o</option><option value="gpt-4-turbo">gpt-4-turbo</option></select></div>'
+
+    // Temperature
+    + '<div class="form-group">'
+    + '<label class="form-label">Temperature: <span id="sbTempVal">0.7</span> <span class="sb-tooltip" data-tip="Controls randomness. 0 = deterministic and focused. 1 = creative and varied. Production uses 0.7.">?</span></label>'
+    + '<input type="range" id="sbTemp" min="0" max="1" step="0.1" value="0.7" style="width:100%" oninput="document.getElementById(\'sbTempVal\').textContent=this.value"></div>'
+
+    // System Prompt
+    + '<div class="form-group">'
+    + '<label class="form-label">System Prompt <span class="sb-tooltip" data-tip="The instructions that define the agent\'s personality and behavior. This is sent as the system message to OpenAI.">?</span></label>'
+    + '<textarea class="form-textarea" id="sbPrompt" rows="6" placeholder="Enter system prompt..."></textarea>'
+    + '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">'
+    + '<button class="btn btn-outline btn-sm" onclick="resetPrompt()">Reset to default</button>'
+    + '<button class="btn btn-outline btn-sm" onclick="savePromptAsTemplate()">Save as template</button>'
+    + '</div></div>'
+
+    // Property Data
+    + '<div class="form-group">'
+    + '<label class="form-label">Property Data <span class="sb-tooltip" data-tip="Business information the agent will reference — rooms, prices, amenities, policies, etc. Paste manually or sync from a URL.">?</span></label>'
+    + '<textarea class="form-textarea" id="sbData" rows="4" placeholder="Paste property/business data here..."></textarea>'
+    + '<div style="display:flex;gap:8px;margin-top:8px;align-items:center">'
+    + '<input class="form-input" id="sbSyncUrl" placeholder="https://example.com" style="flex:1;min-height:0;padding:7px 12px">'
+    + '<button class="btn btn-outline btn-sm" onclick="syncFromURL()" id="sbSyncBtn">Sync</button>'
+    + '</div></div>'
+
+    // Room Mappings
+    + '<div class="form-group">'
+    + '<label class="form-label">Room Mappings <span class="sb-tooltip" data-tip="Maps room names to Matterport sweep IDs. The agent uses these to navigate the tour when a visitor asks to see a specific room.">?</span></label>'
+    + '<div style="display:flex;gap:8px;margin-bottom:8px">'
+    + '<button class="btn btn-outline btn-sm" onclick="setRoomEditorMode(\'json\')" id="rmJsonBtn" style="font-weight:600">JSON</button>'
+    + '<button class="btn btn-outline btn-sm" onclick="setRoomEditorMode(\'visual\')" id="rmVisualBtn">Visual Editor</button>'
+    + '</div>'
+    + '<div id="roomJsonEditor"><textarea class="form-textarea" id="sbMappings" rows="3" placeholder=\'{"sweepId1": {"label": "Deluxe Room"}}\'></textarea>'
+    + '<div id="sbMappingsError" style="color:var(--red);font-size:12px;margin-top:4px;display:none"></div></div>'
+    + '<div id="roomVisualEditor" style="display:none">'
+    + '<div id="roomList"></div>'
+    + '<button class="btn btn-outline btn-sm" onclick="addRoom()" style="margin-top:8px">+ Add room</button>'
+    + '<details style="margin-top:8px;font-size:12px;color:var(--muted)"><summary style="cursor:pointer">How to find Sweep IDs</summary>'
+    + '<div style="padding:8px 0">1. Open your Matterport tour<br>2. Press <kbd>U</kbd> on your keyboard<br>3. Click on the location<br>4. Copy the Sweep ID shown</div></details>'
+    + '</div></div>'
+
+    // Action buttons
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">'
+    + '<button class="btn btn-dark" onclick="applyAndRestart()" style="flex:1">Apply &amp; Restart Session</button>'
+    + '</div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">'
+    + '<button class="btn btn-outline btn-sm" onclick="saveSandboxConfig()">Save configuration</button>'
+    + '<button class="btn btn-outline btn-sm" onclick="exportSystemPrompt()">Export system prompt</button>'
+    + '</div>'
+
+    + '</div>' // end sandbox-config
+
+    // ═══ RIGHT: LIVE PANEL ═══
     + '<div class="sandbox-live">'
-    + '<div class="sandbox-tour" id="sbTourContainer"><div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:14px">Enter a Matterport Model ID and click Load</div></div>'
+
+    // Tour
+    + '<div class="sandbox-tour" id="sbTourContainer"><div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:14px">Enter a Matterport Model ID and click Apply</div></div>'
+
+    // Voice section
     + '<div class="sandbox-voice">'
-    + '<div style="text-align:center">'
+    + '<div style="display:flex;align-items:center;gap:12px;justify-content:center">'
     + '<button class="mic-btn" id="micBtn" onclick="toggleMic()" disabled>'
     + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>'
     + '</button>'
+    + '<div style="flex:1;display:flex;gap:6px">'
+    + '<input class="form-input" id="sbTextInput" placeholder="Type a message..." style="flex:1;min-height:0;padding:10px 14px" onkeydown="if(event.key===\'Enter\'){sendTextInput();event.preventDefault()}" disabled>'
+    + '<button class="btn btn-dark btn-sm" onclick="sendTextInput()" id="sbSendBtn" disabled>Send</button>'
+    + '</div></div>'
     + '<div class="voice-status" id="voiceStatus">Start a session to begin</div>'
-    + '</div>'
-    + '<div class="latency-bar" id="latencyBar"><span>STT: -</span><span>LLM: -</span><span>TTS: -</span><span>Total: -</span></div>'
+    + '<div class="latency-bar" id="latencyBar"><span>STT: —</span><span>LLM: —</span><span>TTS: —</span><span>Total: —</span></div>'
     + '<div class="transcript-panel" id="transcriptPanel"></div>'
-    + '</div></div></div>';
+
+    // Debug panel
+    + '<details class="debug-panel" id="debugPanel">'
+    + '<summary>Debug Log</summary>'
+    + '<div id="debugContent"><div style="color:var(--muted);font-size:12px">No turns yet.</div></div>'
+    + '<button class="btn btn-outline btn-sm" onclick="clearDebugLog()" style="margin-top:8px">Clear debug log</button>'
+    + '</details>'
+
+    + '</div>' // end sandbox-voice
+    + '</div>' // end sandbox-live
+    + '</div>'; // end sandbox-layout
 
   c.innerHTML = html;
 
-  // Set default prompt
+  // Init
   resetPrompt();
+  loadTenantDropdown();
+  checkAPIKeys();
+  initTooltips();
 }
 
+/* ── API Key Banner ── */
+function checkAPIKeys() {
+  api('/api/check-keys').then(function(keys) {
+    var missing = [];
+    if (!keys.openai) missing.push('OPENAI_API_KEY');
+    if (!keys.deepgram) missing.push('DEEPGRAM_API_KEY');
+    if (!keys.cartesia) missing.push('CARTESIA_API_KEY');
+    var banner = document.getElementById('sbKeyBanner');
+    if (banner && missing.length > 0) {
+      banner.innerHTML = '<div class="sb-error-banner">Missing API key' + (missing.length > 1 ? 's' : '') + ': <strong>' + missing.join(', ') + '</strong> — add ' + (missing.length > 1 ? 'them' : 'it') + ' in Railway Variables</div>';
+    } else if (banner) {
+      banner.innerHTML = '';
+    }
+  }).catch(function() {});
+}
+
+/* ── Tooltips ── */
+function initTooltips() {
+  document.querySelectorAll('.sb-tooltip').forEach(function(el) {
+    el.addEventListener('mouseenter', function(e) {
+      var tip = document.createElement('div');
+      tip.className = 'tooltip-popup';
+      tip.textContent = e.target.getAttribute('data-tip');
+      document.body.appendChild(tip);
+      var r = e.target.getBoundingClientRect();
+      tip.style.left = Math.min(r.left, window.innerWidth - 280) + 'px';
+      tip.style.top = (r.bottom + 6) + 'px';
+      e.target._tip = tip;
+    });
+    el.addEventListener('mouseleave', function(e) {
+      if (e.target._tip) { e.target._tip.remove(); e.target._tip = null; }
+    });
+  });
+}
+
+/* ── Matterport Tour ── */
 function loadTour() {
-  var modelId = document.getElementById('sbModelId').value.trim();
-  if (!modelId) return;
-  document.getElementById('sbTourContainer').innerHTML = '<iframe src="https://my.matterport.com/show/?m=' + encodeURIComponent(modelId) + '&play=1" allowfullscreen></iframe>';
+  var raw = (document.getElementById('sbModelId').value || '').trim();
+  if (!raw) { showToast('Enter a Model ID or URL', 'error'); return; }
+  // Extract model ID from URL if pasted
+  var modelId = raw;
+  var match = raw.match(/[?&]m=([^&]+)/);
+  if (match) modelId = match[1];
+  // Also handle direct Matterport URLs like my.matterport.com/show/?m=XXX
+  if (raw.includes('matterport.com') && !match) {
+    var parts = raw.split('/');
+    modelId = parts[parts.length - 1] || parts[parts.length - 2] || raw;
+  }
+  document.getElementById('sbModelId').value = modelId;
+  document.getElementById('sbTourContainer').innerHTML = '<iframe src="https://my.matterport.com/show/?m=' + encodeURIComponent(modelId) + '&play=1&qs=1" allowfullscreen style="width:100%;height:100%;border:none"></iframe>';
+  showToast('Tour loaded', 'success');
 }
 
+/* ── Reset Prompt to Default ── */
 function resetPrompt() {
   var vertical = document.getElementById('sbVertical');
   if (!vertical) return;
   var prompts = {
     hotel: 'You are a virtual employee for a hotel. You are embedded inside a 3D virtual tour of the property. Your job is to greet visitors, understand what they are looking for, recommend the right room type, and guide them towards making a booking. Be warm, professional, and knowledgeable. Keep responses concise (2-3 sentences max). Ask questions to understand the guest needs.',
-    education: 'You are a virtual employee for an educational institution. You are embedded inside a 3D virtual tour of the campus. Your job is to greet prospective students, answer questions about programs, facilities, and campus life, and guide them towards scheduling a visit or applying.',
-    retail: 'You are a virtual employee for a retail showroom. You are embedded inside a 3D virtual tour. Your job is to greet visitors, understand what they are looking for, and guide them towards a purchase.',
-    real_estate_sale: 'You are a virtual employee for a real estate agency. You are embedded inside a 3D virtual tour of a property for sale. Highlight key features, answer questions, and guide buyers towards scheduling a viewing.',
-    real_estate_development: 'You are a virtual employee for a real estate development. You are embedded inside a 3D virtual tour of a new project. Showcase the project and guide buyers towards booking a consultation.',
-    other: 'You are a virtual employee embedded inside a 3D virtual tour. Greet visitors, answer questions, and guide them towards a conversion action.'
+    education: 'You are a virtual employee for an educational institution. You are embedded inside a 3D virtual tour of the campus. Your job is to greet prospective students, answer questions about programs, facilities, and campus life, and guide them towards scheduling a visit or applying. Be enthusiastic and informative. Keep responses concise.',
+    retail: 'You are a virtual employee for a retail showroom. You are embedded inside a 3D virtual tour. Your job is to greet visitors, understand what they are looking for, and guide them towards making a purchase or booking a consultation. Be helpful and knowledgeable. Keep responses concise.',
+    real_estate_sale: 'You are a virtual employee for a real estate agency. You are embedded inside a 3D virtual tour of a property for sale. Highlight key features, answer questions about the property and neighborhood, and guide buyers towards scheduling a viewing. Be professional and informative. Keep responses concise.',
+    real_estate_development: 'You are a virtual employee for a real estate development. You are embedded inside a 3D virtual tour of a new project. Showcase the project, answer questions about units and amenities, and guide buyers towards booking a consultation. Be professional and enthusiastic. Keep responses concise.',
+    other: 'You are a virtual employee embedded inside a 3D virtual tour. Greet visitors, answer their questions, and guide them towards a conversion action. Be helpful and professional. Keep responses concise.'
   };
   var el = document.getElementById('sbPrompt');
   if (el) el.value = prompts[vertical.value] || prompts.other;
 }
 
-function loadFromTenant() {
+/* ── Save Prompt as Template ── */
+function savePromptAsTemplate() {
+  var content = document.getElementById('sbPrompt').value;
+  if (!content) { showToast('Prompt is empty', 'error'); return; }
+  var html = '<h2>Save as Template</h2>'
+    + '<div class="form-group"><label class="form-label">Template Name</label><input class="form-input" id="tmplName" placeholder="e.g. Hotel v2 - warm tone"></div>'
+    + '<button class="btn btn-dark" onclick="doSaveTemplate()">Save</button>';
+  showModal(html);
+}
+function doSaveTemplate() {
+  var name = document.getElementById('tmplName').value;
+  if (!name) { showToast('Enter a name', 'error'); return; }
+  var content = document.getElementById('sbPrompt').value;
+  var vertical = document.getElementById('sbVertical').value;
+  api('/api/prompts', { method: 'POST', body: JSON.stringify({ name: name, vertical: vertical, content: content }) }).then(function() {
+    closeModal();
+    showToast('Template saved', 'success');
+  }).catch(function() { showToast('Failed to save', 'error'); });
+}
+
+/* ── Load from Tenant ── */
+function loadTenantDropdown() {
   api('/api/monitoring/tenants').then(function(tenants) {
-    if (tenants.length === 0) { showToast('No tenants found', 'error'); return; }
-    var html = '<h2>Select Tenant</h2><div style="max-height:400px;overflow-y:auto">';
+    cachedTenants = tenants;
+    var sel = document.getElementById('sbTenantSelect');
+    if (!sel) return;
+    var opts = '<option value="">— Select a tenant —</option>';
     tenants.forEach(function(t) {
-      html += '<div style="padding:12px;border-bottom:1px solid var(--border);cursor:pointer" onclick="loadTenantData(\'' + t.id + '\')">'
-        + '<div style="font-weight:500">' + esc(t.agent_name || t.name || 'Agent') + '</div>'
-        + '<div style="font-size:12px;color:var(--muted)">' + esc(t.vertical || '-') + '</div></div>';
+      opts += '<option value="' + t.id + '">' + esc(t.agent_name || t.name || 'Unnamed') + ' (' + esc(t.vertical || '?') + ')</option>';
     });
-    html += '</div>';
-    showModal(html);
-  });
+    sel.innerHTML = opts;
+  }).catch(function() {});
 }
 
 window.loadTenantData = function(id) {
-  api('/api/monitoring/tenants').then(function(tenants) {
-    var t = tenants.find(function(x) { return x.id === id; });
-    if (!t) return;
-    if (t.property_data) document.getElementById('sbData').value = typeof t.property_data === 'string' ? t.property_data : JSON.stringify(t.property_data, null, 2);
-    if (t.room_mappings) document.getElementById('sbMappings').value = typeof t.room_mappings === 'string' ? t.room_mappings : JSON.stringify(t.room_mappings, null, 2);
-    if (t.vertical) document.getElementById('sbVertical').value = t.vertical;
-    closeModal();
-    showToast('Loaded data from ' + (t.agent_name || t.name || 'tenant'), 'success');
-  });
+  if (!id) return;
+  var t = cachedTenants ? cachedTenants.find(function(x) { return x.id === id; }) : null;
+  if (!t) {
+    api('/api/monitoring/tenants').then(function(tenants) {
+      cachedTenants = tenants;
+      var found = tenants.find(function(x) { return x.id === id; });
+      if (found) applyTenantData(found);
+    });
+    return;
+  }
+  applyTenantData(t);
 };
 
+function applyTenantData(t) {
+  // Model ID
+  if (t.matterport_model_id) {
+    document.getElementById('sbModelId').value = t.matterport_model_id;
+    loadTour();
+  }
+  // Property data
+  if (t.property_data) {
+    document.getElementById('sbData').value = typeof t.property_data === 'string' ? t.property_data : JSON.stringify(t.property_data, null, 2);
+  }
+  // Room mappings
+  if (t.room_mappings) {
+    var rmStr = typeof t.room_mappings === 'string' ? t.room_mappings : JSON.stringify(t.room_mappings, null, 2);
+    document.getElementById('sbMappings').value = rmStr;
+    if (roomEditorMode === 'visual') syncJSONToVisual();
+  }
+  // Vertical
+  if (t.vertical) document.getElementById('sbVertical').value = t.vertical;
+  // Reset prompt for new vertical
+  resetPrompt();
+  showToast('Loaded: ' + (t.agent_name || t.name || 'tenant'), 'success');
+}
+
+/* ── Sync from URL (Jina Reader) ── */
+function syncFromURL() {
+  var url = document.getElementById('sbSyncUrl').value.trim();
+  if (!url) { showToast('Enter a URL', 'error'); return; }
+  if (!url.startsWith('http')) url = 'https://' + url;
+  var btn = document.getElementById('sbSyncBtn');
+  btn.textContent = 'Syncing...';
+  btn.disabled = true;
+  fetch('/admin/scrape', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-admin-token': TOKEN },
+    body: JSON.stringify({ url: url })
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    btn.textContent = 'Sync';
+    btn.disabled = false;
+    if (data.error) { showToast(data.error, 'error'); return; }
+    document.getElementById('sbData').value = data.text || '';
+    showToast('Synced from website', 'success');
+  }).catch(function(e) {
+    btn.textContent = 'Sync';
+    btn.disabled = false;
+    showToast('Could not access this URL. Try pasting the content manually.', 'error');
+  });
+}
+
+/* ── Room Mappings: JSON / Visual Editor ── */
+function setRoomEditorMode(mode) {
+  roomEditorMode = mode;
+  document.getElementById('roomJsonEditor').style.display = mode === 'json' ? 'block' : 'none';
+  document.getElementById('roomVisualEditor').style.display = mode === 'visual' ? 'block' : 'none';
+  document.getElementById('rmJsonBtn').style.fontWeight = mode === 'json' ? '600' : '400';
+  document.getElementById('rmVisualBtn').style.fontWeight = mode === 'visual' ? '600' : '400';
+  if (mode === 'visual') syncJSONToVisual();
+}
+
+function syncJSONToVisual() {
+  var raw = document.getElementById('sbMappings').value.trim();
+  var mappings = {};
+  try { if (raw) mappings = JSON.parse(raw); } catch(e) {}
+  var list = document.getElementById('roomList');
+  var html = '';
+  Object.entries(mappings).forEach(function(entry, i) {
+    var key = entry[0];
+    var val = entry[1];
+    var label = (typeof val === 'string') ? val : (val.label || '');
+    var sweep = (typeof val === 'string') ? key : (val.sweepId || val.sweep_id || key);
+    html += roomRow(i, label, sweep);
+  });
+  list.innerHTML = html || '<div style="color:var(--muted);font-size:12px">No rooms mapped. Click "+ Add room" below.</div>';
+}
+
+function syncVisualToJSON() {
+  var rows = document.querySelectorAll('.room-row');
+  var mappings = {};
+  rows.forEach(function(row) {
+    var label = row.querySelector('.room-label').value.trim();
+    var sweep = row.querySelector('.room-sweep').value.trim();
+    if (label && sweep) {
+      mappings[sweep] = { label: label, sweepId: sweep };
+    }
+  });
+  document.getElementById('sbMappings').value = JSON.stringify(mappings, null, 2);
+}
+
+function roomRow(i, label, sweep) {
+  return '<div class="room-row" style="display:flex;gap:6px;align-items:center;margin-bottom:6px">'
+    + '<input class="form-input room-label" placeholder="Room name" value="' + esc(label) + '" style="flex:1;min-height:0;padding:7px 10px" oninput="syncVisualToJSON()">'
+    + '<input class="form-input room-sweep" placeholder="Sweep ID" value="' + esc(sweep) + '" style="width:120px;min-height:0;padding:7px 10px;font-family:monospace;font-size:11px" oninput="syncVisualToJSON()">'
+    + '<button class="btn btn-outline btn-sm" onclick="this.closest(\'.room-row\').remove();syncVisualToJSON()" style="color:var(--red);padding:4px 8px">&times;</button>'
+    + '</div>';
+}
+
+function addRoom() {
+  var list = document.getElementById('roomList');
+  // Clear empty state message
+  if (list.querySelector('div[style*="color:var(--muted)"]')) list.innerHTML = '';
+  var i = list.querySelectorAll('.room-row').length;
+  list.insertAdjacentHTML('beforeend', roomRow(i, '', ''));
+}
+
+/* ── Validate Room Mappings JSON ── */
+function validateRoomMappings() {
+  var raw = document.getElementById('sbMappings').value.trim();
+  var errEl = document.getElementById('sbMappingsError');
+  if (!raw || raw === '{}') { errEl.style.display = 'none'; return true; }
+  try {
+    JSON.parse(raw);
+    errEl.style.display = 'none';
+    return true;
+  } catch(e) {
+    errEl.textContent = 'Invalid JSON — check your room mappings';
+    errEl.style.display = 'block';
+    return false;
+  }
+}
+
+/* ── Apply & Restart Session ── */
+function applyAndRestart() {
+  if (!validateRoomMappings()) return;
+  startSandboxSession();
+}
+
+/* ── Save Configuration ── */
+function saveSandboxConfig() {
+  var html = '<h2>Save Configuration</h2>'
+    + '<div class="form-group"><label class="form-label">Configuration Name</label><input class="form-input" id="cfgSaveName" placeholder="e.g. DIS Stockholm - warm v2"></div>'
+    + '<button class="btn btn-dark" onclick="doSaveConfig()">Save</button>';
+  showModal(html);
+}
+function doSaveConfig() {
+  var name = document.getElementById('cfgSaveName').value;
+  if (!name) { showToast('Enter a name', 'error'); return; }
+  api('/api/configs', { method: 'POST', body: JSON.stringify({
+    name: name,
+    vertical: document.getElementById('sbVertical').value,
+    temperature: parseFloat(document.getElementById('sbTemp').value),
+    model: document.getElementById('sbModel').value,
+    systemPrompt: document.getElementById('sbPrompt').value,
+    propertyData: document.getElementById('sbData').value,
+    roomMappings: document.getElementById('sbMappings').value,
+    modelId: document.getElementById('sbModelId').value
+  })}).then(function() {
+    closeModal();
+    showToast('Configuration saved', 'success');
+  }).catch(function() { showToast('Failed to save', 'error'); });
+}
+
+/* ── Export System Prompt ── */
+function exportSystemPrompt() {
+  var prompt = document.getElementById('sbPrompt').value;
+  var vertical = document.getElementById('sbVertical').value;
+  if (!prompt) { showToast('System prompt is empty', 'error'); return; }
+  var html = '<h2>Deploy to October AI</h2>'
+    + '<p style="color:var(--muted);font-size:13px;margin-bottom:16px">Copy this prompt to <code>services/agentPersona.js</code> in the <code>-october-ai</code> repo under the <strong>' + esc(vertical) + '</strong> case statement.</p>'
+    + '<textarea class="form-textarea" id="exportPromptText" rows="14" readonly style="font-family:monospace;font-size:12px">' + esc(prompt) + '</textarea>'
+    + '<div style="display:flex;gap:8px;margin-top:12px">'
+    + '<button class="btn btn-dark" onclick="navigator.clipboard.writeText(document.getElementById(\'exportPromptText\').value);showToast(\'Copied to clipboard!\',\'success\')">Copy to clipboard</button>'
+    + '<button class="btn btn-outline" onclick="closeModal()">Done</button></div>';
+  showModal(html);
+}
+
+/* ══════════════════════════════════════
+   VOICE SESSION — WebSocket + Audio
+   ══════════════════════════════════════ */
 function startSandboxSession() {
-  if (sandboxWs) sandboxWs.close();
+  if (sandboxWs) { sandboxWs.close(); sandboxWs = null; }
+  wsReconnectAttempts = 0;
+  debugLog = [];
+  incomingAudio = [];
+  updateDebugPanel();
 
   var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  sandboxWs = new WebSocket(protocol + '//' + window.location.host + '/ws/test?token=' + encodeURIComponent(TOKEN));
+  var wsUrl = protocol + '//' + window.location.host + '/ws/test?token=' + encodeURIComponent(TOKEN);
+  connectWebSocket(wsUrl);
+}
+
+function connectWebSocket(url) {
+  sandboxWs = new WebSocket(url);
+  sandboxWs.binaryType = 'arraybuffer';
 
   sandboxWs.onopen = function() {
+    wsReconnectAttempts = 0;
     document.getElementById('voiceStatus').textContent = 'Connected — click mic or type';
     document.getElementById('micBtn').disabled = false;
+    document.getElementById('sbTextInput').disabled = false;
+    document.getElementById('sbSendBtn').disabled = false;
 
     // Send config
-    sandboxWs.send(JSON.stringify({
-      type: 'config',
-      config: {
-        systemPrompt: document.getElementById('sbPrompt').value,
-        vertical: document.getElementById('sbVertical').value,
-        temperature: parseFloat(document.getElementById('sbTemp').value),
-        model: document.getElementById('sbModel').value,
-        propertyData: document.getElementById('sbData').value,
-        roomMappings: document.getElementById('sbMappings').value
-      }
-    }));
+    var config = {
+      systemPrompt: document.getElementById('sbPrompt').value,
+      vertical: document.getElementById('sbVertical').value,
+      temperature: parseFloat(document.getElementById('sbTemp').value),
+      model: document.getElementById('sbModel').value,
+      propertyData: document.getElementById('sbData').value,
+      roomMappings: document.getElementById('sbMappings').value
+    };
+    sandboxWs.send(JSON.stringify({ type: 'config', config: config }));
+    console.log('[SANDBOX] Starting session with temperature:', config.temperature);
 
-    // Clear transcript
     document.getElementById('transcriptPanel').innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center">Session started. Speak or type to begin.</div>';
   };
 
   sandboxWs.onmessage = function(event) {
-    if (event.data instanceof Blob) {
-      // Audio data — play it
-      playAudio(event.data);
+    // Binary = PCM16 audio chunk
+    if (event.data instanceof ArrayBuffer) {
+      incomingAudio.push(event.data);
       return;
     }
-    var msg = JSON.parse(event.data);
+    var msg;
+    try { msg = JSON.parse(event.data); } catch(e) { return; }
+
     if (msg.type === 'transcript') {
       addTranscript(msg.role, msg.text);
+    } else if (msg.type === 'audio_end') {
+      playCollectedAudio();
     } else if (msg.type === 'status') {
-      document.getElementById('voiceStatus').textContent = msg.status === 'idle' ? 'Ready' : msg.status.charAt(0).toUpperCase() + msg.status.slice(1) + '...';
+      var s = msg.status;
+      document.getElementById('voiceStatus').textContent = s === 'idle' ? 'Ready — click mic or type' : s.charAt(0).toUpperCase() + s.slice(1) + '...';
     } else if (msg.type === 'latency') {
-      var bar = document.getElementById('latencyBar');
-      bar.innerHTML = '<span>STT: ' + msg.stt + 'ms</span><span>LLM: ' + msg.llm + 'ms</span><span>TTS: ' + msg.tts + 'ms</span><span>Total: ' + msg.total + 'ms</span>';
+      document.getElementById('latencyBar').innerHTML = '<span>STT: ' + msg.stt + 'ms</span><span>LLM: ' + msg.llm + 'ms</span><span>TTS: ' + msg.tts + 'ms</span><span>Total: ' + msg.total + 'ms</span>';
+    } else if (msg.type === 'debug') {
+      debugLog.unshift(msg);
+      if (debugLog.length > 10) debugLog.pop();
+      updateDebugPanel();
+    } else if (msg.type === 'navigate') {
+      handleNavigateEvent(msg);
+    } else if (msg.type === 'conversion') {
+      addTranscript('system', 'Booking triggered: ' + (msg.reason || ''));
+    } else if (msg.type === 'profile_update') {
+      addTranscript('system', 'Profile: ' + msg.field + ' = ' + msg.value);
     } else if (msg.type === 'error') {
       showToast(msg.message, 'error');
+      addTranscript('error', msg.message);
     }
   };
 
   sandboxWs.onclose = function() {
     document.getElementById('voiceStatus').textContent = 'Disconnected';
     document.getElementById('micBtn').disabled = true;
+    document.getElementById('sbTextInput').disabled = true;
+    document.getElementById('sbSendBtn').disabled = true;
+
+    // Auto-reconnect (max 3 attempts)
+    if (wsReconnectAttempts < 3) {
+      wsReconnectAttempts++;
+      document.getElementById('voiceStatus').textContent = 'Reconnecting... (' + wsReconnectAttempts + '/3)';
+      setTimeout(function() {
+        if (!sandboxWs || sandboxWs.readyState === WebSocket.CLOSED) {
+          connectWebSocket(url);
+        }
+      }, 2000);
+    } else {
+      document.getElementById('voiceStatus').innerHTML = 'Connection lost — <a href="#" onclick="applyAndRestart();return false" style="color:var(--black);text-decoration:underline">click to retry</a>';
+    }
+  };
+
+  sandboxWs.onerror = function() {
+    showToast('WebSocket connection failed — check that API keys are set in Railway Variables', 'error');
   };
 }
 
+/* ── Matterport Navigation ── */
+function handleNavigateEvent(msg) {
+  if (!msg.sweepId) {
+    addTranscript('system', 'Room not found in tour: ' + (msg.roomName || ''));
+    return;
+  }
+  addTranscript('system', 'Navigating to: ' + (msg.roomName || msg.sweepId));
+  var iframe = document.querySelector('#sbTourContainer iframe');
+  if (iframe) {
+    iframe.contentWindow.postMessage({ type: 'NAVIGATE', sweepId: msg.sweepId }, '*');
+    // Also try Matterport SDK navigation
+    iframe.contentWindow.postMessage({ type: 'moveTo', sweepId: msg.sweepId }, '*');
+  }
+}
+
+/* ── Transcript ── */
 function addTranscript(role, text) {
   var panel = document.getElementById('transcriptPanel');
-  // Clear initial message
-  if (panel.querySelector('div[style]') && !panel.querySelector('.transcript-msg')) panel.innerHTML = '';
+  if (!panel) return;
+  // Clear initial placeholder
+  if (!panel.querySelector('.transcript-msg')) panel.innerHTML = '';
   var div = document.createElement('div');
   div.className = 'transcript-msg';
-  div.innerHTML = '<span class="role ' + role + '">[' + role + ']</span>' + esc(text);
+  var roleClass = role === 'error' ? 'error' : role;
+  div.innerHTML = '<span class="role ' + roleClass + '">[' + role + ']</span>' + esc(text);
   panel.appendChild(div);
   panel.scrollTop = panel.scrollHeight;
 }
 
+/* ── Debug Panel ── */
+function updateDebugPanel() {
+  var el = document.getElementById('debugContent');
+  if (!el) return;
+  if (debugLog.length === 0) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:12px">No turns yet.</div>';
+    return;
+  }
+  var html = '';
+  debugLog.forEach(function(d) {
+    html += '<div class="debug-turn">'
+      + '<div class="debug-turn-header">Turn #' + d.turn + ' <span style="color:var(--muted)">(' + d.model + ', temp ' + d.temperature + ')</span></div>'
+      + '<div>STT: "' + esc((d.sttText || '').substring(0, 60)) + '" <span class="debug-ms">' + d.sttMs + 'ms</span></div>'
+      + '<div>LLM: "' + esc((d.llmFirstTokens || '').substring(0, 60)) + '..." <span class="debug-ms">' + d.llmMs + 'ms</span></div>'
+      + '<div>TTS: <span class="debug-ms">' + d.ttsMs + 'ms</span></div>'
+      + '<div>Total: <strong>' + d.totalMs + 'ms</strong></div>';
+    if (d.toolsCalled && d.toolsCalled.length > 0) {
+      html += '<div>Tools: ' + d.toolsCalled.map(function(t) {
+        return '<span class="debug-tool">' + t.name + '(' + Object.values(t.args).join(', ') + ')</span>';
+      }).join(' ') + '</div>';
+    }
+    html += '</div>';
+  });
+  el.innerHTML = html;
+}
+
+function clearDebugLog() {
+  debugLog = [];
+  updateDebugPanel();
+}
+
+/* ── Text Input ── */
+function sendTextInput() {
+  var input = document.getElementById('sbTextInput');
+  var text = input.value.trim();
+  if (!text || !sandboxWs || sandboxWs.readyState !== 1) return;
+  sandboxWs.send(JSON.stringify({ type: 'text_input', text: text }));
+  input.value = '';
+}
+
+/* ── Audio Recording ── */
 function toggleMic() {
   if (isRecording) stopRecording();
   else startRecording();
@@ -707,15 +1134,13 @@ function toggleMic() {
 
 async function startRecording() {
   try {
-    var stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } });
-    audioContext = new AudioContext({ sampleRate: 16000 });
-    var source = audioContext.createMediaStreamSource(stream);
-
-    // Use ScriptProcessor for simplicity (AudioWorklet would be better in prod)
-    var processor = audioContext.createScriptProcessor(4096, 1, 1);
+    recordingStream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+    recordingCtx = new AudioContext({ sampleRate: 16000 });
+    var source = recordingCtx.createMediaStreamSource(recordingStream);
+    recordingProcessor = recordingCtx.createScriptProcessor(4096, 1, 1);
     audioChunks = [];
 
-    processor.onaudioprocess = function(e) {
+    recordingProcessor.onaudioprocess = function(e) {
       var float32 = e.inputBuffer.getChannelData(0);
       var int16 = new Int16Array(float32.length);
       for (var i = 0; i < float32.length; i++) {
@@ -724,17 +1149,17 @@ async function startRecording() {
       audioChunks.push(int16.buffer);
     };
 
-    source.connect(processor);
-    processor.connect(audioContext.destination);
+    source.connect(recordingProcessor);
+    recordingProcessor.connect(recordingCtx.destination);
 
     isRecording = true;
     document.getElementById('micBtn').classList.add('recording');
-    document.getElementById('voiceStatus').textContent = 'Listening...';
+    document.getElementById('voiceStatus').textContent = 'Listening... (click mic to stop)';
 
-    // Auto-stop after 10 seconds
-    setTimeout(function() { if (isRecording) stopRecording(); }, 10000);
+    // Auto-stop after 15 seconds
+    setTimeout(function() { if (isRecording) stopRecording(); }, 15000);
   } catch(e) {
-    showToast('Microphone access denied', 'error');
+    showToast('Microphone access denied. Check browser permissions.', 'error');
   }
 }
 
@@ -743,9 +1168,18 @@ function stopRecording() {
   document.getElementById('micBtn').classList.remove('recording');
   document.getElementById('voiceStatus').textContent = 'Processing...';
 
-  if (audioContext) {
-    audioContext.close();
-    audioContext = null;
+  // Stop media tracks
+  if (recordingStream) {
+    recordingStream.getTracks().forEach(function(t) { t.stop(); });
+    recordingStream = null;
+  }
+  if (recordingProcessor) {
+    recordingProcessor.disconnect();
+    recordingProcessor = null;
+  }
+  if (recordingCtx) {
+    recordingCtx.close().catch(function() {});
+    recordingCtx = null;
   }
 
   // Combine audio chunks and send
@@ -762,9 +1196,41 @@ function stopRecording() {
   audioChunks = [];
 }
 
-function playAudio(blob) {
-  var audio = new Audio(URL.createObjectURL(blob));
-  audio.play().catch(function() {});
+/* ── Audio Playback (PCM16 → AudioContext) ── */
+function playCollectedAudio() {
+  if (incomingAudio.length === 0) return;
+
+  // Combine all chunks
+  var totalLen = incomingAudio.reduce(function(s, b) { return s + b.byteLength; }, 0);
+  var combined = new Uint8Array(totalLen);
+  var offset = 0;
+  incomingAudio.forEach(function(buf) {
+    combined.set(new Uint8Array(buf), offset);
+    offset += buf.byteLength;
+  });
+  incomingAudio = [];
+
+  // Convert Int16 → Float32
+  var int16 = new Int16Array(combined.buffer);
+  var float32 = new Float32Array(int16.length);
+  for (var i = 0; i < int16.length; i++) {
+    float32[i] = int16[i] / 32768;
+  }
+
+  // Play via AudioContext at 24kHz (Cartesia output rate)
+  try {
+    if (!playbackCtx || playbackCtx.state === 'closed') {
+      playbackCtx = new AudioContext({ sampleRate: 24000 });
+    }
+    var buffer = playbackCtx.createBuffer(1, float32.length, 24000);
+    buffer.copyToChannel(float32, 0);
+    var source = playbackCtx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(playbackCtx.destination);
+    source.start();
+  } catch(e) {
+    console.error('[SANDBOX] Audio playback error:', e);
+  }
 }
 
 /* ═══════════════════════════════════════════════

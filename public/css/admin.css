@@ -466,6 +466,128 @@ body.sidebar-collapsed .main{margin-left:var(--sidebar-collapsed)}
 /* ═══════════════════════════════════════
    RESPONSIVE
    ═══════════════════════════════════════ */
+/* ═══════════════════════════════════════
+   ERROR BANNER
+   ═══════════════════════════════════════ */
+.sb-error-banner{
+  background:#fce4ec;
+  color:#c0392b;
+  padding:12px 20px;
+  border-radius:10px;
+  font-size:13px;
+  margin-bottom:20px;
+  border:1px solid rgba(192,57,43,0.2);
+}
+.sb-error-banner strong{font-weight:600}
+
+/* ═══════════════════════════════════════
+   TOOLTIPS
+   ═══════════════════════════════════════ */
+.sb-tooltip{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:16px;height:16px;
+  border-radius:50%;
+  background:var(--cream-dark);
+  color:var(--muted);
+  font-size:10px;
+  font-weight:600;
+  cursor:help;
+  vertical-align:middle;
+  margin-left:4px;
+  position:relative;
+}
+.sb-tooltip:hover{background:var(--black);color:var(--white)}
+.tooltip-popup{
+  position:fixed;
+  z-index:999;
+  background:var(--black);
+  color:var(--white);
+  padding:10px 14px;
+  border-radius:8px;
+  font-size:12px;
+  line-height:1.5;
+  max-width:260px;
+  box-shadow:0 4px 16px rgba(0,0,0,0.2);
+  pointer-events:none;
+  animation:tooltipIn 0.15s ease;
+}
+@keyframes tooltipIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+
+/* ═══════════════════════════════════════
+   DEBUG PANEL
+   ═══════════════════════════════════════ */
+.debug-panel{
+  margin-top:16px;
+  background:var(--cream);
+  border-radius:10px;
+  padding:12px;
+  font-size:12px;
+}
+.debug-panel summary{
+  cursor:pointer;
+  font-size:11px;
+  letter-spacing:0.06em;
+  text-transform:uppercase;
+  color:var(--muted);
+  font-weight:500;
+  user-select:none;
+}
+.debug-turn{
+  padding:8px 0;
+  border-bottom:1px solid var(--border);
+  font-size:12px;
+  line-height:1.6;
+}
+.debug-turn:last-child{border-bottom:none}
+.debug-turn-header{font-weight:600;margin-bottom:2px}
+.debug-ms{
+  display:inline-block;
+  background:var(--cream-dark);
+  padding:1px 6px;
+  border-radius:4px;
+  font-size:10px;
+  font-weight:500;
+  color:var(--muted);
+}
+.debug-tool{
+  display:inline-block;
+  background:rgba(45,138,78,0.1);
+  color:var(--green);
+  padding:1px 6px;
+  border-radius:4px;
+  font-size:10px;
+  font-weight:500;
+}
+
+/* ═══════════════════════════════════════
+   ROOM MAPPER
+   ═══════════════════════════════════════ */
+.room-row input{font-size:12px}
+.room-row .btn{flex-shrink:0}
+
+/* ═══════════════════════════════════════
+   SANDBOX ENHANCEMENTS
+   ═══════════════════════════════════════ */
+.transcript-msg .role.system{color:var(--green);font-style:italic}
+.transcript-msg .role.error{color:var(--red);font-style:italic}
+
+.mic-btn:disabled{opacity:0.4;cursor:not-allowed}
+
+kbd{
+  display:inline-block;
+  padding:2px 6px;
+  background:var(--cream-dark);
+  border:1px solid var(--border);
+  border-radius:4px;
+  font-family:var(--sans);
+  font-size:11px;
+}
+
+/* ═══════════════════════════════════════
+   RESPONSIVE
+   ═══════════════════════════════════════ */
 @media(max-width:768px){
   .sidebar{width:var(--sidebar-collapsed)}
   .sidebar .sidebar-logo,.sidebar .sidebar-section-label,.sidebar .sidebar-link span{display:none}

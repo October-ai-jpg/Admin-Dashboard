@@ -142,6 +142,78 @@ app.get('/api/health-check', requireAuth, async (req, res) => {
 });
 
 /* ══════════════════════════════════════════
+   API KEY CHECK — for frontend banner
+   ══════════════════════════════════════════ */
+app.get('/api/check-keys', requireAuth, (req, res) => {
+  res.json({
+    openai: !!process.env.OPENAI_API_KEY,
+    deepgram: !!process.env.DEEPGRAM_API_KEY,
+    cartesia: !!process.env.CARTESIA_API_KEY,
+    database: !!pool
+  });
+});
+
+/* ══════════════════════════════════════════
+   SCRAPE — Jina Reader + OpenAI extraction
+   ══════════════════════════════════════════ */
+app.post('/admin/scrape', requireAuth, async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL required' });
+
+  try {
+    // 1. Fetch via Jina Reader
+    console.log('[SCRAPE] Fetching:', url);
+    const jinaResponse = await fetch('https://r.jina.ai/' + url, {
+      headers: { 'Accept': 'text/plain' },
+      signal: AbortSignal.timeout(20000)
+    });
+    if (!jinaResponse.ok) {
+      throw new Error('Jina Reader error: ' + jinaResponse.status);
+    }
+    var rawText = await jinaResponse.text();
+
+    // Truncate if too long
+    if (rawText.length > 50000) {
+      rawText = rawText.substring(0, 50000) + '\n[Truncated]';
+    }
+
+    // 2. Extract with OpenAI if key available
+    if (process.env.OPENAI_API_KEY && rawText.length > 100) {
+      console.log('[SCRAPE] Extracting with OpenAI...');
+      const llmResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': 'Bearer ' + process.env.OPENAI_API_KEY,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: 'Extract all useful business information from this website content. Return as clean, structured text. Include: business name, description, services/products, rooms/spaces, pricing, hours, contact info, location, policies, and any other relevant details. Output text only, no markdown formatting.' },
+            { role: 'user', content: rawText.substring(0, 30000) }
+          ],
+          max_tokens: 2000,
+          temperature: 0.3
+        }),
+        signal: AbortSignal.timeout(25000)
+      });
+      if (llmResponse.ok) {
+        const llmData = await llmResponse.json();
+        const extracted = llmData.choices?.[0]?.message?.content || rawText;
+        console.log('[SCRAPE] Extracted', extracted.length, 'chars');
+        return res.json({ text: extracted, source: 'extracted' });
+      }
+    }
+
+    // Fallback: return raw text
+    res.json({ text: rawText, source: 'raw' });
+  } catch(e) {
+    console.error('[SCRAPE] Error:', e.message);
+    res.status(500).json({ error: 'Could not access this URL. Try pasting the content manually.' });
+  }
+});
+
+/* ══════════════════════════════════════════
    SPA FALLBACK — serve dashboard.html
    ══════════════════════════════════════════ */
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
@@ -180,6 +252,19 @@ wss.on('connection', (ws, req) => {
    START
    ══════════════════════════════════════════ */
 server.listen(PORT, () => {
-  console.log(`Admin Dashboard running on port ${PORT}`);
-  console.log(`Database: ${pool ? 'connected' : 'not configured'}`);
+  console.log('');
+  console.log('╔═══════════════════════════════════════════╗');
+  console.log('║    October AI — Admin Dashboard           ║');
+  console.log('╚═══════════════════════════════════════════╝');
+  console.log('  Port:', PORT);
+  console.log('  Database:', pool ? 'connected' : 'NOT CONFIGURED');
+  console.log('');
+  // API key checks
+  if (!process.env.OPENAI_API_KEY)   console.error('  ⚠ MISSING: OPENAI_API_KEY');
+  else                               console.log('  ✓ OPENAI_API_KEY set');
+  if (!process.env.DEEPGRAM_API_KEY) console.error('  ⚠ MISSING: DEEPGRAM_API_KEY');
+  else                               console.log('  ✓ DEEPGRAM_API_KEY set');
+  if (!process.env.CARTESIA_API_KEY) console.error('  ⚠ MISSING: CARTESIA_API_KEY');
+  else                               console.log('  ✓ CARTESIA_API_KEY set');
+  console.log('');
 });
