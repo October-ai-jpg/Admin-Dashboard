@@ -765,62 +765,7 @@ function loadDefaultSystem() {
   });
   html += '</div>';
 
-  // ── Active Tenants (live from DB) ──
-  html += '<div class="ds-section">'
-    + '<h3 class="section-title" style="font-size:22px;margin-bottom:16px">Active Tenants</h3>'
-    + '<div id="dsTenantList"><p style="color:var(--muted);font-size:13px">Loading tenants...</p></div>'
-    + '</div>';
-
   c.innerHTML = html;
-
-  // Fetch tenants async
-  api('/api/monitoring/tenants').then(function(tenants) {
-    var container = document.getElementById('dsTenantList');
-    if (!container) return;
-    if (!tenants || tenants.length === 0) {
-      container.innerHTML = '<p style="color:var(--muted);font-size:13px">No tenants found. Connect a database to see customer agents.</p>';
-      return;
-    }
-
-    // Group by vertical
-    var byVertical = {};
-    tenants.forEach(function(t) {
-      var v = t.vertical || 'other';
-      if (!byVertical[v]) byVertical[v] = [];
-      byVertical[v].push(t);
-    });
-
-    var thtml = '<div class="kpi-grid" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr));margin-bottom:20px">'
-      + dsCard('Total Agents', tenants.length);
-    Object.keys(byVertical).forEach(function(v) {
-      var label = v.replace(/_/g, ' ');
-      label = label.charAt(0).toUpperCase() + label.slice(1);
-      thtml += dsCard(label, byVertical[v].length);
-    });
-    thtml += '</div>';
-
-    // Tenant table
-    thtml += '<table class="data-table"><thead><tr>'
-      + '<th>Agent Name</th><th>Vertical</th><th>Model ID</th><th>Status</th>'
-      + '</tr></thead><tbody>';
-    tenants.forEach(function(t) {
-      var name = t.agent_name || t.name || 'Unnamed';
-      var vertical = (t.vertical || 'other').replace(/_/g, ' ');
-      var modelId = t.matterport_model_id || '—';
-      var status = t.is_active !== false ? '<span style="color:var(--green)">Active</span>' : '<span style="color:var(--muted)">Inactive</span>';
-      thtml += '<tr>'
-        + '<td>' + esc(name) + '</td>'
-        + '<td>' + esc(vertical) + '</td>'
-        + '<td style="font-family:monospace;font-size:11px">' + esc(modelId) + '</td>'
-        + '<td>' + status + '</td>'
-        + '</tr>';
-    });
-    thtml += '</tbody></table>';
-    container.innerHTML = thtml;
-  }).catch(function() {
-    var container = document.getElementById('dsTenantList');
-    if (container) container.innerHTML = '<p style="color:var(--muted);font-size:13px">No database connection. Tenant data unavailable.</p>';
-  });
 }
 
 function dsCard(label, value) {
@@ -869,7 +814,7 @@ function loadSandbox() {
 
     // Load from Tenant
     + '<div class="form-group">'
-    + '<label class="form-label">Load from Tenant <span class="sb-tooltip" data-tip="Load settings from an existing tenant in the database.">?</span></label>'
+    + '<label class="form-label">Load from Tenant <span class="sb-tooltip" data-tip="Load an existing customer\'s full configuration into the sandbox — their Matterport tour, system prompt, property data, room mappings, and vertical. Useful for debugging or testing a specific customer\'s agent setup.">?</span></label>'
     + '<select class="form-select" id="sbTenantSelect" onchange="loadTenantData(this.value)"><option value="">— Select a tenant —</option></select>'
     + '</div>'
 
