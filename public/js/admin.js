@@ -247,12 +247,13 @@ function showCustomerDetail(id) {
       + '</div>'
       + '<div class="detail-section"><h4>Agents (' + data.agents.length + ')</h4>';
     data.agents.forEach(function(a) {
-      html += detailRow(esc(a.agent_name || a.property_name || 'Agent'), (a.conversation_count || 0) + ' conversations');
+      html += detailRow(esc(a.agent_name || a.name || 'Agent'), (a.conversation_count || 0) + ' conversations');
     });
     html += '</div>'
       + '<div class="detail-section"><h4>Recent Conversations</h4>';
     data.conversations.slice(0, 10).forEach(function(cv) {
-      html += detailRow(fmtDate(cv.created_at), fmtDuration(cv.duration_seconds) + (cv.converted ? ' (converted)' : ''));
+      var cvConverted = cv.had_booking_click || cv.conversion_stage === 'converted';
+      html += detailRow(fmtDate(cv.created_at), fmtDuration(cv.duration_seconds) + (cvConverted ? ' (converted)' : ''));
     });
     html += '</div>';
 
@@ -287,7 +288,7 @@ function loadAgents() {
     data.agents.forEach(function(a) {
       var rate = parseInt(a.conversations) > 0 ? Math.round((parseInt(a.conversions) / parseInt(a.conversations)) * 100) : 0;
       html += '<tr onclick="showAgentDetail(\'' + a.id + '\')">'
-        + '<td>' + esc(a.agent_name || a.property_name || 'Agent') + '</td>'
+        + '<td>' + esc(a.agent_name || a.name || 'Agent') + '</td>'
         + '<td>' + esc(a.customer_name || '-') + '</td>'
         + '<td>' + esc(a.vertical || '-') + '</td>'
         + '<td>' + (a.conversations || 0) + '</td>'
@@ -307,7 +308,7 @@ function loadAgents() {
 function showAgentDetail(id) {
   api('/api/monitoring/agents/' + id).then(function(data) {
     var a = data.agent;
-    var html = '<div class="detail-title">' + esc(a.agent_name || a.property_name || 'Agent') + '</div>'
+    var html = '<div class="detail-title">' + esc(a.agent_name || a.name || 'Agent') + '</div>'
       + '<div class="detail-subtitle">' + esc(a.customer_name) + ' &middot; ' + esc(a.customer_email) + '</div>'
       + '<div class="detail-section"><h4>Details</h4>'
       + detailRow('Vertical', a.vertical || '-')
@@ -321,7 +322,8 @@ function showAgentDetail(id) {
 
     html += '<div class="detail-section"><h4>Recent Conversations</h4>';
     data.conversations.slice(0, 10).forEach(function(cv) {
-      html += detailRow(fmtDate(cv.created_at), fmtDuration(cv.duration_seconds) + (cv.converted ? ' (converted)' : ''));
+      var agentCvConverted = cv.had_booking_click || cv.conversion_stage === 'converted';
+      html += detailRow(fmtDate(cv.created_at), fmtDuration(cv.duration_seconds) + (agentCvConverted ? ' (converted)' : ''));
     });
     html += '</div>';
 
@@ -353,13 +355,14 @@ function loadConversations() {
       + '</tr></thead><tbody>';
 
     data.conversations.forEach(function(cv) {
+      var isConverted = cv.had_booking_click || cv.conversion_stage === 'converted';
       html += '<tr onclick="showConversationDetail(\'' + cv.id + '\')">'
         + '<td>' + fmtDate(cv.created_at) + '</td>'
-        + '<td>' + esc(cv.agent_name || cv.property_name || '-') + '</td>'
+        + '<td>' + esc(cv.agent_name || cv.tenant_name || '-') + '</td>'
         + '<td>' + esc(cv.customer_name || '-') + '</td>'
         + '<td>' + fmtDuration(cv.duration_seconds) + '</td>'
-        + '<td>' + (cv.message_count || '-') + '</td>'
-        + '<td>' + (cv.converted ? '<span class="badge badge-active">Yes</span>' : '<span class="badge badge-inactive">No</span>') + '</td>'
+        + '<td>' + (cv.messages_count || '-') + '</td>'
+        + '<td>' + (isConverted ? '<span class="badge badge-active">Yes</span>' : '<span class="badge badge-inactive">No</span>') + '</td>'
         + '</tr>';
     });
 
@@ -372,12 +375,16 @@ function loadConversations() {
 
 function showConversationDetail(id) {
   api('/api/monitoring/conversations/' + id).then(function(cv) {
+    var isConverted = cv.had_booking_click || cv.conversion_stage === 'converted';
     var html = '<div class="detail-title">Conversation</div>'
-      + '<div class="detail-subtitle">' + fmtDate(cv.created_at) + ' &middot; ' + esc(cv.agent_name || 'Unknown Agent') + '</div>'
+      + '<div class="detail-subtitle">' + fmtDate(cv.created_at) + ' &middot; ' + esc(cv.agent_name || cv.tenant_name || 'Unknown Agent') + '</div>'
       + '<div class="detail-section"><h4>Details</h4>'
       + detailRow('Duration', fmtDuration(cv.duration_seconds))
-      + detailRow('Converted', cv.converted ? 'Yes' : 'No')
+      + detailRow('Messages', cv.messages_count || 0)
+      + detailRow('Converted', isConverted ? 'Yes' : 'No')
+      + detailRow('Stage', cv.conversion_stage || '-')
       + detailRow('Customer', cv.customer_name || '-')
+      + detailRow('Guest', cv.guest_name || '-')
       + '</div>';
 
     if (cv.transcript) {
@@ -509,9 +516,9 @@ function loadHealth() {
       el.innerHTML = '<p style="color:var(--muted);font-size:13px">No recent errors.</p>';
       return;
     }
-    var html = '<table class="data-table"><thead><tr><th>Date</th><th>Agent</th><th>Error</th></tr></thead><tbody>';
+    var html = '<table class="data-table"><thead><tr><th>Date</th><th>Agent</th><th>Duration</th><th>Messages</th><th>Drop-off</th></tr></thead><tbody>';
     errors.forEach(function(e) {
-      html += '<tr><td>' + fmtDate(e.created_at) + '</td><td>' + esc(e.agent_name || '-') + '</td><td style="max-width:400px;overflow:hidden;text-overflow:ellipsis">' + esc(e.error_message) + '</td></tr>';
+      html += '<tr><td>' + fmtDate(e.created_at) + '</td><td>' + esc(e.agent_name || e.tenant_name || '-') + '</td><td>' + fmtDuration(e.duration_seconds) + '</td><td>' + (e.messages_count || 0) + '</td><td>Turn ' + (e.drop_off_turn || '-') + '</td></tr>';
     });
     html += '</tbody></table>';
     el.innerHTML = html;
@@ -610,7 +617,7 @@ function loadFromTenant() {
     var html = '<h2>Select Tenant</h2><div style="max-height:400px;overflow-y:auto">';
     tenants.forEach(function(t) {
       html += '<div style="padding:12px;border-bottom:1px solid var(--border);cursor:pointer" onclick="loadTenantData(\'' + t.id + '\')">'
-        + '<div style="font-weight:500">' + esc(t.agent_name || t.property_name || 'Agent') + '</div>'
+        + '<div style="font-weight:500">' + esc(t.agent_name || t.name || 'Agent') + '</div>'
         + '<div style="font-size:12px;color:var(--muted)">' + esc(t.vertical || '-') + '</div></div>';
     });
     html += '</div>';
@@ -626,7 +633,7 @@ window.loadTenantData = function(id) {
     if (t.room_mappings) document.getElementById('sbMappings').value = typeof t.room_mappings === 'string' ? t.room_mappings : JSON.stringify(t.room_mappings, null, 2);
     if (t.vertical) document.getElementById('sbVertical').value = t.vertical;
     closeModal();
-    showToast('Loaded data from ' + (t.agent_name || 'tenant'), 'success');
+    showToast('Loaded data from ' + (t.agent_name || t.name || 'tenant'), 'success');
   });
 };
 

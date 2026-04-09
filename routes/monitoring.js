@@ -9,7 +9,7 @@ module.exports = function(pool) {
     try {
       return await pool.query(sql, params || []);
     } catch(e) {
-      console.error('DB query error:', e.message);
+      console.error('DB query error:', e.message, '\nSQL:', sql.substring(0, 200));
       return { rows: [] };
     }
   }
@@ -25,7 +25,7 @@ module.exports = function(pool) {
         query("SELECT COUNT(*) as count FROM conversations WHERE created_at > NOW() - INTERVAL '30 days'"),
         query('SELECT COUNT(*) as count FROM affiliates'),
         query('SELECT COALESCE(SUM(minutes_used_this_month), 0) as total FROM tenants'),
-        query("SELECT COUNT(*) as count FROM conversations WHERE created_at > NOW() - INTERVAL '30 days' AND converted = true")
+        query("SELECT COUNT(*) as count FROM conversations WHERE created_at > NOW() - INTERVAL '30 days' AND (had_booking_click = true OR conversion_stage = 'converted')")
       ]);
 
       const totalConvos = parseInt(conversations.rows[0]?.count || 0);
@@ -82,7 +82,7 @@ module.exports = function(pool) {
       const convRatePerDay = await query(`
         SELECT DATE(created_at) as day,
                COUNT(*) as total,
-               SUM(CASE WHEN converted = true THEN 1 ELSE 0 END) as converted
+               SUM(CASE WHEN had_booking_click = true OR conversion_stage = 'converted' THEN 1 ELSE 0 END) as converted
         FROM conversations
         WHERE created_at > NOW() - INTERVAL '30 days'
         GROUP BY DATE(created_at)
@@ -127,10 +127,11 @@ module.exports = function(pool) {
       const total = parseInt(countResult.rows[0]?.count || 0);
 
       const result = await query(`
-        SELECT u.id, u.name, u.email, u.plan_active, u.created_at, u.affiliate_ref,
+        SELECT u.id, u.name, u.email, u.plan_active, u.plan, u.created_at, u.affiliate_ref,
+               u.company_name, u.account_type, u.agent_package,
                COUNT(DISTINCT t.id) as agent_count,
                COUNT(DISTINCT c.id) as conversation_count,
-               COALESCE(SUM(t.minutes_used_this_month), 0) as minutes_used
+               COALESCE(SUM(DISTINCT t.minutes_used_this_month), 0) as minutes_used
         FROM users u
         LEFT JOIN tenants t ON t.user_id = u.id
         LEFT JOIN conversations c ON c.tenant_id = t.id AND c.created_at > NOW() - INTERVAL '30 days'
@@ -153,16 +154,21 @@ module.exports = function(pool) {
       if (user.rows.length === 0) return res.status(404).json({ error: 'Not found' });
 
       const agents = await query(`
-        SELECT t.*, COUNT(c.id) as conversation_count
+        SELECT t.id, t.name, t.agent_name, t.minutes_used_this_month, t.created_at, t.active,
+               cl.vertical,
+               COUNT(c.id) as conversation_count
         FROM tenants t
+        LEFT JOIN clients cl ON cl.id = t.client_id
         LEFT JOIN conversations c ON c.tenant_id = t.id
         WHERE t.user_id = $1
-        GROUP BY t.id
+        GROUP BY t.id, cl.vertical
         ORDER BY t.created_at DESC
       `, [req.params.id]);
 
       const conversations = await query(`
-        SELECT c.* FROM conversations c
+        SELECT c.id, c.created_at, c.duration_seconds, c.messages_count,
+               c.had_booking_click, c.conversion_stage
+        FROM conversations c
         JOIN tenants t ON c.tenant_id = t.id
         WHERE t.user_id = $1
         ORDER BY c.created_at DESC LIMIT 50
@@ -191,31 +197,37 @@ module.exports = function(pool) {
     let paramIdx = 1;
 
     if (search) {
-      where += ` AND (t.agent_name ILIKE $${paramIdx} OR t.property_name ILIKE $${paramIdx})`;
+      where += ` AND (t.agent_name ILIKE $${paramIdx} OR t.name ILIKE $${paramIdx})`;
       params.push('%' + search + '%');
       paramIdx++;
     }
     if (filter && filter !== 'all') {
-      where += ` AND t.vertical = $${paramIdx}`;
+      where += ` AND cl.vertical = $${paramIdx}`;
       params.push(filter);
       paramIdx++;
     }
 
     try {
-      const countResult = await query(`SELECT COUNT(*) as count FROM tenants t ${where}`, params);
+      const countResult = await query(`
+        SELECT COUNT(*) as count FROM tenants t
+        LEFT JOIN clients cl ON cl.id = t.client_id
+        ${where}
+      `, params);
       const total = parseInt(countResult.rows[0]?.count || 0);
 
       const result = await query(`
-        SELECT t.id, t.agent_name, t.property_name, t.vertical, t.minutes_used_this_month,
-               t.created_at, t.user_id,
+        SELECT t.id, t.name, t.agent_name, t.minutes_used_this_month,
+               t.created_at, t.user_id, t.active,
+               cl.vertical,
                u.name as customer_name, u.email as customer_email,
                COUNT(DISTINCT c.id) as conversations,
-               SUM(CASE WHEN c.converted = true THEN 1 ELSE 0 END) as conversions
+               SUM(CASE WHEN c.had_booking_click = true OR c.conversion_stage = 'converted' THEN 1 ELSE 0 END) as conversions
         FROM tenants t
+        LEFT JOIN clients cl ON cl.id = t.client_id
         LEFT JOIN users u ON u.id = t.user_id
         LEFT JOIN conversations c ON c.tenant_id = t.id AND c.created_at > NOW() - INTERVAL '30 days'
         ${where}
-        GROUP BY t.id, u.name, u.email
+        GROUP BY t.id, cl.vertical, u.name, u.email
         ORDER BY t.created_at DESC
         LIMIT $${paramIdx} OFFSET $${paramIdx + 1}
       `, [...params, parseInt(limit), offset]);
@@ -230,15 +242,20 @@ module.exports = function(pool) {
   router.get('/agents/:id', async (req, res) => {
     try {
       const agent = await query(`
-        SELECT t.*, u.name as customer_name, u.email as customer_email
+        SELECT t.*, cl.vertical,
+               u.name as customer_name, u.email as customer_email
         FROM tenants t
+        LEFT JOIN clients cl ON cl.id = t.client_id
         LEFT JOIN users u ON u.id = t.user_id
         WHERE t.id = $1
       `, [req.params.id]);
       if (agent.rows.length === 0) return res.status(404).json({ error: 'Not found' });
 
       const conversations = await query(`
-        SELECT * FROM conversations WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 50
+        SELECT id, created_at, duration_seconds, messages_count,
+               had_booking_click, conversion_stage
+        FROM conversations WHERE tenant_id = $1
+        ORDER BY created_at DESC LIMIT 50
       `, [req.params.id]);
 
       res.json({ agent: agent.rows[0], conversations: conversations.rows });
@@ -274,15 +291,21 @@ module.exports = function(pool) {
       params.push(date_to);
       paramIdx++;
     }
-    if (converted === 'true') { where += ' AND c.converted = true'; }
-    else if (converted === 'false') { where += ' AND (c.converted = false OR c.converted IS NULL)'; }
+    if (converted === 'true') {
+      where += " AND (c.had_booking_click = true OR c.conversion_stage = 'converted')";
+    } else if (converted === 'false') {
+      where += " AND c.had_booking_click = false AND c.conversion_stage != 'converted'";
+    }
 
     try {
       const countResult = await query(`SELECT COUNT(*) as count FROM conversations c ${where}`, params);
       const total = parseInt(countResult.rows[0]?.count || 0);
 
       const result = await query(`
-        SELECT c.*, t.agent_name, t.property_name, u.name as customer_name
+        SELECT c.id, c.tenant_id, c.created_at, c.duration_seconds, c.messages_count,
+               c.had_booking_click, c.conversion_stage, c.guest_name, c.guest_email,
+               t.agent_name, t.name as tenant_name,
+               u.name as customer_name
         FROM conversations c
         LEFT JOIN tenants t ON c.tenant_id = t.id
         LEFT JOIN users u ON t.user_id = u.id
@@ -301,14 +324,26 @@ module.exports = function(pool) {
   router.get('/conversations/:id', async (req, res) => {
     try {
       const result = await query(`
-        SELECT c.*, t.agent_name, t.property_name, u.name as customer_name
+        SELECT c.*, t.agent_name, t.name as tenant_name,
+               u.name as customer_name
         FROM conversations c
         LEFT JOIN tenants t ON c.tenant_id = t.id
         LEFT JOIN users u ON t.user_id = u.id
         WHERE c.id = $1
       `, [req.params.id]);
       if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
-      res.json(result.rows[0]);
+
+      // Fetch messages from conversation_messages table
+      const messages = await query(`
+        SELECT role, content, created_at
+        FROM conversation_messages
+        WHERE conversation_id = $1
+        ORDER BY created_at ASC
+      `, [req.params.id]);
+
+      const convo = result.rows[0];
+      convo.transcript = messages.rows;
+      res.json(convo);
     } catch(e) {
       res.status(500).json({ error: e.message });
     }
@@ -322,20 +357,20 @@ module.exports = function(pool) {
       const result = await query(`
         SELECT a.*,
                COUNT(DISTINCT u.id) as active_clients,
-               COALESCE(SUM(ac.commission_amount), 0) as total_earned
+               COALESCE(SUM(ac.commission_amount), 0) as total_commission
         FROM affiliates a
-        LEFT JOIN users u ON u.affiliate_ref = a.ref_code
+        LEFT JOIN users u ON u.affiliate_ref = a.ref_code AND u.affiliate_confirmed = true
         LEFT JOIN affiliate_commissions ac ON ac.affiliate_ref = a.ref_code
         GROUP BY a.id
         ORDER BY a.created_at DESC
       `);
 
-      // Summary
+      // Summary using status field (not paid boolean)
       const summary = await query(`
         SELECT
           COALESCE(SUM(CASE WHEN ac.created_at > DATE_TRUNC('month', NOW()) THEN ac.commission_amount ELSE 0 END), 0) as this_month,
-          COALESCE(SUM(CASE WHEN ac.paid = true THEN ac.commission_amount ELSE 0 END), 0) as total_paid,
-          COALESCE(SUM(CASE WHEN ac.paid = false OR ac.paid IS NULL THEN ac.commission_amount ELSE 0 END), 0) as pending
+          COALESCE(SUM(CASE WHEN ac.status = 'paid' THEN ac.commission_amount ELSE 0 END), 0) as total_paid,
+          COALESCE(SUM(CASE WHEN ac.status = 'pending' THEN ac.commission_amount ELSE 0 END), 0) as pending
         FROM affiliate_commissions ac
       `);
 
@@ -359,7 +394,7 @@ module.exports = function(pool) {
 
       const minutesUsed = await query('SELECT COALESCE(SUM(minutes_used_this_month), 0) as total FROM tenants');
       const totalMinutes = parseInt(minutesUsed.rows[0]?.total || 0);
-      const apiCost = Math.round(totalMinutes * 0.15 * 100) / 100; // est $0.15/min
+      const apiCost = Math.round(totalMinutes * 0.15 * 100) / 100;
 
       const commissions = await query(`
         SELECT COALESCE(SUM(commission_amount), 0) as total
@@ -398,15 +433,21 @@ module.exports = function(pool) {
 
   /* ═══════════════════════════════════════
      ERROR LOG (for System Health)
+     Conversations don't have error_message column,
+     so we look for failed conversion stages or short sessions
      ═══════════════════════════════════════ */
   router.get('/errors', async (req, res) => {
     try {
+      // Since there's no error_message column, show conversations
+      // that may indicate issues (very short sessions, drop-offs)
       const result = await query(`
-        SELECT c.id, c.created_at, c.tenant_id, c.error_message,
-               t.agent_name, t.property_name
+        SELECT c.id, c.created_at, c.tenant_id, c.duration_seconds,
+               c.messages_count, c.drop_off_turn,
+               t.agent_name, t.name as tenant_name
         FROM conversations c
         LEFT JOIN tenants t ON c.tenant_id = t.id
-        WHERE c.error_message IS NOT NULL AND c.error_message != ''
+        WHERE c.duration_seconds > 0 AND c.duration_seconds < 5
+              AND c.messages_count >= 1
         ORDER BY c.created_at DESC
         LIMIT 50
       `);
@@ -423,8 +464,11 @@ module.exports = function(pool) {
   router.get('/tenants', async (req, res) => {
     try {
       const result = await query(`
-        SELECT id, agent_name, property_name, vertical, property_data, room_mappings
-        FROM tenants ORDER BY agent_name
+        SELECT t.id, t.name, t.agent_name, t.property_data, t.room_mappings,
+               cl.vertical
+        FROM tenants t
+        LEFT JOIN clients cl ON cl.id = t.client_id
+        ORDER BY t.agent_name NULLS LAST, t.name
       `);
       res.json(result.rows);
     } catch(e) {
