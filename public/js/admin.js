@@ -541,7 +541,6 @@ function healthCard(name, status, id) {
 var sandboxWs = null;
 var debugLog = [];
 var wsReconnectAttempts = 0;
-var roomEditorMode = 'json';
 var cachedTenants = null;
 
 /* ── Voice state (matches production embed.js) ── */
@@ -677,6 +676,16 @@ function loadSandbox() {
     + '<option value="hotel">Hotel</option><option value="education">Education</option><option value="retail">Retail</option>'
     + '<option value="real_estate_sale">Real Estate (Sale)</option><option value="real_estate_development">Real Estate (Development)</option><option value="other">Other</option></select></div>'
 
+    // Production Reference
+    + '<div class="form-group">'
+    + '<label class="form-label">Production Reference <span class="sb-tooltip" data-tip="Shows the actual settings used by existing customers on this vertical. Use as reference while you test.">?</span></label>'
+    + '<button class="prod-ref-toggle" id="prodRefToggle" onclick="toggleProdRef()">'
+    + '<span>Show production settings</span><span class="prod-ref-chevron">▾</span>'
+    + '</button>'
+    + '<div class="prod-ref-panel" id="prodRefPanel">'
+    + '<div class="prod-ref-content" id="prodRefContent">Loading...</div>'
+    + '</div></div>'
+
     // LLM Model
     + '<div class="form-group">'
     + '<label class="form-label">LLM Model</label>'
@@ -705,21 +714,33 @@ function loadSandbox() {
     + '<button class="btn btn-outline btn-sm" onclick="syncFromURL()" id="sbSyncBtn">Sync</button>'
     + '</div></div>'
 
-    // Room Mappings — Full Visual Editor
+    // Space Mappings (matches production client dashboard)
     + '<div class="form-group">'
-    + '<label class="form-label">Room Mappings <span class="sb-tooltip" data-tip="Map room names to Matterport sweep IDs. Press U in the tour and click a location to find its sweep ID.">?</span></label>'
-    + '<div class="rm-tabs">'
-    + '<button class="rm-tab active" id="rmTabJson" onclick="setRoomEditorMode(\'json\')">JSON</button>'
-    + '<button class="rm-tab" id="rmTabVisual" onclick="setRoomEditorMode(\'visual\')">Visual</button>'
-    + '</div>'
-    + '<div id="roomJsonEditor">'
-    + '<textarea class="form-textarea rm-json-textarea" id="sbMappings" rows="4" placeholder=\'{"sweepId1": {"label": "Deluxe Room"}}\' oninput="onRoomJsonInput()"></textarea>'
-    + '<div class="rm-json-error" id="sbMappingsError"></div>'
-    + '</div>'
-    + '<div id="roomVisualEditor" style="display:none">'
-    + '<div id="roomList"></div>'
-    + '<button class="rm-add-btn" onclick="addRoom()">+ Add room</button>'
+    + '<label class="form-label">Space Mappings <span class="sb-tooltip" data-tip="Space mappings connect rooms in your Matterport tour to your agent. Each space needs a name and a Sweep ID. The agent uses these to navigate visitors to the right location.">?</span></label>'
+    + '<ul class="space-list" id="spaceList"><li class="space-empty">No spaces configured</li></ul>'
+    + '<div id="spaceEditPanel" style="display:none"></div>'
+    + '<div id="addSpaceForm" style="display:none">'
+    + '<div class="space-edit-panel">'
+    + '<div class="field-group"><label>Space name</label>'
+    + '<input type="text" id="newSpaceName" placeholder="e.g. Lobby, Restaurant, Suite 401"></div>'
+    + '<div class="field-group"><label>Matterport Sweep ID or URL</label>'
+    + '<input type="text" id="newSweepId" placeholder="Paste a Matterport URL or enter a Sweep ID" oninput="extractSweepFromInput(this)">'
+    + '<div class="sweep-extract-info" id="sweepExtractInfo"></div>'
+    + '<button class="sweep-help-toggle" type="button" onclick="document.getElementById(\'sweepHelpBody\').classList.toggle(\'open\')">How to find your Sweep ID</button>'
+    + '<div class="sweep-help-body" id="sweepHelpBody">'
+    + '<ol><li>Open your Matterport tour in a browser</li>'
+    + '<li>Navigate to the room you want to map</li>'
+    + '<li>Copy the URL from the address bar</li>'
+    + '<li>Paste it here — we\'ll extract the Sweep ID automatically</li></ol>'
+    + '<p style="margin-top:8px;font-size:11px;color:var(--muted)">The Sweep ID is the <code>ss=</code> parameter in the Matterport URL, e.g. <code>?m=...&amp;ss=<strong>abc123</strong></code></p>'
     + '</div></div>'
+    + '<div class="space-btn-row">'
+    + '<button class="btn btn-dark btn-sm" onclick="doAddSpace()">Add space</button>'
+    + '<button class="btn btn-outline btn-sm" onclick="toggleAddSpace()">Cancel</button>'
+    + '</div></div></div>'
+    + '<button class="space-add-btn" onclick="toggleAddSpace()">+ Add space</button>'
+    + '<textarea class="form-textarea" id="sbMappings" rows="0" style="display:none"></textarea>'
+    + '</div>'
 
     // Action buttons
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">'
@@ -758,9 +779,6 @@ function loadSandbox() {
     // ═══ ZONE 2+3: TOUR + VOICE OVERLAY ═══
     + '<div class="sandbox-tour" id="sbTourContainer">'
     + '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:14px">Enter a Matterport Model ID and click Apply</div>'
-
-    // Production status bar
-    + '<div class="sb-prod-status loading" id="sbProdStatus">Loading production status...</div>'
 
     // Loading overlay
     + '<div class="sb-loading-overlay hidden" id="sbLoadingOverlay">'
@@ -812,9 +830,10 @@ function loadSandbox() {
   loadTenantDropdown();
   checkAPIKeys();
   initTooltips();
-  loadProductionStatus();
+  loadProductionRef();
   initPlogDaySelect();
   renderPlog();
+  renderSpaceList();
 }
 
 /* ── API Key Banner ── */
@@ -961,11 +980,10 @@ function applyTenantData(t) {
     document.getElementById('sbData').value = typeof t.property_data === 'string' ? t.property_data : JSON.stringify(t.property_data, null, 2);
     plog('PROPERTY_DATA', '', 'loaded from ' + tenantName);
   }
-  // Room mappings
+  // Room mappings — load into space mapper
   if (t.room_mappings) {
-    var rmStr = typeof t.room_mappings === 'string' ? t.room_mappings : JSON.stringify(t.room_mappings, null, 2);
-    document.getElementById('sbMappings').value = rmStr;
-    if (roomEditorMode === 'visual') syncJSONToVisual();
+    var mappings = typeof t.room_mappings === 'string' ? JSON.parse(t.room_mappings || '{}') : (t.room_mappings || {});
+    renderSpaces(mappings);
     plog('ROOM_MAPPING', '', 'loaded from ' + tenantName);
   }
   // Vertical
@@ -979,7 +997,7 @@ function applyTenantData(t) {
   }
   // Reset prompt for new vertical
   resetPrompt();
-  loadProductionStatus();
+  loadProductionRef();
   showToast('Loaded: ' + tenantName, 'success');
 }
 
@@ -1010,189 +1028,268 @@ function syncFromURL() {
 }
 
 /* ══════════════════════════════════════════════════
-   ROOM MAPPER — Full Visual Editor
+   SPACE MAPPER (matches production client dashboard)
    ══════════════════════════════════════════════════ */
-function setRoomEditorMode(mode) {
-  roomEditorMode = mode;
-  document.getElementById('roomJsonEditor').style.display = mode === 'json' ? 'block' : 'none';
-  document.getElementById('roomVisualEditor').style.display = mode === 'visual' ? 'block' : 'none';
-  var jsonTab = document.getElementById('rmTabJson');
-  var visTab = document.getElementById('rmTabVisual');
-  if (jsonTab) { jsonTab.classList.toggle('active', mode === 'json'); }
-  if (visTab) { visTab.classList.toggle('active', mode === 'visual'); }
-  if (mode === 'visual') syncJSONToVisual();
+var localRooms = {};
+var editingSpaceKey = null;
+
+/* ── Sweep ID extraction from Matterport URLs ── */
+function extractSweepId(input) {
+  if (!input) return null;
+  var match = input.match(/[?&]ss=([^&]+)/);
+  if (match) return match[1];
+  if (/^[a-zA-Z0-9_-]+$/.test(input) && input.length > 5 && input.length < 40) return input;
+  return null;
 }
 
-function syncJSONToVisual() {
-  var raw = document.getElementById('sbMappings').value.trim();
-  var mappings = {};
-  try { if (raw) mappings = JSON.parse(raw); } catch(e) {}
-  var list = document.getElementById('roomList');
-  var html = '';
-  var keys = Object.keys(mappings);
+window.extractSweepFromInput = function(el) {
+  var info = document.getElementById('sweepExtractInfo');
+  var val = el.value.trim();
+  if (!val) { info.style.display = 'none'; return; }
+  if (val.indexOf('matterport.com') !== -1 || val.indexOf('ss=') !== -1) {
+    var sid = extractSweepId(val);
+    if (sid) {
+      info.textContent = 'Sweep ID extracted: ' + sid;
+      info.style.display = 'block';
+      info.style.color = 'var(--green)';
+    } else {
+      info.textContent = 'Could not find a Sweep ID in this URL';
+      info.style.display = 'block';
+      info.style.color = 'var(--red)';
+    }
+  } else { info.style.display = 'none'; }
+};
+
+window.extractSweepFromEdit = function(el) {
+  var info = document.getElementById('editSweepExtractInfo');
+  var val = el.value.trim();
+  if (!val) { info.style.display = 'none'; return; }
+  if (val.indexOf('matterport.com') !== -1 || val.indexOf('ss=') !== -1) {
+    var sid = extractSweepId(val);
+    if (sid) {
+      info.textContent = 'Sweep ID extracted: ' + sid;
+      info.style.display = 'block';
+      info.style.color = 'var(--green)';
+    } else {
+      info.textContent = 'Could not find Sweep ID in this URL';
+      info.style.display = 'block';
+      info.style.color = 'var(--red)';
+    }
+  } else { info.style.display = 'none'; }
+};
+
+/* ── Render spaces from mappings object ── */
+function renderSpaces(mappings) {
+  localRooms = {};
+  if (!mappings || typeof mappings !== 'object') return;
+  Object.keys(mappings).forEach(function(key) {
+    var entry = mappings[key];
+    if (typeof entry === 'object') {
+      localRooms[key] = { label: entry.label || key, sweepId: entry.sweepId || '' };
+    } else {
+      localRooms[key] = { label: entry || key, sweepId: '' };
+    }
+  });
+  renderSpaceList();
+}
+
+function renderSpaceList() {
+  var ul = document.getElementById('spaceList');
+  if (!ul) return;
+  var keys = Object.keys(localRooms);
   if (keys.length === 0) {
-    list.innerHTML = '<div class="plog-empty">No rooms mapped. Click "+ Add room" below.</div>';
+    ul.innerHTML = '<li class="space-empty">No spaces configured yet. Click "+ Add space" below.</li>';
+    syncSpacesToHiddenField();
     return;
   }
+  ul.innerHTML = '';
   keys.forEach(function(key) {
-    var val = mappings[key];
-    var label = (typeof val === 'string') ? val : (val.label || '');
-    var sweep = (typeof val === 'string') ? key : (val.sweepId || val.sweep_id || key);
-    html += roomRow(label, sweep);
+    var room = localRooms[key];
+    var hasSweep = room.sweepId && room.sweepId.length > 3;
+    var li = document.createElement('li');
+    li.className = 'space-item';
+    li.onclick = function() { editSpace(key); };
+    li.innerHTML = '<span class="space-dot ' + (hasSweep ? 'connected' : 'missing') + '"></span>'
+      + '<span class="space-name">' + esc(room.label) + '</span>'
+      + '<span class="space-sweep">' + (hasSweep ? esc(room.sweepId) : '<span style="color:var(--red)">No Sweep ID</span>') + '</span>';
+    ul.appendChild(li);
   });
-  list.innerHTML = html;
+  syncSpacesToHiddenField();
 }
 
-function syncVisualToJSON(logChange) {
-  var rows = document.querySelectorAll('.rm-room-row');
-  var mappings = {};
-  rows.forEach(function(row) {
-    var label = row.querySelector('.rm-name').value.trim();
-    var sweep = row.querySelector('.rm-sweep').value.trim();
-    if (label || sweep) {
-      var key = sweep || ('room_' + Math.random().toString(36).substr(2, 6));
-      mappings[key] = { label: label, sweepId: sweep };
-    }
-  });
-  var jsonStr = JSON.stringify(mappings, null, 2);
-  document.getElementById('sbMappings').value = jsonStr;
-  // Clear JSON validation error
-  var errEl = document.getElementById('sbMappingsError');
+/* ── Sync localRooms to hidden textarea for pipeline config ── */
+function syncSpacesToHiddenField() {
   var ta = document.getElementById('sbMappings');
-  if (errEl) errEl.style.display = 'none';
-  if (ta) ta.classList.remove('invalid');
-  // Update status dots
-  updateRoomStatusDots();
+  if (ta) ta.value = JSON.stringify(localRooms, null, 2);
 }
 
-function roomRow(label, sweep) {
-  var hasSwp = sweep && sweep.trim().length > 0;
-  var statusClass = hasSwp ? 'connected' : 'missing';
-  var statusText = hasSwp ? 'Connected' : 'Missing sweep ID';
-  return '<div class="rm-room-row">'
-    + '<div class="rm-status"><span class="rm-status-dot ' + statusClass + '"></span><span>' + statusText + '</span></div>'
-    + '<input class="rm-name" placeholder="Room name" value="' + esc(label) + '" oninput="syncVisualToJSON(true)">'
-    + '<input class="rm-sweep" placeholder="Sweep ID" value="' + esc(sweep) + '" oninput="syncVisualToJSON(true)" title="Press U in tour to find">'
-    + '<span class="rm-sweep-help" data-tip="Open your Matterport tour, press U on your keyboard, click a location, and copy the Sweep ID shown.">?</span>'
-    + '<button class="rm-del" onclick="removeRoom(this)" title="Remove room">&times;</button>'
-    + '</div>';
+/* ── Edit space (click on existing space) ── */
+function editSpace(key) {
+  editingSpaceKey = key;
+  var room = localRooms[key];
+  var panel = document.getElementById('spaceEditPanel');
+  panel.style.display = 'block';
+  panel.innerHTML = '<div class="space-edit-panel">'
+    + '<div class="field-group"><label>Space name</label>'
+    + '<input type="text" id="editSpaceName" value="' + esc(room.label) + '"></div>'
+    + '<div class="field-group"><label>Sweep ID or Matterport URL</label>'
+    + '<input type="text" id="editSweepId" value="' + esc(room.sweepId) + '" oninput="extractSweepFromEdit(this)">'
+    + '<div class="sweep-extract-info" id="editSweepExtractInfo"></div></div>'
+    + '<div class="space-btn-row">'
+    + '<button class="btn btn-dark btn-sm" onclick="saveSpaceEdit()">Save</button>'
+    + '<button class="btn btn-danger btn-sm" onclick="deleteSpaceEdit()">Delete</button>'
+    + '<button class="btn btn-outline btn-sm" onclick="cancelSpaceEdit()">Cancel</button>'
+    + '</div></div>';
+  panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  // Close add form if open
+  var addForm = document.getElementById('addSpaceForm');
+  if (addForm) addForm.style.display = 'none';
 }
 
-function addRoom() {
-  var list = document.getElementById('roomList');
-  // Clear empty state
-  var empty = list.querySelector('.plog-empty');
-  if (empty) empty.remove();
-  list.insertAdjacentHTML('beforeend', roomRow('', ''));
-  // Re-init tooltips for new help icons
-  initTooltips();
-  plog('ROOM_MAPPING', '', 'added new empty room');
-}
+window.saveSpaceEdit = function() {
+  var name = document.getElementById('editSpaceName').value.trim();
+  var rawSweep = document.getElementById('editSweepId').value.trim();
+  var sweepId = extractSweepId(rawSweep) || rawSweep;
+  if (!name) { showToast('Enter a name', 'error'); return; }
+  var newKey = name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  // If key changed, remove old
+  if (newKey !== editingSpaceKey) delete localRooms[editingSpaceKey];
+  localRooms[newKey] = { label: name, sweepId: sweepId };
+  renderSpaceList();
+  document.getElementById('spaceEditPanel').style.display = 'none';
+  plog('ROOM_MAPPING', editingSpaceKey, name, 'updated');
+  showToast('Space updated', 'success');
+};
 
-function removeRoom(btn) {
-  var row = btn.closest('.rm-room-row');
-  var label = row.querySelector('.rm-name').value.trim();
-  row.remove();
-  syncVisualToJSON();
-  plog('ROOM_MAPPING', label || 'room', 'deleted');
-  // Show empty if no rooms left
-  var list = document.getElementById('roomList');
-  if (list && list.querySelectorAll('.rm-room-row').length === 0) {
-    list.innerHTML = '<div class="plog-empty">No rooms mapped. Click "+ Add room" below.</div>';
+window.deleteSpaceEdit = function() {
+  if (!confirm('Delete this space?')) return;
+  var label = localRooms[editingSpaceKey] ? localRooms[editingSpaceKey].label : editingSpaceKey;
+  delete localRooms[editingSpaceKey];
+  renderSpaceList();
+  document.getElementById('spaceEditPanel').style.display = 'none';
+  plog('ROOM_MAPPING', label, 'deleted');
+  showToast('Space deleted', 'success');
+};
+
+window.cancelSpaceEdit = function() {
+  document.getElementById('spaceEditPanel').style.display = 'none';
+};
+
+window.toggleAddSpace = function() {
+  var f = document.getElementById('addSpaceForm');
+  f.style.display = f.style.display === 'none' ? 'block' : 'none';
+  // Close edit panel
+  document.getElementById('spaceEditPanel').style.display = 'none';
+  // Focus the name input
+  if (f.style.display === 'block') {
+    var nameInput = document.getElementById('newSpaceName');
+    if (nameInput) nameInput.focus();
   }
-}
+};
 
-function updateRoomStatusDots() {
-  document.querySelectorAll('.rm-room-row').forEach(function(row) {
-    var sweep = row.querySelector('.rm-sweep').value.trim();
-    var dot = row.querySelector('.rm-status-dot');
-    var statusEl = row.querySelector('.rm-status span:last-child');
-    if (dot && statusEl) {
-      if (sweep) {
-        dot.className = 'rm-status-dot connected';
-        statusEl.textContent = 'Connected';
-      } else {
-        dot.className = 'rm-status-dot missing';
-        statusEl.textContent = 'Missing sweep ID';
-      }
-    }
-  });
-}
+window.doAddSpace = function() {
+  var name = document.getElementById('newSpaceName').value.trim();
+  var rawSweep = document.getElementById('newSweepId').value.trim();
+  var sweepId = extractSweepId(rawSweep) || rawSweep;
+  if (!name) { showToast('Enter a name', 'error'); return; }
+  var key = name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  localRooms[key] = { label: name, sweepId: sweepId };
+  renderSpaceList();
+  document.getElementById('newSpaceName').value = '';
+  document.getElementById('newSweepId').value = '';
+  var info = document.getElementById('sweepExtractInfo');
+  if (info) info.style.display = 'none';
+  document.getElementById('addSpaceForm').style.display = 'none';
+  plog('ROOM_MAPPING', '', name, 'added');
+  showToast('Space added', 'success');
+};
 
-/* ── JSON editor live validation ── */
-function onRoomJsonInput() {
-  var ta = document.getElementById('sbMappings');
-  var errEl = document.getElementById('sbMappingsError');
-  var raw = ta.value.trim();
-  if (!raw || raw === '{}') {
-    errEl.style.display = 'none';
-    ta.classList.remove('invalid');
-    return;
-  }
-  try {
-    JSON.parse(raw);
-    errEl.style.display = 'none';
-    ta.classList.remove('invalid');
-    // Sync to visual if open
-    if (roomEditorMode === 'visual') syncJSONToVisual();
-  } catch(e) {
-    errEl.textContent = 'Invalid JSON: ' + e.message.split(' at ')[0];
-    errEl.style.display = 'block';
-    ta.classList.add('invalid');
-  }
-}
-
-/* ── Validate Room Mappings JSON ── */
+/* ── Validate Room Mappings (for Apply & Restart) ── */
 function validateRoomMappings() {
-  var raw = document.getElementById('sbMappings').value.trim();
-  var errEl = document.getElementById('sbMappingsError');
-  var ta = document.getElementById('sbMappings');
-  if (!raw || raw === '{}') { errEl.style.display = 'none'; ta.classList.remove('invalid'); return true; }
-  try {
-    JSON.parse(raw);
-    errEl.style.display = 'none';
-    ta.classList.remove('invalid');
-    return true;
-  } catch(e) {
-    errEl.textContent = 'Invalid JSON: ' + e.message.split(' at ')[0];
-    errEl.style.display = 'block';
-    ta.classList.add('invalid');
-    return false;
-  }
+  // Always valid — spaces are managed via the visual editor
+  syncSpacesToHiddenField();
+  return true;
 }
 
 /* ══════════════════════════════════════════════════
-   PRODUCTION STATUS BAR
+   PRODUCTION REFERENCE DROPDOWN
    ══════════════════════════════════════════════════ */
-function loadProductionStatus() {
+var prodRefData = null;
+
+function toggleProdRef() {
+  var panel = document.getElementById('prodRefPanel');
+  var toggle = document.getElementById('prodRefToggle');
+  if (!panel || !toggle) return;
+  var isOpen = panel.classList.contains('open');
+  panel.classList.toggle('open');
+  toggle.classList.toggle('open');
+  if (!isOpen && !prodRefData) loadProductionRef();
+}
+
+function loadProductionRef() {
   var vertical = document.getElementById('sbVertical');
   if (!vertical) return;
-  var el = document.getElementById('sbProdStatus');
-  if (!el) return;
-  el.className = 'sb-prod-status loading';
-  el.textContent = 'Loading production status...';
+  var contentEl = document.getElementById('prodRefContent');
+  if (!contentEl) return;
+  contentEl.innerHTML = '<span style="color:var(--muted);font-style:italic">Loading...</span>';
 
   api('/admin/production-status?vertical=' + encodeURIComponent(vertical.value))
     .then(function(data) {
+      prodRefData = data;
       if (data.error) {
-        el.className = 'sb-prod-status error';
-        el.textContent = 'Production status unavailable';
+        contentEl.innerHTML = '<span style="color:var(--red);font-style:italic">Production status unavailable</span>';
         return;
       }
-      el.className = 'sb-prod-status';
       var vLabel = (data.vertical || 'unknown').replace(/_/g, ' ');
       vLabel = vLabel.charAt(0).toUpperCase() + vLabel.slice(1);
-      el.innerHTML = '<span class="prod-label">PRODUCTION</span>'
-        + '<span class="prod-sep">&middot;</span>' + esc(vLabel)
-        + '<span class="prod-sep">&middot;</span>' + esc(data.model)
-        + '<span class="prod-sep">&middot;</span>temp=' + data.temperature
-        + '<span class="prod-sep">&middot;</span>' + data.tenantCount + ' agent' + (data.tenantCount !== 1 ? 's' : '')
-        + '<span class="prod-sep">&middot;</span>' + data.avgConversion + '% avg conversion';
+
+      var html = '<div class="prod-ref-heading">Current Production Settings</div>'
+        + prodRefRow('Model', data.model)
+        + prodRefRow('Temperature', data.temperature)
+        + prodRefRow('VAD silence', data.vadSilenceFrames + ' frames')
+        + prodRefRow('STT', data.sttModel)
+        + prodRefRow('TTS', data.ttsModel)
+        + '<hr class="prod-ref-sep">'
+        + '<div class="prod-ref-heading">Live Data — ' + esc(vLabel) + ' vertical</div>'
+        + prodRefRow('Active agents', data.tenantCount)
+        + prodRefRow('Avg conversion rate', data.avgConversion + '%')
+        + prodRefRow('Avg minutes/month', data.avgMinutes)
+        + '<hr class="prod-ref-sep">'
+        + '<button class="prod-ref-apply" onclick="applyProdSettings()">Apply production settings</button>';
+      contentEl.innerHTML = html;
     })
     .catch(function() {
-      el.className = 'sb-prod-status error';
-      el.textContent = 'Production status unavailable';
+      contentEl.innerHTML = '<span style="color:var(--red);font-style:italic">Production status unavailable</span>';
     });
+}
+
+function prodRefRow(label, value) {
+  return '<div class="prod-ref-row"><span class="prod-ref-label">' + label + '</span><span class="prod-ref-value">' + value + '</span></div>';
+}
+
+function applyProdSettings() {
+  if (!prodRefData) return;
+  // Apply production values to sandbox controls
+  var modelSel = document.getElementById('sbModel');
+  if (modelSel) {
+    var prodModel = prodRefData.model || 'gpt-5.4-mini';
+    // Check if option exists
+    for (var i = 0; i < modelSel.options.length; i++) {
+      if (modelSel.options[i].value === prodModel) { modelSel.value = prodModel; break; }
+    }
+    plog('MODEL', _prevModel, prodModel, 'from production ref');
+    _prevModel = prodModel;
+  }
+  var tempSlider = document.getElementById('sbTemp');
+  var tempVal = document.getElementById('sbTempVal');
+  if (tempSlider && prodRefData.temperature !== undefined) {
+    var oldTemp = tempSlider.value;
+    tempSlider.value = prodRefData.temperature;
+    if (tempVal) tempVal.textContent = prodRefData.temperature;
+    plog('TEMPERATURE', oldTemp, String(prodRefData.temperature), 'from production ref');
+    _prevTemp = String(prodRefData.temperature);
+  }
+  showToast('Production settings applied', 'success');
 }
 
 /* ══════════════════════════════════════════════════
@@ -1394,7 +1491,7 @@ function onVerticalChange(val) {
   plog('VERTICAL', _prevVertical, val);
   _prevVertical = val;
   resetPrompt();
-  loadProductionStatus();
+  loadProductionRef();
 }
 
 function onTempChange(val) {

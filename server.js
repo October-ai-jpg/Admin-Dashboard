@@ -242,24 +242,36 @@ app.get('/admin/production-status', requireAuth, async (req, res) => {
     const conversions = parseInt(convRes.rows[0]?.conversions || 0);
     const avgConversion = total > 0 ? ((conversions / total) * 100).toFixed(1) : '0.0';
 
-    // Hardcoded production values (match production pipeline)
+    // Average minutes used per month (active tenants on this vertical)
+    let avgMinutes = 0;
+    try {
+      const minRes = await pool.query(
+        `SELECT AVG(minutes_used_this_month) AS avg_min
+         FROM tenants WHERE vertical = $1 AND is_active = true`,
+        [vertical]
+      );
+      avgMinutes = parseFloat(minRes.rows[0]?.avg_min || 0).toFixed(1);
+    } catch(e) { /* column may not exist */ }
+
+    // Hardcoded production values (match production codebase)
     const prodConfig = {
       model: 'gpt-5.4-mini',
       temperature: 0.7,
-      promptVersion: 'v3.2',
-      ttsModel: 'sonic-2',
-      sttModel: 'nova-3'
+      vadSilenceFrames: 50,
+      sttModel: 'Deepgram Nova-2',
+      ttsModel: 'Cartesia Flash'
     };
 
     res.json({
       vertical: vertical,
       model: prodConfig.model,
       temperature: prodConfig.temperature,
-      promptVersion: prodConfig.promptVersion,
+      vadSilenceFrames: prodConfig.vadSilenceFrames,
+      sttModel: prodConfig.sttModel,
+      ttsModel: prodConfig.ttsModel,
       tenantCount: tenantCount,
       avgConversion: avgConversion,
-      ttsModel: prodConfig.ttsModel,
-      sttModel: prodConfig.sttModel
+      avgMinutes: avgMinutes
     });
   } catch (e) {
     console.error('[PROD-STATUS] Error:', e.message);
