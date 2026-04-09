@@ -673,19 +673,19 @@ function loadSandbox() {
     // Vertical
     + '<div class="form-group">'
     + '<label class="form-label">Vertical</label>'
-    + '<select class="form-select" id="sbVertical" onchange="resetPrompt()">'
+    + '<select class="form-select" id="sbVertical" onchange="onVerticalChange(this.value)">'
     + '<option value="hotel">Hotel</option><option value="education">Education</option><option value="retail">Retail</option>'
     + '<option value="real_estate_sale">Real Estate (Sale)</option><option value="real_estate_development">Real Estate (Development)</option><option value="other">Other</option></select></div>'
 
     // LLM Model
     + '<div class="form-group">'
     + '<label class="form-label">LLM Model</label>'
-    + '<select class="form-select" id="sbModel"><option value="gpt-5.4-mini">gpt-5.4-mini (production)</option><option value="gpt-4o-mini">gpt-4o-mini</option><option value="gpt-4o">gpt-4o</option><option value="gpt-4-turbo">gpt-4-turbo</option></select></div>'
+    + '<select class="form-select" id="sbModel" onchange="onModelChange(this.value)"><option value="gpt-5.4-mini">gpt-5.4-mini (production)</option><option value="gpt-4o-mini">gpt-4o-mini</option><option value="gpt-4o">gpt-4o</option><option value="gpt-4-turbo">gpt-4-turbo</option></select></div>'
 
     // Temperature
     + '<div class="form-group">'
     + '<label class="form-label">Temperature: <span id="sbTempVal">0.7</span></label>'
-    + '<input type="range" id="sbTemp" min="0" max="1" step="0.1" value="0.7" style="width:100%" oninput="document.getElementById(\'sbTempVal\').textContent=this.value"></div>'
+    + '<input type="range" id="sbTemp" min="0" max="1" step="0.1" value="0.7" style="width:100%" oninput="onTempChange(this.value)"></div>'
 
     // System Prompt
     + '<div class="form-group">'
@@ -705,20 +705,20 @@ function loadSandbox() {
     + '<button class="btn btn-outline btn-sm" onclick="syncFromURL()" id="sbSyncBtn">Sync</button>'
     + '</div></div>'
 
-    // Room Mappings
+    // Room Mappings — Full Visual Editor
     + '<div class="form-group">'
-    + '<label class="form-label">Room Mappings</label>'
-    + '<div style="display:flex;gap:8px;margin-bottom:8px">'
-    + '<button class="btn btn-outline btn-sm" onclick="setRoomEditorMode(\'json\')" id="rmJsonBtn" style="font-weight:600">JSON</button>'
-    + '<button class="btn btn-outline btn-sm" onclick="setRoomEditorMode(\'visual\')" id="rmVisualBtn">Visual Editor</button>'
+    + '<label class="form-label">Room Mappings <span class="sb-tooltip" data-tip="Map room names to Matterport sweep IDs. Press U in the tour and click a location to find its sweep ID.">?</span></label>'
+    + '<div class="rm-tabs">'
+    + '<button class="rm-tab active" id="rmTabJson" onclick="setRoomEditorMode(\'json\')">JSON</button>'
+    + '<button class="rm-tab" id="rmTabVisual" onclick="setRoomEditorMode(\'visual\')">Visual</button>'
     + '</div>'
-    + '<div id="roomJsonEditor"><textarea class="form-textarea" id="sbMappings" rows="3" placeholder=\'{"sweepId1": {"label": "Deluxe Room"}}\'></textarea>'
-    + '<div id="sbMappingsError" style="color:var(--red);font-size:12px;margin-top:4px;display:none"></div></div>'
+    + '<div id="roomJsonEditor">'
+    + '<textarea class="form-textarea rm-json-textarea" id="sbMappings" rows="4" placeholder=\'{"sweepId1": {"label": "Deluxe Room"}}\' oninput="onRoomJsonInput()"></textarea>'
+    + '<div class="rm-json-error" id="sbMappingsError"></div>'
+    + '</div>'
     + '<div id="roomVisualEditor" style="display:none">'
     + '<div id="roomList"></div>'
-    + '<button class="btn btn-outline btn-sm" onclick="addRoom()" style="margin-top:8px">+ Add room</button>'
-    + '<details style="margin-top:8px;font-size:12px;color:var(--muted)"><summary style="cursor:pointer">How to find Sweep IDs</summary>'
-    + '<div style="padding:8px 0">1. Open your Matterport tour<br>2. Press <kbd>U</kbd> on your keyboard<br>3. Click on the location<br>4. Copy the Sweep ID shown</div></details>'
+    + '<button class="rm-add-btn" onclick="addRoom()">+ Add room</button>'
     + '</div></div>'
 
     // Action buttons
@@ -730,9 +730,25 @@ function loadSandbox() {
     + '<button class="btn btn-outline btn-sm" onclick="exportSystemPrompt()">Export prompt</button>'
     + '</div>'
 
-    // Debug panel
-    + '<details class="debug-panel" id="debugPanel" style="margin-top:16px">'
-    + '<summary>Debug Log</summary>'
+    // Persistent Debug Log
+    + '<div class="plog-panel" id="plogPanel">'
+    + '<div class="plog-header" onclick="togglePlogPanel()">'
+    + '<div class="plog-header-left">Debug Log <span class="plog-header-count" id="plogCount">0</span></div>'
+    + '<span class="plog-chevron">▼</span>'
+    + '</div>'
+    + '<div class="plog-body">'
+    + '<div class="plog-actions">'
+    + '<button onclick="exportPlog()">Export log</button>'
+    + '<button onclick="clearPlogToday()">Clear today</button>'
+    + '<select id="plogDaySelect" onchange="viewPlogDay(this.value)" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:11px;font-family:var(--sans);background:var(--white);color:var(--muted);cursor:pointer"><option value="today">Today</option></select>'
+    + '</div>'
+    + '<div class="plog-entries" id="plogEntries"><div class="plog-empty">No changes logged yet.</div></div>'
+    + '</div>'
+    + '</div>'
+
+    // Pipeline debug (turn-level telemetry)
+    + '<details class="debug-panel" id="debugPanel" style="margin-top:12px">'
+    + '<summary>Pipeline Telemetry</summary>'
     + '<div id="debugContent"><div style="color:var(--muted);font-size:12px">No turns yet.</div></div>'
     + '<button class="btn btn-outline btn-sm" onclick="clearDebugLog()" style="margin-top:8px">Clear</button>'
     + '</details>'
@@ -742,6 +758,9 @@ function loadSandbox() {
     // ═══ ZONE 2+3: TOUR + VOICE OVERLAY ═══
     + '<div class="sandbox-tour" id="sbTourContainer">'
     + '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:14px">Enter a Matterport Model ID and click Apply</div>'
+
+    // Production status bar
+    + '<div class="sb-prod-status loading" id="sbProdStatus">Loading production status...</div>'
 
     // Loading overlay
     + '<div class="sb-loading-overlay hidden" id="sbLoadingOverlay">'
@@ -793,6 +812,9 @@ function loadSandbox() {
   loadTenantDropdown();
   checkAPIKeys();
   initTooltips();
+  loadProductionStatus();
+  initPlogDaySelect();
+  renderPlog();
 }
 
 /* ── API Key Banner ── */
@@ -927,6 +949,8 @@ window.loadTenantData = function(id) {
 };
 
 function applyTenantData(t) {
+  var tenantName = t.agent_name || t.name || 'tenant';
+  plog('TENANT', '', tenantName, 'loaded from dropdown');
   // Model ID
   if (t.matterport_model_id) {
     document.getElementById('sbModelId').value = t.matterport_model_id;
@@ -935,18 +959,28 @@ function applyTenantData(t) {
   // Property data
   if (t.property_data) {
     document.getElementById('sbData').value = typeof t.property_data === 'string' ? t.property_data : JSON.stringify(t.property_data, null, 2);
+    plog('PROPERTY_DATA', '', 'loaded from ' + tenantName);
   }
   // Room mappings
   if (t.room_mappings) {
     var rmStr = typeof t.room_mappings === 'string' ? t.room_mappings : JSON.stringify(t.room_mappings, null, 2);
     document.getElementById('sbMappings').value = rmStr;
     if (roomEditorMode === 'visual') syncJSONToVisual();
+    plog('ROOM_MAPPING', '', 'loaded from ' + tenantName);
   }
   // Vertical
-  if (t.vertical) document.getElementById('sbVertical').value = t.vertical;
+  if (t.vertical) {
+    var oldV = document.getElementById('sbVertical').value;
+    document.getElementById('sbVertical').value = t.vertical;
+    if (oldV !== t.vertical) {
+      plog('VERTICAL', oldV, t.vertical, 'from tenant');
+      _prevVertical = t.vertical;
+    }
+  }
   // Reset prompt for new vertical
   resetPrompt();
-  showToast('Loaded: ' + (t.agent_name || t.name || 'tenant'), 'success');
+  loadProductionStatus();
+  showToast('Loaded: ' + tenantName, 'success');
 }
 
 /* ── Sync from URL (Jina Reader) ── */
@@ -966,6 +1000,7 @@ function syncFromURL() {
     btn.disabled = false;
     if (data.error) { showToast(data.error, 'error'); return; }
     document.getElementById('sbData').value = data.text || '';
+    plog('SYNC', url, 'property data synced', data.source || 'raw');
     showToast('Synced from website', 'success');
   }).catch(function(e) {
     btn.textContent = 'Sync';
@@ -974,13 +1009,17 @@ function syncFromURL() {
   });
 }
 
-/* ── Room Mappings: JSON / Visual Editor ── */
+/* ══════════════════════════════════════════════════
+   ROOM MAPPER — Full Visual Editor
+   ══════════════════════════════════════════════════ */
 function setRoomEditorMode(mode) {
   roomEditorMode = mode;
   document.getElementById('roomJsonEditor').style.display = mode === 'json' ? 'block' : 'none';
   document.getElementById('roomVisualEditor').style.display = mode === 'visual' ? 'block' : 'none';
-  document.getElementById('rmJsonBtn').style.fontWeight = mode === 'json' ? '600' : '400';
-  document.getElementById('rmVisualBtn').style.fontWeight = mode === 'visual' ? '600' : '400';
+  var jsonTab = document.getElementById('rmTabJson');
+  var visTab = document.getElementById('rmTabVisual');
+  if (jsonTab) { jsonTab.classList.toggle('active', mode === 'json'); }
+  if (visTab) { visTab.classList.toggle('active', mode === 'visual'); }
   if (mode === 'visual') syncJSONToVisual();
 }
 
@@ -990,64 +1029,395 @@ function syncJSONToVisual() {
   try { if (raw) mappings = JSON.parse(raw); } catch(e) {}
   var list = document.getElementById('roomList');
   var html = '';
-  Object.entries(mappings).forEach(function(entry, i) {
-    var key = entry[0];
-    var val = entry[1];
+  var keys = Object.keys(mappings);
+  if (keys.length === 0) {
+    list.innerHTML = '<div class="plog-empty">No rooms mapped. Click "+ Add room" below.</div>';
+    return;
+  }
+  keys.forEach(function(key) {
+    var val = mappings[key];
     var label = (typeof val === 'string') ? val : (val.label || '');
     var sweep = (typeof val === 'string') ? key : (val.sweepId || val.sweep_id || key);
-    html += roomRow(i, label, sweep);
+    html += roomRow(label, sweep);
   });
-  list.innerHTML = html || '<div style="color:var(--muted);font-size:12px">No rooms mapped. Click "+ Add room" below.</div>';
+  list.innerHTML = html;
 }
 
-function syncVisualToJSON() {
-  var rows = document.querySelectorAll('.room-row');
+function syncVisualToJSON(logChange) {
+  var rows = document.querySelectorAll('.rm-room-row');
   var mappings = {};
   rows.forEach(function(row) {
-    var label = row.querySelector('.room-label').value.trim();
-    var sweep = row.querySelector('.room-sweep').value.trim();
-    if (label && sweep) {
-      mappings[sweep] = { label: label, sweepId: sweep };
+    var label = row.querySelector('.rm-name').value.trim();
+    var sweep = row.querySelector('.rm-sweep').value.trim();
+    if (label || sweep) {
+      var key = sweep || ('room_' + Math.random().toString(36).substr(2, 6));
+      mappings[key] = { label: label, sweepId: sweep };
     }
   });
-  document.getElementById('sbMappings').value = JSON.stringify(mappings, null, 2);
+  var jsonStr = JSON.stringify(mappings, null, 2);
+  document.getElementById('sbMappings').value = jsonStr;
+  // Clear JSON validation error
+  var errEl = document.getElementById('sbMappingsError');
+  var ta = document.getElementById('sbMappings');
+  if (errEl) errEl.style.display = 'none';
+  if (ta) ta.classList.remove('invalid');
+  // Update status dots
+  updateRoomStatusDots();
 }
 
-function roomRow(i, label, sweep) {
-  return '<div class="room-row" style="display:flex;gap:6px;align-items:center;margin-bottom:6px">'
-    + '<input class="form-input room-label" placeholder="Room name" value="' + esc(label) + '" style="flex:1;min-height:0;padding:7px 10px" oninput="syncVisualToJSON()">'
-    + '<input class="form-input room-sweep" placeholder="Sweep ID" value="' + esc(sweep) + '" style="width:120px;min-height:0;padding:7px 10px;font-family:monospace;font-size:11px" oninput="syncVisualToJSON()">'
-    + '<button class="btn btn-outline btn-sm" onclick="this.closest(\'.room-row\').remove();syncVisualToJSON()" style="color:var(--red);padding:4px 8px">&times;</button>'
+function roomRow(label, sweep) {
+  var hasSwp = sweep && sweep.trim().length > 0;
+  var statusClass = hasSwp ? 'connected' : 'missing';
+  var statusText = hasSwp ? 'Connected' : 'Missing sweep ID';
+  return '<div class="rm-room-row">'
+    + '<div class="rm-status"><span class="rm-status-dot ' + statusClass + '"></span><span>' + statusText + '</span></div>'
+    + '<input class="rm-name" placeholder="Room name" value="' + esc(label) + '" oninput="syncVisualToJSON(true)">'
+    + '<input class="rm-sweep" placeholder="Sweep ID" value="' + esc(sweep) + '" oninput="syncVisualToJSON(true)" title="Press U in tour to find">'
+    + '<span class="rm-sweep-help" data-tip="Open your Matterport tour, press U on your keyboard, click a location, and copy the Sweep ID shown.">?</span>'
+    + '<button class="rm-del" onclick="removeRoom(this)" title="Remove room">&times;</button>'
     + '</div>';
 }
 
 function addRoom() {
   var list = document.getElementById('roomList');
-  // Clear empty state message
-  if (list.querySelector('div[style*="color:var(--muted)"]')) list.innerHTML = '';
-  var i = list.querySelectorAll('.room-row').length;
-  list.insertAdjacentHTML('beforeend', roomRow(i, '', ''));
+  // Clear empty state
+  var empty = list.querySelector('.plog-empty');
+  if (empty) empty.remove();
+  list.insertAdjacentHTML('beforeend', roomRow('', ''));
+  // Re-init tooltips for new help icons
+  initTooltips();
+  plog('ROOM_MAPPING', '', 'added new empty room');
+}
+
+function removeRoom(btn) {
+  var row = btn.closest('.rm-room-row');
+  var label = row.querySelector('.rm-name').value.trim();
+  row.remove();
+  syncVisualToJSON();
+  plog('ROOM_MAPPING', label || 'room', 'deleted');
+  // Show empty if no rooms left
+  var list = document.getElementById('roomList');
+  if (list && list.querySelectorAll('.rm-room-row').length === 0) {
+    list.innerHTML = '<div class="plog-empty">No rooms mapped. Click "+ Add room" below.</div>';
+  }
+}
+
+function updateRoomStatusDots() {
+  document.querySelectorAll('.rm-room-row').forEach(function(row) {
+    var sweep = row.querySelector('.rm-sweep').value.trim();
+    var dot = row.querySelector('.rm-status-dot');
+    var statusEl = row.querySelector('.rm-status span:last-child');
+    if (dot && statusEl) {
+      if (sweep) {
+        dot.className = 'rm-status-dot connected';
+        statusEl.textContent = 'Connected';
+      } else {
+        dot.className = 'rm-status-dot missing';
+        statusEl.textContent = 'Missing sweep ID';
+      }
+    }
+  });
+}
+
+/* ── JSON editor live validation ── */
+function onRoomJsonInput() {
+  var ta = document.getElementById('sbMappings');
+  var errEl = document.getElementById('sbMappingsError');
+  var raw = ta.value.trim();
+  if (!raw || raw === '{}') {
+    errEl.style.display = 'none';
+    ta.classList.remove('invalid');
+    return;
+  }
+  try {
+    JSON.parse(raw);
+    errEl.style.display = 'none';
+    ta.classList.remove('invalid');
+    // Sync to visual if open
+    if (roomEditorMode === 'visual') syncJSONToVisual();
+  } catch(e) {
+    errEl.textContent = 'Invalid JSON: ' + e.message.split(' at ')[0];
+    errEl.style.display = 'block';
+    ta.classList.add('invalid');
+  }
 }
 
 /* ── Validate Room Mappings JSON ── */
 function validateRoomMappings() {
   var raw = document.getElementById('sbMappings').value.trim();
   var errEl = document.getElementById('sbMappingsError');
-  if (!raw || raw === '{}') { errEl.style.display = 'none'; return true; }
+  var ta = document.getElementById('sbMappings');
+  if (!raw || raw === '{}') { errEl.style.display = 'none'; ta.classList.remove('invalid'); return true; }
   try {
     JSON.parse(raw);
     errEl.style.display = 'none';
+    ta.classList.remove('invalid');
     return true;
   } catch(e) {
-    errEl.textContent = 'Invalid JSON — check your room mappings';
+    errEl.textContent = 'Invalid JSON: ' + e.message.split(' at ')[0];
     errEl.style.display = 'block';
+    ta.classList.add('invalid');
     return false;
   }
+}
+
+/* ══════════════════════════════════════════════════
+   PRODUCTION STATUS BAR
+   ══════════════════════════════════════════════════ */
+function loadProductionStatus() {
+  var vertical = document.getElementById('sbVertical');
+  if (!vertical) return;
+  var el = document.getElementById('sbProdStatus');
+  if (!el) return;
+  el.className = 'sb-prod-status loading';
+  el.textContent = 'Loading production status...';
+
+  api('/admin/production-status?vertical=' + encodeURIComponent(vertical.value))
+    .then(function(data) {
+      if (data.error) {
+        el.className = 'sb-prod-status error';
+        el.textContent = 'Production status unavailable';
+        return;
+      }
+      el.className = 'sb-prod-status';
+      var vLabel = (data.vertical || 'unknown').replace(/_/g, ' ');
+      vLabel = vLabel.charAt(0).toUpperCase() + vLabel.slice(1);
+      el.innerHTML = '<span class="prod-label">PRODUCTION</span>'
+        + '<span class="prod-sep">&middot;</span>' + esc(vLabel)
+        + '<span class="prod-sep">&middot;</span>' + esc(data.model)
+        + '<span class="prod-sep">&middot;</span>temp=' + data.temperature
+        + '<span class="prod-sep">&middot;</span>' + data.tenantCount + ' agent' + (data.tenantCount !== 1 ? 's' : '')
+        + '<span class="prod-sep">&middot;</span>' + data.avgConversion + '% avg conversion';
+    })
+    .catch(function() {
+      el.className = 'sb-prod-status error';
+      el.textContent = 'Production status unavailable';
+    });
+}
+
+/* ══════════════════════════════════════════════════
+   PERSISTENT DEBUG LOG (localStorage)
+   ══════════════════════════════════════════════════ */
+var PLOG_PREFIX = 'october_debug_log_';
+var plogCurrentDay = 'today';
+
+function plogKey(dateStr) {
+  if (!dateStr || dateStr === 'today') {
+    return PLOG_PREFIX + new Date().toISOString().split('T')[0];
+  }
+  return PLOG_PREFIX + dateStr;
+}
+
+function plogRead(dateStr) {
+  try {
+    var raw = localStorage.getItem(plogKey(dateStr));
+    return raw ? JSON.parse(raw) : [];
+  } catch(e) { return []; }
+}
+
+function plogWrite(entries, dateStr) {
+  try {
+    localStorage.setItem(plogKey(dateStr), JSON.stringify(entries));
+  } catch(e) {}
+}
+
+function plog(type, from, to, detail) {
+  var entries = plogRead('today');
+  entries.unshift({
+    timestamp: new Date().toISOString(),
+    type: type,
+    from: from || '',
+    to: to || '',
+    detail: detail || ''
+  });
+  // Cap at 500 entries per day
+  if (entries.length > 500) entries = entries.slice(0, 500);
+  plogWrite(entries, 'today');
+  renderPlog();
+  plogCleanOld();
+}
+
+function plogCleanOld() {
+  var cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  for (var i = 0; i < localStorage.length; i++) {
+    var key = localStorage.key(i);
+    if (key && key.startsWith(PLOG_PREFIX)) {
+      var dateStr = key.replace(PLOG_PREFIX, '');
+      var d = new Date(dateStr);
+      if (!isNaN(d.getTime()) && d.getTime() < cutoff) {
+        localStorage.removeItem(key);
+      }
+    }
+  }
+}
+
+function renderPlog() {
+  var el = document.getElementById('plogEntries');
+  var countEl = document.getElementById('plogCount');
+  if (!el) return;
+
+  var entries = plogRead(plogCurrentDay === 'today' ? 'today' : plogCurrentDay);
+  if (countEl) countEl.textContent = entries.length;
+
+  if (entries.length === 0) {
+    el.innerHTML = '<div class="plog-empty">No changes logged' + (plogCurrentDay !== 'today' ? ' on this day' : ' yet') + '.</div>';
+    return;
+  }
+
+  var html = '';
+  entries.forEach(function(e) {
+    var time = new Date(e.timestamp);
+    var timeStr = time.toTimeString().split(' ')[0]; // HH:MM:SS
+    html += '<div class="plog-entry">'
+      + '<span class="plog-time">[' + timeStr + ']</span>'
+      + '<span class="plog-type ' + esc(e.type) + '">' + esc(e.type) + '</span>';
+    if (e.from && e.to) {
+      html += '<span>' + esc(String(e.from).substring(0, 40)) + '</span>'
+        + '<span class="plog-arrow">→</span>'
+        + '<span>' + esc(String(e.to).substring(0, 40)) + '</span>';
+    } else if (e.to) {
+      html += '<span>' + esc(String(e.to).substring(0, 80)) + '</span>';
+    } else if (e.from) {
+      html += '<span>' + esc(String(e.from).substring(0, 80)) + '</span>';
+    }
+    if (e.detail) html += ' <span style="color:var(--muted)">(' + esc(String(e.detail).substring(0, 40)) + ')</span>';
+    html += '</div>';
+  });
+  el.innerHTML = html;
+}
+
+function togglePlogPanel() {
+  var panel = document.getElementById('plogPanel');
+  if (panel) panel.classList.toggle('open');
+}
+
+function clearPlogToday() {
+  if (!confirm('Clear all debug log entries for today?')) return;
+  localStorage.removeItem(plogKey('today'));
+  renderPlog();
+  showToast('Debug log cleared', 'success');
+}
+
+function initPlogDaySelect() {
+  var sel = document.getElementById('plogDaySelect');
+  if (!sel) return;
+  var html = '<option value="today">Today</option>';
+  // Find previous days
+  var days = [];
+  for (var i = 0; i < localStorage.length; i++) {
+    var key = localStorage.key(i);
+    if (key && key.startsWith(PLOG_PREFIX)) {
+      var dateStr = key.replace(PLOG_PREFIX, '');
+      var today = new Date().toISOString().split('T')[0];
+      if (dateStr !== today && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        days.push(dateStr);
+      }
+    }
+  }
+  days.sort().reverse();
+  days.forEach(function(d) {
+    html += '<option value="' + d + '">' + d + '</option>';
+  });
+  sel.innerHTML = html;
+}
+
+function viewPlogDay(val) {
+  plogCurrentDay = val;
+  renderPlog();
+}
+
+function exportPlog() {
+  var entries = plogRead(plogCurrentDay === 'today' ? 'today' : plogCurrentDay);
+  if (entries.length === 0) { showToast('No log entries to export', 'error'); return; }
+
+  var dateLabel = plogCurrentDay === 'today' ? new Date().toISOString().split('T')[0] : plogCurrentDay;
+
+  // Build export text
+  var lines = [];
+  lines.push('═══════════════════════════════════════');
+  lines.push('OCTOBER AI — ADMIN DEBUG LOG');
+  lines.push('Date: ' + dateLabel);
+  lines.push('Entries: ' + entries.length);
+  lines.push('═══════════════════════════════════════');
+  lines.push('');
+  lines.push('CHANGES MADE:');
+  lines.push('─────────────');
+
+  // Group by type
+  var byType = {};
+  entries.forEach(function(e) {
+    if (!byType[e.type]) byType[e.type] = [];
+    byType[e.type].push(e);
+  });
+
+  Object.keys(byType).forEach(function(type) {
+    lines.push('');
+    lines.push('[' + type + '] (' + byType[type].length + ' changes)');
+    byType[type].forEach(function(e) {
+      var time = new Date(e.timestamp).toTimeString().split(' ')[0];
+      var desc = e.from && e.to ? e.from + ' → ' + e.to : (e.to || e.from || '');
+      lines.push('  ' + time + '  ' + desc + (e.detail ? ' (' + e.detail + ')' : ''));
+    });
+  });
+
+  lines.push('');
+  lines.push('SUMMARY:');
+  lines.push('────────');
+  Object.keys(byType).forEach(function(type) {
+    lines.push('  ' + type + ': ' + byType[type].length + ' change(s)');
+  });
+
+  lines.push('');
+  lines.push('DEPLOY NOTES:');
+  lines.push('─────────────');
+  lines.push('  [Add deployment notes here]');
+  lines.push('');
+
+  var text = lines.join('\n');
+  var html = '<h2>Export Debug Log</h2>'
+    + '<p style="color:var(--muted);font-size:13px;margin-bottom:12px">' + entries.length + ' entries from ' + dateLabel + '</p>'
+    + '<textarea class="form-textarea" rows="16" readonly style="font-family:monospace;font-size:11px" id="plogExportText">' + esc(text) + '</textarea>'
+    + '<div style="display:flex;gap:8px;margin-top:12px">'
+    + '<button class="btn btn-dark" onclick="navigator.clipboard.writeText(document.getElementById(\'plogExportText\').value);showToast(\'Copied!\',\'success\')">Copy to clipboard</button>'
+    + '<button class="btn btn-outline" onclick="closeModal()">Done</button></div>';
+  showModal(html);
+}
+
+/* ══════════════════════════════════════════════════
+   CHANGE HANDLERS — Log to persistent debug log
+   ══════════════════════════════════════════════════ */
+var _prevVertical = 'hotel';
+var _prevTemp = '0.7';
+var _prevModel = 'gpt-5.4-mini';
+
+function onVerticalChange(val) {
+  plog('VERTICAL', _prevVertical, val);
+  _prevVertical = val;
+  resetPrompt();
+  loadProductionStatus();
+}
+
+function onTempChange(val) {
+  document.getElementById('sbTempVal').textContent = val;
+  // Debounce logging
+  if (onTempChange._timer) clearTimeout(onTempChange._timer);
+  onTempChange._timer = setTimeout(function() {
+    if (val !== _prevTemp) {
+      plog('TEMPERATURE', _prevTemp, val);
+      _prevTemp = val;
+    }
+  }, 500);
+}
+
+function onModelChange(val) {
+  plog('MODEL', _prevModel, val);
+  _prevModel = val;
 }
 
 /* ── Apply & Restart Session ── */
 function applyAndRestart() {
   if (!validateRoomMappings()) return;
+  plog('SESSION', '', 'restart', 'Apply & Restart clicked');
   startSandboxSession();
 }
 

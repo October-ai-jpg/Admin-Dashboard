@@ -214,6 +214,60 @@ app.post('/admin/scrape', requireAuth, async (req, res) => {
 });
 
 /* ══════════════════════════════════════════
+   PRODUCTION STATUS — read-only DB snapshot
+   ══════════════════════════════════════════ */
+app.get('/admin/production-status', requireAuth, async (req, res) => {
+  const vertical = req.query.vertical || 'hotel';
+  if (!pool) return res.json({ error: 'Database not connected' });
+
+  try {
+    // Tenant count for this vertical
+    const tenantRes = await pool.query(
+      "SELECT COUNT(*) AS cnt FROM tenants WHERE vertical = $1 AND is_active = true",
+      [vertical]
+    );
+    const tenantCount = parseInt(tenantRes.rows[0]?.cnt || 0);
+
+    // Average conversion rate for this vertical (last 30 days)
+    const convRes = await pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE converted = true) AS conversions,
+         COUNT(*) AS total
+       FROM conversations
+       WHERE vertical = $1
+         AND created_at > NOW() - INTERVAL '30 days'`,
+      [vertical]
+    );
+    const total = parseInt(convRes.rows[0]?.total || 0);
+    const conversions = parseInt(convRes.rows[0]?.conversions || 0);
+    const avgConversion = total > 0 ? ((conversions / total) * 100).toFixed(1) : '0.0';
+
+    // Hardcoded production values (match production pipeline)
+    const prodConfig = {
+      model: 'gpt-5.4-mini',
+      temperature: 0.7,
+      promptVersion: 'v3.2',
+      ttsModel: 'sonic-2',
+      sttModel: 'nova-3'
+    };
+
+    res.json({
+      vertical: vertical,
+      model: prodConfig.model,
+      temperature: prodConfig.temperature,
+      promptVersion: prodConfig.promptVersion,
+      tenantCount: tenantCount,
+      avgConversion: avgConversion,
+      ttsModel: prodConfig.ttsModel,
+      sttModel: prodConfig.sttModel
+    });
+  } catch (e) {
+    console.error('[PROD-STATUS] Error:', e.message);
+    res.json({ error: 'Query failed' });
+  }
+});
+
+/* ══════════════════════════════════════════
    SPA FALLBACK — serve dashboard.html
    ══════════════════════════════════════════ */
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
