@@ -64,6 +64,7 @@ function loadPage(page) {
     case 'affiliates': loadAffiliates(); break;
     case 'revenue': loadRevenue(); break;
     case 'health': loadHealth(); break;
+    case 'default-system': loadDefaultSystem(); break;
     case 'sandbox': loadSandbox(); break;
     case 'prompts': loadPrompts(); break;
     case 'configurations': loadConfigurations(); break;
@@ -643,6 +644,107 @@ var VAD_WORKLET_CODE = [
   '}',
   'registerProcessor("vad-processor", VADProcessor);'
 ].join('\n');
+
+/* ═══════════════════════════════════════════════
+   DEFAULT SYSTEM — production settings overview
+   Shows how customers' agent setup looks
+   ═══════════════════════════════════════════════ */
+function loadDefaultSystem() {
+  var c = document.getElementById('page-default-system');
+
+  c.innerHTML = '<div class="page-label">AGENT BUILDER</div>'
+    + '<h1 class="page-heading">Default System</h1>'
+    + '<p class="page-sub">Current production settings across all customer agents.</p>'
+    + '<div id="dsContent"><p style="color:var(--muted)">Loading...</p></div>';
+
+  // Load production status for each vertical
+  var verticals = [
+    { key: 'hotel', label: 'Hotel' },
+    { key: 'education', label: 'Education' },
+    { key: 'retail', label: 'Retail / Showroom' },
+    { key: 'real_estate_sale', label: 'Real Estate (Sale)' },
+    { key: 'real_estate_development', label: 'Real Estate (Development)' }
+  ];
+
+  // Fetch production status (one call — defaults are same for all)
+  api('/admin/production-status?vertical=hotel')
+    .then(function(data) {
+      if (data.error) {
+        document.getElementById('dsContent').innerHTML = '<p style="color:var(--red)">Could not load production settings.</p>';
+        return;
+      }
+
+      var html = '';
+
+      // ── Pipeline Settings Card ──
+      html += '<div class="ds-section">'
+        + '<h3 class="section-title" style="font-size:22px;margin-bottom:16px">Voice Pipeline</h3>'
+        + '<div class="kpi-grid" style="grid-template-columns:repeat(auto-fill,minmax(180px,1fr))">'
+        + dsCard('LLM Model', data.model || 'gpt-5.4-mini')
+        + dsCard('Temperature', data.temperature || 0.7)
+        + dsCard('STT', data.sttModel || 'Deepgram Nova-2')
+        + dsCard('TTS', data.ttsModel || 'Cartesia Flash')
+        + dsCard('VAD Silence', (data.vadSilenceFrames || 50) + ' frames')
+        + dsCard('Sample Rate', '24 kHz')
+        + '</div></div>';
+
+      // ── Agent Behavior Card ──
+      html += '<div class="ds-section">'
+        + '<h3 class="section-title" style="font-size:22px;margin-bottom:16px">Agent Behavior</h3>'
+        + '<div class="kpi-grid" style="grid-template-columns:repeat(auto-fill,minmax(180px,1fr))">'
+        + dsCard('Greeting', 'Auto on connect')
+        + dsCard('Interruption', 'VAD-based')
+        + dsCard('Echo Suppression', '1200ms cooldown')
+        + dsCard('Max Response', '2–3 sentences')
+        + dsCard('Navigation', 'Sweep ID')
+        + dsCard('Conversion', 'Tool call trigger')
+        + '</div></div>';
+
+      // ── Per-Vertical Prompts ──
+      html += '<div class="ds-section">'
+        + '<h3 class="section-title" style="font-size:22px;margin-bottom:16px">System Prompts by Vertical</h3>';
+
+      var defaultPrompts = {
+        hotel: 'You are a virtual employee for a hotel. You are embedded inside a 3D virtual tour of the property. Your job is to greet visitors, understand what they are looking for, recommend the right room type, and guide them towards making a booking. Be warm, professional, and knowledgeable.',
+        education: 'You are a virtual employee for an educational institution. You are embedded inside a 3D virtual tour of the campus. Your job is to greet prospective students, answer questions about programs, facilities, and campus life, and guide them towards scheduling a visit or applying.',
+        retail: 'You are a virtual employee for a retail showroom. You are embedded inside a 3D virtual tour. Your job is to greet visitors, understand what they are looking for, and guide them towards making a purchase or booking a consultation.',
+        real_estate_sale: 'You are a virtual employee for a real estate agency. You are embedded inside a 3D virtual tour of a property for sale. Highlight key features, answer questions about the property and neighborhood, and guide buyers towards scheduling a viewing.',
+        real_estate_development: 'You are a virtual employee for a real estate development. You are embedded inside a 3D virtual tour of a new project. Showcase the project, answer questions about units and amenities, and guide buyers towards booking a consultation.'
+      };
+
+      verticals.forEach(function(v) {
+        html += '<div class="ds-prompt-card">'
+          + '<div class="ds-prompt-label">' + esc(v.label) + '</div>'
+          + '<div class="ds-prompt-text">' + esc(defaultPrompts[v.key] || 'No default prompt configured.') + '</div>'
+          + '</div>';
+      });
+
+      html += '</div>';
+
+      // ── DB Stats (if available) ──
+      if (data.tenantCount !== '—') {
+        html += '<div class="ds-section">'
+          + '<h3 class="section-title" style="font-size:22px;margin-bottom:16px">Live Stats</h3>'
+          + '<div class="kpi-grid" style="grid-template-columns:repeat(auto-fill,minmax(180px,1fr))">'
+          + dsCard('Active Agents', data.tenantCount)
+          + dsCard('Avg Conversion', data.avgConversion + '%')
+          + dsCard('Avg Minutes/mo', data.avgMinutes)
+          + '</div></div>';
+      }
+
+      document.getElementById('dsContent').innerHTML = html;
+    })
+    .catch(function() {
+      document.getElementById('dsContent').innerHTML = '<p style="color:var(--red)">Failed to load production settings.</p>';
+    });
+}
+
+function dsCard(label, value) {
+  return '<div class="kpi-card">'
+    + '<div class="kpi-label">' + esc(label) + '</div>'
+    + '<div class="kpi-value" style="font-size:22px">' + esc(String(value)) + '</div>'
+    + '</div>';
+}
 
 function loadSandbox() {
   var c = document.getElementById('page-sandbox');

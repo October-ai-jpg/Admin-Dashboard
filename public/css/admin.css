@@ -795,6 +795,25 @@ body.sidebar-collapsed .main{margin-left:var(--sidebar-collapsed)}
 }
 
 /* ═══════════════════════════════════════
+   DEFAULT SYSTEM PAGE
+   ═══════════════════════════════════════ */
+.ds-section{margin-bottom:40px}
+.ds-prompt-card{
+  background:var(--white);
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:20px;
+  margin-bottom:12px;
+}
+.ds-prompt-label{
+  font-size:11px;letter-spacing:0.08em;text-transform:uppercase;
+  color:var(--muted);font-weight:500;margin-bottom:8px;
+}
+.ds-prompt-text{
+  font-size:13px;line-height:1.7;color:var(--black);
+}
+
+/* ═══════════════════════════════════════
    PRODUCTION REFERENCE BOX (always visible)
    ═══════════════════════════════════════ */
 .prod-ref-box{
