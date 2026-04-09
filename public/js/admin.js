@@ -533,68 +533,164 @@ function healthCard(name, status, id) {
 }
 
 /* ═══════════════════════════════════════════════
-   SANDBOX — Full Agent Builder
+   SANDBOX — Full Agent Builder (v2 — 3 Zone Layout)
+   Zone 1: Collapsible admin config panel
+   Zone 2: Matterport tour (full viewport)
+   Zone 3: Voice interface overlaid on tour (agent icon + transcript)
    ═══════════════════════════════════════════════ */
 var sandboxWs = null;
-var isRecording = false;
-var recordingStream = null;
-var recordingCtx = null;
-var recordingProcessor = null;
-var audioChunks = [];
-var playbackCtx = null;
-var incomingAudio = [];
 var debugLog = [];
 var wsReconnectAttempts = 0;
-var roomEditorMode = 'json'; // 'json' or 'visual'
+var roomEditorMode = 'json';
 var cachedTenants = null;
+
+/* ── Voice state (matches production embed.js) ── */
+var sbAudioContext = null;
+var sbMicStream = null;
+var sbWorkletNode = null;
+var sbWorkletRegistered = false;
+var sbAgentStatus = 'idle'; // idle | thinking | speaking | user_speaking
+var sbNextPlayTime = 0;
+var sbCurrentSources = [];
+var sbPlaybackGain = null;
+var sbVadSuppressed = false;
+var sbVadSuppressTimer = null;
+var sbTranscriptMessages = [];
+var sbTranscriptOpen = false;
+var sbDemoOpen = false;
+var sbConfigCollapsed = false;
+var sbInputBarOpen = false;
+
+/* ── VAD Parameters (matches production) ── */
+var VAD_SPEECH_THRESHOLD = 0.015;
+var VAD_SILENCE_MS = 1000;
+var VAD_SPEECH_FRAMES_TO_START = 3;
+var VAD_PRE_ROLL_FRAMES = 8;
+var VAD_MIN_SPEECH_FRAMES = 10;
+
+/* ── VAD Worklet Code (matches production embed.js exactly) ── */
+var VAD_WORKLET_CODE = [
+  'class VADProcessor extends AudioWorkletProcessor {',
+  '  constructor() {',
+  '    super();',
+  '    this.state = "IDLE";',
+  '    this.speechFrameCount = 0;',
+  '    this.silenceFrameCount = 0;',
+  '    this.speechBuffer = [];',
+  '    this.preRoll = [];',
+  '    this.totalSpeechFrames = 0;',
+  '    this.threshold = ' + VAD_SPEECH_THRESHOLD + ';',
+  '    this.silenceToStop = Math.ceil(' + VAD_SILENCE_MS + ' / (128 / sampleRate * 1000));',
+  '    this.speechToStart = ' + VAD_SPEECH_FRAMES_TO_START + ';',
+  '    this.preRollMax = ' + VAD_PRE_ROLL_FRAMES + ';',
+  '    this.minSpeechFrames = ' + VAD_MIN_SPEECH_FRAMES + ';',
+  '    this.port.onmessage = (e) => {',
+  '      if (e.data.type === "setThreshold") this.threshold = e.data.value;',
+  '      if (e.data.type === "reset") { this.state = "IDLE"; this.speechBuffer = []; this.preRoll = []; this.speechFrameCount = 0; this.silenceFrameCount = 0; this.totalSpeechFrames = 0; }',
+  '    };',
+  '  }',
+  '  process(inputs) {',
+  '    var input = inputs[0];',
+  '    if (!input || !input[0]) return true;',
+  '    var samples = input[0];',
+  '    var ratio = sampleRate / 24000;',
+  '    var outLen = Math.floor(samples.length / ratio);',
+  '    var resampled = new Float32Array(outLen);',
+  '    for (var i = 0; i < outLen; i++) { resampled[i] = samples[Math.floor(i * ratio)]; }',
+  '    var sum = 0;',
+  '    for (var j = 0; j < resampled.length; j++) sum += resampled[j] * resampled[j];',
+  '    var rms = Math.sqrt(sum / resampled.length);',
+  '    var isSpeech = rms > this.threshold;',
+  '    if (this.state === "IDLE") {',
+  '      this.preRoll.push(resampled);',
+  '      if (this.preRoll.length > this.preRollMax) this.preRoll.shift();',
+  '      if (isSpeech) {',
+  '        this.speechFrameCount++;',
+  '        if (this.speechFrameCount >= this.speechToStart) {',
+  '          this.state = "SPEAKING";',
+  '          this.speechBuffer = this.preRoll.slice();',
+  '          this.preRoll = [];',
+  '          this.totalSpeechFrames = this.speechFrameCount;',
+  '          this.silenceFrameCount = 0;',
+  '          this.port.postMessage({ type: "speech_start" });',
+  '        }',
+  '      } else { this.speechFrameCount = 0; }',
+  '    } else if (this.state === "SPEAKING") {',
+  '      this.speechBuffer.push(resampled);',
+  '      this.totalSpeechFrames++;',
+  '      if (isSpeech) { this.silenceFrameCount = 0; }',
+  '      else {',
+  '        this.silenceFrameCount++;',
+  '        if (this.silenceFrameCount >= this.silenceToStop) {',
+  '          if (this.totalSpeechFrames >= this.minSpeechFrames) {',
+  '            var totalLen = 0;',
+  '            for (var k = 0; k < this.speechBuffer.length; k++) totalLen += this.speechBuffer[k].length;',
+  '            var combined = new Float32Array(totalLen);',
+  '            var offset = 0;',
+  '            for (var m = 0; m < this.speechBuffer.length; m++) { combined.set(this.speechBuffer[m], offset); offset += this.speechBuffer[m].length; }',
+  '            this.port.postMessage({ type: "speech_end", audio: combined }, [combined.buffer]);',
+  '          }',
+  '          this.state = "IDLE";',
+  '          this.speechBuffer = [];',
+  '          this.preRoll = [];',
+  '          this.speechFrameCount = 0;',
+  '          this.silenceFrameCount = 0;',
+  '          this.totalSpeechFrames = 0;',
+  '        }',
+  '      }',
+  '    }',
+  '    return true;',
+  '  }',
+  '}',
+  'registerProcessor("vad-processor", VADProcessor);'
+].join('\n');
 
 function loadSandbox() {
   var c = document.getElementById('page-sandbox');
 
-  // --- Error banner placeholder ---
   var html = '<div id="sbKeyBanner"></div>'
     + '<div class="page-label">AGENT BUILDER</div>'
     + '<h1 class="page-heading">Sandbox</h1>'
-    + '<p class="page-sub">Test voice agents with your own configuration.</p>'
+    + '<p class="page-sub">Test voice agents with the production pipeline.</p>'
     + '<div class="sandbox-layout">'
 
-    // ═══ LEFT: CONFIG PANEL ═══
-    + '<div class="sandbox-config">'
+    // ═══ ZONE 1: CONFIG PANEL (collapsible) ═══
+    + '<div class="sandbox-config" id="sbConfigPanel">'
 
     // Matterport
     + '<div class="form-group">'
-    + '<label class="form-label">Matterport Model ID <span class="sb-tooltip" data-tip="Paste a Matterport model ID or full URL. Find it in your Matterport account under the model\'s share link.">?</span></label>'
-    + '<div style="display:flex;gap:8px"><input class="form-input" id="sbModelId" placeholder="e.g. NCPe9NFNKew or full URL" style="flex:1">'
+    + '<label class="form-label">Matterport Model ID <span class="sb-tooltip" data-tip="Paste a Matterport model ID or full URL.">?</span></label>'
+    + '<div style="display:flex;gap:8px"><input class="form-input" id="sbModelId" placeholder="e.g. NCPe9NFNKew" style="flex:1">'
     + '<button class="btn btn-outline btn-sm" onclick="loadTour()">Apply</button></div>'
     + '</div>'
 
     // Load from Tenant
     + '<div class="form-group">'
-    + '<label class="form-label">Load from Tenant <span class="sb-tooltip" data-tip="Load all settings from an existing tenant in the database — populates model ID, property data, room mappings, and vertical.">?</span></label>'
+    + '<label class="form-label">Load from Tenant <span class="sb-tooltip" data-tip="Load settings from an existing tenant in the database.">?</span></label>'
     + '<select class="form-select" id="sbTenantSelect" onchange="loadTenantData(this.value)"><option value="">— Select a tenant —</option></select>'
     + '</div>'
 
     // Vertical
     + '<div class="form-group">'
-    + '<label class="form-label">Vertical <span class="sb-tooltip" data-tip="The business type. Determines the default system prompt and agent behavior.">?</span></label>'
+    + '<label class="form-label">Vertical</label>'
     + '<select class="form-select" id="sbVertical" onchange="resetPrompt()">'
     + '<option value="hotel">Hotel</option><option value="education">Education</option><option value="retail">Retail</option>'
     + '<option value="real_estate_sale">Real Estate (Sale)</option><option value="real_estate_development">Real Estate (Development)</option><option value="other">Other</option></select></div>'
 
     // LLM Model
     + '<div class="form-group">'
-    + '<label class="form-label">LLM Model <span class="sb-tooltip" data-tip="The OpenAI model used for generating responses. gpt-5.4-mini matches production.">?</span></label>'
+    + '<label class="form-label">LLM Model</label>'
     + '<select class="form-select" id="sbModel"><option value="gpt-5.4-mini">gpt-5.4-mini (production)</option><option value="gpt-4o-mini">gpt-4o-mini</option><option value="gpt-4o">gpt-4o</option><option value="gpt-4-turbo">gpt-4-turbo</option></select></div>'
 
     // Temperature
     + '<div class="form-group">'
-    + '<label class="form-label">Temperature: <span id="sbTempVal">0.7</span> <span class="sb-tooltip" data-tip="Controls randomness. 0 = deterministic and focused. 1 = creative and varied. Production uses 0.7.">?</span></label>'
+    + '<label class="form-label">Temperature: <span id="sbTempVal">0.7</span></label>'
     + '<input type="range" id="sbTemp" min="0" max="1" step="0.1" value="0.7" style="width:100%" oninput="document.getElementById(\'sbTempVal\').textContent=this.value"></div>'
 
     // System Prompt
     + '<div class="form-group">'
-    + '<label class="form-label">System Prompt <span class="sb-tooltip" data-tip="The instructions that define the agent\'s personality and behavior. This is sent as the system message to OpenAI.">?</span></label>'
-    + '<textarea class="form-textarea" id="sbPrompt" rows="6" placeholder="Enter system prompt..."></textarea>'
+    + '<label class="form-label">System Prompt</label>'
+    + '<textarea class="form-textarea" id="sbPrompt" rows="5" placeholder="Enter system prompt..."></textarea>'
     + '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">'
     + '<button class="btn btn-outline btn-sm" onclick="resetPrompt()">Reset to default</button>'
     + '<button class="btn btn-outline btn-sm" onclick="savePromptAsTemplate()">Save as template</button>'
@@ -602,8 +698,8 @@ function loadSandbox() {
 
     // Property Data
     + '<div class="form-group">'
-    + '<label class="form-label">Property Data <span class="sb-tooltip" data-tip="Business information the agent will reference — rooms, prices, amenities, policies, etc. Paste manually or sync from a URL.">?</span></label>'
-    + '<textarea class="form-textarea" id="sbData" rows="4" placeholder="Paste property/business data here..."></textarea>'
+    + '<label class="form-label">Property Data</label>'
+    + '<textarea class="form-textarea" id="sbData" rows="3" placeholder="Business data the agent references..."></textarea>'
     + '<div style="display:flex;gap:8px;margin-top:8px;align-items:center">'
     + '<input class="form-input" id="sbSyncUrl" placeholder="https://example.com" style="flex:1;min-height:0;padding:7px 12px">'
     + '<button class="btn btn-outline btn-sm" onclick="syncFromURL()" id="sbSyncBtn">Sync</button>'
@@ -611,7 +707,7 @@ function loadSandbox() {
 
     // Room Mappings
     + '<div class="form-group">'
-    + '<label class="form-label">Room Mappings <span class="sb-tooltip" data-tip="Maps room names to Matterport sweep IDs. The agent uses these to navigate the tour when a visitor asks to see a specific room.">?</span></label>'
+    + '<label class="form-label">Room Mappings</label>'
     + '<div style="display:flex;gap:8px;margin-bottom:8px">'
     + '<button class="btn btn-outline btn-sm" onclick="setRoomEditorMode(\'json\')" id="rmJsonBtn" style="font-weight:600">JSON</button>'
     + '<button class="btn btn-outline btn-sm" onclick="setRoomEditorMode(\'visual\')" id="rmVisualBtn">Visual Editor</button>'
@@ -630,41 +726,64 @@ function loadSandbox() {
     + '<button class="btn btn-dark" onclick="applyAndRestart()" style="flex:1">Apply &amp; Restart Session</button>'
     + '</div>'
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">'
-    + '<button class="btn btn-outline btn-sm" onclick="saveSandboxConfig()">Save configuration</button>'
-    + '<button class="btn btn-outline btn-sm" onclick="exportSystemPrompt()">Export system prompt</button>'
+    + '<button class="btn btn-outline btn-sm" onclick="saveSandboxConfig()">Save config</button>'
+    + '<button class="btn btn-outline btn-sm" onclick="exportSystemPrompt()">Export prompt</button>'
     + '</div>'
+
+    // Debug panel
+    + '<details class="debug-panel" id="debugPanel" style="margin-top:16px">'
+    + '<summary>Debug Log</summary>'
+    + '<div id="debugContent"><div style="color:var(--muted);font-size:12px">No turns yet.</div></div>'
+    + '<button class="btn btn-outline btn-sm" onclick="clearDebugLog()" style="margin-top:8px">Clear</button>'
+    + '</details>'
 
     + '</div>' // end sandbox-config
 
-    // ═══ RIGHT: LIVE PANEL ═══
-    + '<div class="sandbox-live">'
+    // ═══ ZONE 2+3: TOUR + VOICE OVERLAY ═══
+    + '<div class="sandbox-tour" id="sbTourContainer">'
+    + '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:14px">Enter a Matterport Model ID and click Apply</div>'
 
-    // Tour
-    + '<div class="sandbox-tour" id="sbTourContainer"><div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:14px">Enter a Matterport Model ID and click Apply</div></div>'
+    // Loading overlay
+    + '<div class="sb-loading-overlay hidden" id="sbLoadingOverlay">'
+    + '<div class="sb-loading-name" id="sbLoadingName">AI Concierge</div>'
+    + '<div class="sb-loading-dots"><span></span><span></span><span></span></div>'
+    + '<div class="sb-loading-sub">Connecting to voice agent...</div>'
+    + '</div>'
 
-    // Voice section
-    + '<div class="sandbox-voice">'
-    + '<div style="display:flex;align-items:center;gap:12px;justify-content:center">'
-    + '<button class="mic-btn" id="micBtn" onclick="toggleMic()" disabled>'
-    + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>'
-    + '</button>'
-    + '<div style="flex:1;display:flex;gap:6px">'
-    + '<input class="form-input" id="sbTextInput" placeholder="Type a message..." style="flex:1;min-height:0;padding:10px 14px" onkeydown="if(event.key===\'Enter\'){sendTextInput();event.preventDefault()}" disabled>'
-    + '<button class="btn btn-dark btn-sm" onclick="sendTextInput()" id="sbSendBtn" disabled>Send</button>'
-    + '</div></div>'
-    + '<div class="voice-status" id="voiceStatus">Start a session to begin</div>'
-    + '<div class="latency-bar" id="latencyBar"><span>STT: —</span><span>LLM: —</span><span>TTS: —</span><span>Total: —</span></div>'
-    + '<div class="transcript-panel" id="transcriptPanel"></div>'
+    // Fade overlay for navigation
+    + '<div class="sb-fade" id="sbFade"></div>'
 
-    // Debug panel
-    + '<details class="debug-panel" id="debugPanel">'
-    + '<summary>Debug Log</summary>'
-    + '<div id="debugContent"><div style="color:var(--muted);font-size:12px">No turns yet.</div></div>'
-    + '<button class="btn btn-outline btn-sm" onclick="clearDebugLog()" style="margin-top:8px">Clear debug log</button>'
-    + '</details>'
+    // Admin toggle button
+    + '<button class="sb-admin-toggle" id="sbAdminToggle" onclick="toggleAdminPanel()">\u2699 Admin</button>'
 
-    + '</div>' // end sandbox-voice
-    + '</div>' // end sandbox-live
+    // Agent icon (matches production)
+    + '<div class="sb-agent-icon" id="sbAgentIcon" onclick="toggleTranscript()">'
+    + '<svg viewBox="0 0 24 24" fill="none"><path d="M5 18.5C5 16.567 6.567 15 8.5 15h7C17.433 15 19 16.567 19 18.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="9" r="3.5" stroke="currentColor" stroke-width="1.7"/></svg>'
+    + '<div class="sb-waves"><div class="sb-wave"></div><div class="sb-wave"></div><div class="sb-wave"></div></div>'
+    + '</div>'
+
+    // Transcript panel (overlay)
+    + '<div class="sb-transcript" id="sbTranscript"></div>'
+
+    // Text input bar (overlay)
+    + '<div class="sb-input-bar" id="sbInputBar">'
+    + '<input id="sbTextInput" placeholder="Type a message..." onkeydown="if(event.key===\'Enter\'){sendTextInput();event.preventDefault()}">'
+    + '<button onclick="sendTextInput()">Send</button>'
+    + '</div>'
+
+    // Demo question button
+    + '<button class="sb-demo-btn" id="sbDemoBtn" onclick="toggleDemoPanel()">?</button>'
+    + '<div class="sb-demo-panel" id="sbDemoPanel">'
+    + '<div class="sb-demo-title">Try asking</div>'
+    + '<button class="sb-demo-chip" onclick="sendDemoQuestion(this)">Can you show me around?</button>'
+    + '<button class="sb-demo-chip" onclick="sendDemoQuestion(this)">What rooms do you have?</button>'
+    + '<button class="sb-demo-chip" onclick="sendDemoQuestion(this)">How much does it cost?</button>'
+    + '</div>'
+
+    // Latency display
+    + '<div class="sb-latency" id="sbLatency"><span>STT: \u2014</span><span>LLM: \u2014</span><span>TTS: \u2014</span></div>'
+
+    + '</div>' // end sandbox-tour
     + '</div>'; // end sandbox-layout
 
   c.innerHTML = html;
@@ -725,7 +844,21 @@ function loadTour() {
     modelId = parts[parts.length - 1] || parts[parts.length - 2] || raw;
   }
   document.getElementById('sbModelId').value = modelId;
-  document.getElementById('sbTourContainer').innerHTML = '<iframe src="https://my.matterport.com/show/?m=' + encodeURIComponent(modelId) + '&play=1&qs=1" allowfullscreen style="width:100%;height:100%;border:none"></iframe>';
+
+  // Clear existing content except overlays
+  var container = document.getElementById('sbTourContainer');
+  var existingIframe = container.querySelector('iframe');
+  var placeholder = container.querySelector('div:not([class])');
+  if (placeholder && !placeholder.className) placeholder.remove();
+  if (existingIframe) existingIframe.remove();
+
+  var iframe = document.createElement('iframe');
+  iframe.src = 'https://my.matterport.com/show/?m=' + encodeURIComponent(modelId) + '&play=1&qs=1';
+  iframe.allow = 'microphone; autoplay';
+  iframe.allowFullscreen = true;
+  iframe.style.cssText = 'width:100%;height:100%;border:none;display:block';
+  // Insert iframe as first child (behind overlays)
+  container.insertBefore(iframe, container.firstChild);
   showToast('Tour loaded', 'success');
 }
 
@@ -957,133 +1090,65 @@ function exportSystemPrompt() {
   showModal(html);
 }
 
-/* ══════════════════════════════════════
-   VOICE SESSION — WebSocket + Audio
-   ══════════════════════════════════════ */
-function startSandboxSession() {
-  if (sandboxWs) { sandboxWs.close(); sandboxWs = null; }
-  wsReconnectAttempts = 0;
-  debugLog = [];
-  incomingAudio = [];
-  updateDebugPanel();
-
-  var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  var wsUrl = protocol + '//' + window.location.host + '/ws/test?token=' + encodeURIComponent(TOKEN);
-  connectWebSocket(wsUrl);
-}
-
-function connectWebSocket(url) {
-  sandboxWs = new WebSocket(url);
-  sandboxWs.binaryType = 'arraybuffer';
-
-  sandboxWs.onopen = function() {
-    wsReconnectAttempts = 0;
-    document.getElementById('voiceStatus').textContent = 'Connected — click mic or type';
-    document.getElementById('micBtn').disabled = false;
-    document.getElementById('sbTextInput').disabled = false;
-    document.getElementById('sbSendBtn').disabled = false;
-
-    // Send config
-    var config = {
-      systemPrompt: document.getElementById('sbPrompt').value,
-      vertical: document.getElementById('sbVertical').value,
-      temperature: parseFloat(document.getElementById('sbTemp').value),
-      model: document.getElementById('sbModel').value,
-      propertyData: document.getElementById('sbData').value,
-      roomMappings: document.getElementById('sbMappings').value
-    };
-    sandboxWs.send(JSON.stringify({ type: 'config', config: config }));
-    console.log('[SANDBOX] Starting session with temperature:', config.temperature);
-
-    document.getElementById('transcriptPanel').innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center">Session started. Speak or type to begin.</div>';
-  };
-
-  sandboxWs.onmessage = function(event) {
-    // Binary = PCM16 audio chunk
-    if (event.data instanceof ArrayBuffer) {
-      incomingAudio.push(event.data);
-      return;
-    }
-    var msg;
-    try { msg = JSON.parse(event.data); } catch(e) { return; }
-
-    if (msg.type === 'transcript') {
-      addTranscript(msg.role, msg.text);
-    } else if (msg.type === 'audio_end') {
-      playCollectedAudio();
-    } else if (msg.type === 'status') {
-      var s = msg.status;
-      document.getElementById('voiceStatus').textContent = s === 'idle' ? 'Ready — click mic or type' : s.charAt(0).toUpperCase() + s.slice(1) + '...';
-    } else if (msg.type === 'latency') {
-      document.getElementById('latencyBar').innerHTML = '<span>STT: ' + msg.stt + 'ms</span><span>LLM: ' + msg.llm + 'ms</span><span>TTS: ' + msg.tts + 'ms</span><span>Total: ' + msg.total + 'ms</span>';
-    } else if (msg.type === 'debug') {
-      debugLog.unshift(msg);
-      if (debugLog.length > 10) debugLog.pop();
-      updateDebugPanel();
-    } else if (msg.type === 'navigate') {
-      handleNavigateEvent(msg);
-    } else if (msg.type === 'conversion') {
-      addTranscript('system', 'Booking triggered: ' + (msg.reason || ''));
-    } else if (msg.type === 'profile_update') {
-      addTranscript('system', 'Profile: ' + msg.field + ' = ' + msg.value);
-    } else if (msg.type === 'error') {
-      showToast(msg.message, 'error');
-      addTranscript('error', msg.message);
-    }
-  };
-
-  sandboxWs.onclose = function() {
-    document.getElementById('voiceStatus').textContent = 'Disconnected';
-    document.getElementById('micBtn').disabled = true;
-    document.getElementById('sbTextInput').disabled = true;
-    document.getElementById('sbSendBtn').disabled = true;
-
-    // Auto-reconnect (max 3 attempts)
-    if (wsReconnectAttempts < 3) {
-      wsReconnectAttempts++;
-      document.getElementById('voiceStatus').textContent = 'Reconnecting... (' + wsReconnectAttempts + '/3)';
-      setTimeout(function() {
-        if (!sandboxWs || sandboxWs.readyState === WebSocket.CLOSED) {
-          connectWebSocket(url);
-        }
-      }, 2000);
-    } else {
-      document.getElementById('voiceStatus').innerHTML = 'Connection lost — <a href="#" onclick="applyAndRestart();return false" style="color:var(--black);text-decoration:underline">click to retry</a>';
-    }
-  };
-
-  sandboxWs.onerror = function() {
-    showToast('WebSocket connection failed — check that API keys are set in Railway Variables', 'error');
-  };
-}
-
-/* ── Matterport Navigation ── */
-function handleNavigateEvent(msg) {
-  if (!msg.sweepId) {
-    addTranscript('system', 'Room not found in tour: ' + (msg.roomName || ''));
-    return;
-  }
-  addTranscript('system', 'Navigating to: ' + (msg.roomName || msg.sweepId));
-  var iframe = document.querySelector('#sbTourContainer iframe');
-  if (iframe) {
-    iframe.contentWindow.postMessage({ type: 'NAVIGATE', sweepId: msg.sweepId }, '*');
-    // Also try Matterport SDK navigation
-    iframe.contentWindow.postMessage({ type: 'moveTo', sweepId: msg.sweepId }, '*');
-  }
-}
-
-/* ── Transcript ── */
-function addTranscript(role, text) {
-  var panel = document.getElementById('transcriptPanel');
+/* ══════════════════════════════════════════════════
+   SANDBOX UI — Toggle, Demo, Transcript, Input
+   ══════════════════════════════════════════════════ */
+function toggleAdminPanel() {
+  var panel = document.getElementById('sbConfigPanel');
   if (!panel) return;
-  // Clear initial placeholder
-  if (!panel.querySelector('.transcript-msg')) panel.innerHTML = '';
-  var div = document.createElement('div');
-  div.className = 'transcript-msg';
-  var roleClass = role === 'error' ? 'error' : role;
-  div.innerHTML = '<span class="role ' + roleClass + '">[' + role + ']</span>' + esc(text);
-  panel.appendChild(div);
+  sbConfigCollapsed = !sbConfigCollapsed;
+  panel.classList.toggle('collapsed', sbConfigCollapsed);
+}
+
+function toggleTranscript() {
+  sbTranscriptOpen = !sbTranscriptOpen;
+  var el = document.getElementById('sbTranscript');
+  if (el) el.classList.toggle('open', sbTranscriptOpen);
+  // Also toggle input bar
+  sbInputBarOpen = sbTranscriptOpen;
+  var bar = document.getElementById('sbInputBar');
+  if (bar) bar.classList.toggle('open', sbInputBarOpen);
+}
+
+function toggleDemoPanel() {
+  sbDemoOpen = !sbDemoOpen;
+  var el = document.getElementById('sbDemoPanel');
+  if (el) el.classList.toggle('open', sbDemoOpen);
+}
+
+function sendDemoQuestion(btn) {
+  var text = btn.textContent;
+  if (!text || !sandboxWs || sandboxWs.readyState !== 1) return;
+  sandboxWs.send(JSON.stringify({ type: 'text_input', text: text }));
+  sbDemoOpen = false;
+  var el = document.getElementById('sbDemoPanel');
+  if (el) el.classList.remove('open');
+  addTranscriptMsg('user', text);
+}
+
+/* ── Transcript (overlay style, matches production) ── */
+function addTranscriptMsg(role, text) {
+  sbTranscriptMessages.push({ role: role, text: text });
+  if (sbTranscriptMessages.length > 20) sbTranscriptMessages.shift();
+  renderTranscript();
+}
+
+function renderTranscript() {
+  var panel = document.getElementById('sbTranscript');
+  if (!panel) return;
+  panel.innerHTML = '';
+  sbTranscriptMessages.forEach(function(m) {
+    var div = document.createElement('div');
+    div.className = 'sb-transcript-msg ' + m.role;
+    div.textContent = m.text.length > 150 ? m.text.slice(0, 150) + '...' : m.text;
+    panel.appendChild(div);
+  });
   panel.scrollTop = panel.scrollHeight;
+}
+
+/* Legacy addTranscript (kept for debug/system messages) */
+function addTranscript(role, text) {
+  addTranscriptMsg(role, text);
 }
 
 /* ── Debug Panel ── */
@@ -1123,114 +1188,426 @@ function sendTextInput() {
   var text = input.value.trim();
   if (!text || !sandboxWs || sandboxWs.readyState !== 1) return;
   sandboxWs.send(JSON.stringify({ type: 'text_input', text: text }));
+  addTranscriptMsg('user', text);
   input.value = '';
 }
 
-/* ── Audio Recording ── */
-function toggleMic() {
-  if (isRecording) stopRecording();
-  else startRecording();
-}
-
-async function startRecording() {
-  try {
-    recordingStream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true } });
-    recordingCtx = new AudioContext({ sampleRate: 16000 });
-    var source = recordingCtx.createMediaStreamSource(recordingStream);
-    recordingProcessor = recordingCtx.createScriptProcessor(4096, 1, 1);
-    audioChunks = [];
-
-    recordingProcessor.onaudioprocess = function(e) {
-      var float32 = e.inputBuffer.getChannelData(0);
-      var int16 = new Int16Array(float32.length);
-      for (var i = 0; i < float32.length; i++) {
-        int16[i] = Math.max(-32768, Math.min(32767, Math.round(float32[i] * 32768)));
+/* ══════════════════════════════════════════════════
+   AUDIO — AudioContext, Gapless Playback, VAD
+   (matches production embed.js)
+   ══════════════════════════════════════════════════ */
+function sbEnsureAudioContext() {
+  if (!sbAudioContext || sbAudioContext.state === 'closed') {
+    sbAudioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+    sbAudioContext.onstatechange = function() {
+      if (!sbAudioContext) return;
+      if (sbAudioContext.state === 'suspended') {
+        sbAudioContext.resume().catch(function() {});
       }
-      audioChunks.push(int16.buffer);
     };
-
-    source.connect(recordingProcessor);
-    recordingProcessor.connect(recordingCtx.destination);
-
-    isRecording = true;
-    document.getElementById('micBtn').classList.add('recording');
-    document.getElementById('voiceStatus').textContent = 'Listening... (click mic to stop)';
-
-    // Auto-stop after 15 seconds
-    setTimeout(function() { if (isRecording) stopRecording(); }, 15000);
-  } catch(e) {
-    showToast('Microphone access denied. Check browser permissions.', 'error');
   }
+  return sbAudioContext;
 }
 
-function stopRecording() {
-  isRecording = false;
-  document.getElementById('micBtn').classList.remove('recording');
-  document.getElementById('voiceStatus').textContent = 'Processing...';
-
-  // Stop media tracks
-  if (recordingStream) {
-    recordingStream.getTracks().forEach(function(t) { t.stop(); });
-    recordingStream = null;
+function sbGetPlaybackGain() {
+  var ctx = sbEnsureAudioContext();
+  if (!sbPlaybackGain || sbPlaybackGain.context !== ctx) {
+    sbPlaybackGain = ctx.createGain();
+    sbPlaybackGain.connect(ctx.destination);
   }
-  if (recordingProcessor) {
-    recordingProcessor.disconnect();
-    recordingProcessor = null;
-  }
-  if (recordingCtx) {
-    recordingCtx.close().catch(function() {});
-    recordingCtx = null;
-  }
-
-  // Combine audio chunks and send
-  if (sandboxWs && sandboxWs.readyState === 1 && audioChunks.length > 0) {
-    var totalLength = audioChunks.reduce(function(acc, buf) { return acc + buf.byteLength; }, 0);
-    var combined = new Uint8Array(totalLength);
-    var offset = 0;
-    audioChunks.forEach(function(buf) {
-      combined.set(new Uint8Array(buf), offset);
-      offset += buf.byteLength;
-    });
-    sandboxWs.send(combined.buffer);
-  }
-  audioChunks = [];
+  return sbPlaybackGain;
 }
 
-/* ── Audio Playback (PCM16 → AudioContext) ── */
-function playCollectedAudio() {
-  if (incomingAudio.length === 0) return;
-
-  // Combine all chunks
-  var totalLen = incomingAudio.reduce(function(s, b) { return s + b.byteLength; }, 0);
-  var combined = new Uint8Array(totalLen);
-  var offset = 0;
-  incomingAudio.forEach(function(buf) {
-    combined.set(new Uint8Array(buf), offset);
-    offset += buf.byteLength;
-  });
-  incomingAudio = [];
-
-  // Convert Int16 → Float32
-  var int16 = new Int16Array(combined.buffer);
-  var float32 = new Float32Array(int16.length);
-  for (var i = 0; i < int16.length; i++) {
-    float32[i] = int16[i] / 32768;
-  }
-
-  // Play via AudioContext at 24kHz (Cartesia output rate)
+/* ── Gapless PCM16 Playback (matches production exactly) ── */
+function sbPlayPCM16Chunk(pcm16Buffer) {
   try {
-    if (!playbackCtx || playbackCtx.state === 'closed') {
-      playbackCtx = new AudioContext({ sampleRate: 24000 });
+    var ctx = sbEnsureAudioContext();
+    if (ctx.state !== 'running') { try { ctx.resume(); } catch(e) {} }
+
+    var int16 = new Int16Array(pcm16Buffer);
+    var float32 = new Float32Array(int16.length);
+    for (var i = 0; i < int16.length; i++) {
+      float32[i] = int16[i] / 32768.0;
     }
-    var buffer = playbackCtx.createBuffer(1, float32.length, 24000);
-    buffer.copyToChannel(float32, 0);
-    var source = playbackCtx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(playbackCtx.destination);
-    source.start();
+
+    var audioBuffer = ctx.createBuffer(1, float32.length, 24000);
+    audioBuffer.getChannelData(0).set(float32);
+
+    var source = ctx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(sbGetPlaybackGain());
+
+    var now = ctx.currentTime;
+    var startTime = (sbNextPlayTime > now) ? sbNextPlayTime : now;
+    source.start(startTime);
+    sbNextPlayTime = startTime + audioBuffer.duration;
+
+    sbCurrentSources.push(source);
+    source.onended = function() {
+      var idx = sbCurrentSources.indexOf(source);
+      if (idx !== -1) sbCurrentSources.splice(idx, 1);
+    };
   } catch(e) {
-    console.error('[SANDBOX] Audio playback error:', e);
+    console.warn('[SANDBOX] Playback error:', e.message);
   }
+}
+
+function sbClearPlaybackBuffer() {
+  if (sbPlaybackGain) {
+    try { sbPlaybackGain.disconnect(); } catch(e) {}
+    sbPlaybackGain = null;
+  }
+  sbCurrentSources.forEach(function(s) { try { s.stop(); } catch(e) {} });
+  sbCurrentSources = [];
+  sbNextPlayTime = sbAudioContext ? sbAudioContext.currentTime : 0;
+}
+
+function sbStopAllAudio() {
+  sbClearPlaybackBuffer();
+  sbAgentStatus = 'idle';
+  sbRefreshUI();
+}
+
+/* ── Agent Icon UI refresh ── */
+function sbRefreshUI() {
+  var icon = document.getElementById('sbAgentIcon');
+  if (!icon) return;
+  icon.classList.remove('speaking', 'thinking', 'user_speaking');
+  if (sbAgentStatus === 'speaking') icon.classList.add('speaking');
+  else if (sbAgentStatus === 'thinking') icon.classList.add('thinking');
+  else if (sbAgentStatus === 'user_speaking') icon.classList.add('user_speaking');
+}
+
+/* ── VAD Worklet Setup (matches production) ── */
+async function sbInitMicrophone() {
+  try {
+    if (sbMicStream) { sbMicStream.getTracks().forEach(function(t) { t.stop(); }); sbMicStream = null; }
+    if (sbWorkletNode) { try { sbWorkletNode.disconnect(); } catch(e) {} sbWorkletNode = null; }
+
+    sbMicStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
+    });
+
+    var ctx = sbEnsureAudioContext();
+    if (ctx.state !== 'running') await ctx.resume();
+
+    await sbSetupVADWorklet(sbMicStream);
+    console.log('[SANDBOX] Microphone + VAD initialized');
+  } catch(e) {
+    console.warn('[SANDBOX] Microphone not available:', e.name);
+    showToast('Microphone access denied. Click the agent icon and type instead.', 'error');
+  }
+}
+
+async function sbSetupVADWorklet(stream) {
+  var ctx = sbEnsureAudioContext();
+
+  if (!sbWorkletRegistered) {
+    var blob = new Blob([VAD_WORKLET_CODE], { type: 'application/javascript' });
+    var url = URL.createObjectURL(blob);
+    try {
+      await ctx.audioWorklet.addModule(url);
+      sbWorkletRegistered = true;
+    } catch(e) {
+      if (e.message && e.message.includes('already')) {
+        sbWorkletRegistered = true;
+      } else {
+        console.warn('[SANDBOX] AudioWorklet not supported:', e.message);
+        URL.revokeObjectURL(url);
+        return;
+      }
+    }
+    URL.revokeObjectURL(url);
+  }
+
+  var source = ctx.createMediaStreamSource(stream);
+  sbWorkletNode = new AudioWorkletNode(ctx, 'vad-processor');
+
+  sbWorkletNode.port.onmessage = function(e) {
+    // Suppress VAD while agent is speaking or during cooldown (echo suppression)
+    if (sbVadSuppressed) return;
+
+    if (e.data.type === 'speech_start') {
+      // Interrupt agent if speaking
+      if (sbAgentStatus === 'speaking') {
+        sbStopAllAudio();
+        if (sandboxWs && sandboxWs.readyState === WebSocket.OPEN) {
+          sandboxWs.send(JSON.stringify({ type: 'interrupt' }));
+        }
+      }
+      sbAgentStatus = 'user_speaking';
+      sbRefreshUI();
+    }
+
+    if (e.data.type === 'speech_end') {
+      sbAgentStatus = 'idle';
+      sbRefreshUI();
+
+      // Convert Float32 → PCM16 and send
+      var float32 = e.data.audio;
+      var pcm16 = new Int16Array(float32.length);
+      for (var i = 0; i < float32.length; i++) {
+        var s = Math.max(-1, Math.min(1, float32[i]));
+        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+
+      if (sandboxWs && sandboxWs.readyState === WebSocket.OPEN) {
+        sandboxWs.send(pcm16.buffer);
+      }
+    }
+  };
+
+  source.connect(sbWorkletNode);
+  // Silent destination to keep worklet alive
+  var gain = ctx.createGain();
+  gain.gain.value = 0;
+  sbWorkletNode.connect(gain);
+  gain.connect(ctx.destination);
+}
+
+/* Unlock AudioContext on user gesture */
+document.addEventListener('click', function() {
+  if (sbAudioContext && sbAudioContext.state !== 'running') {
+    sbAudioContext.resume().catch(function() {});
+  }
+});
+
+/* ══════════════════════════════════════════════════
+   VOICE SESSION — WebSocket + Streaming Pipeline
+   ══════════════════════════════════════════════════ */
+function startSandboxSession() {
+  if (sandboxWs) { sandboxWs.close(); sandboxWs = null; }
+  wsReconnectAttempts = 0;
+  debugLog = [];
+  sbTranscriptMessages = [];
+  sbAgentStatus = 'idle';
+  sbNextPlayTime = 0;
+  sbVadSuppressed = false;
+  updateDebugPanel();
+
+  // Show loading overlay
+  var loadEl = document.getElementById('sbLoadingOverlay');
+  if (loadEl) loadEl.classList.remove('hidden');
+
+  var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  var wsUrl = protocol + '//' + window.location.host + '/ws/test?token=' + encodeURIComponent(TOKEN);
+  connectWebSocket(wsUrl);
+}
+
+function connectWebSocket(url) {
+  sandboxWs = new WebSocket(url);
+  sandboxWs.binaryType = 'arraybuffer';
+
+  sandboxWs.onopen = function() {
+    wsReconnectAttempts = 0;
+    console.log('[SANDBOX] WebSocket connected');
+
+    // Send config
+    var config = {
+      systemPrompt: document.getElementById('sbPrompt').value,
+      vertical: document.getElementById('sbVertical').value,
+      temperature: parseFloat(document.getElementById('sbTemp').value),
+      model: document.getElementById('sbModel').value,
+      propertyData: document.getElementById('sbData').value,
+      roomMappings: document.getElementById('sbMappings').value
+    };
+    sandboxWs.send(JSON.stringify({ type: 'config', config: config }));
+
+    // Init microphone + VAD
+    sbInitMicrophone().then(function() {
+      // Hide loading overlay after mic is ready
+      var loadEl = document.getElementById('sbLoadingOverlay');
+      if (loadEl) loadEl.classList.add('hidden');
+      // Show text input bar
+      var bar = document.getElementById('sbInputBar');
+      if (bar) bar.classList.add('open');
+      sbInputBarOpen = true;
+    });
+
+    // Suppress VAD until greeting finishes
+    sbVadSuppressed = true;
+    if (sbMicStream) { sbMicStream.getAudioTracks().forEach(function(t) { t.enabled = false; }); }
+    if (sbWorkletNode) { sbWorkletNode.port.postMessage({ type: 'reset' }); }
+  };
+
+  sandboxWs.onmessage = function(event) {
+    // Binary = PCM16 audio chunk → play immediately (gapless)
+    if (event.data instanceof ArrayBuffer) {
+      // Suppress VAD on first audio byte (echo suppression)
+      if (!sbVadSuppressed) {
+        sbVadSuppressed = true;
+        if (sbVadSuppressTimer) { clearTimeout(sbVadSuppressTimer); sbVadSuppressTimer = null; }
+        if (sbMicStream) { sbMicStream.getAudioTracks().forEach(function(t) { t.enabled = false; }); }
+        if (sbWorkletNode) { sbWorkletNode.port.postMessage({ type: 'reset' }); }
+      }
+      sbAgentStatus = 'speaking';
+      sbRefreshUI();
+      sbPlayPCM16Chunk(event.data);
+      return;
+    }
+
+    var msg;
+    try { msg = JSON.parse(event.data); } catch(e) { return; }
+
+    if (msg.type === 'status') {
+      var val = msg.value || msg.status; // support both old and new format
+      if (val === 'thinking') {
+        sbClearPlaybackBuffer();
+        sbAgentStatus = 'thinking';
+        sbVadSuppressed = true;
+        if (sbVadSuppressTimer) { clearTimeout(sbVadSuppressTimer); sbVadSuppressTimer = null; }
+        if (sbMicStream) { sbMicStream.getAudioTracks().forEach(function(t) { t.enabled = false; }); }
+        if (sbWorkletNode) { sbWorkletNode.port.postMessage({ type: 'reset' }); }
+        sbRefreshUI();
+      }
+      if (val === 'speaking') {
+        sbClearPlaybackBuffer();
+        sbAgentStatus = 'speaking';
+        sbVadSuppressed = true;
+        if (sbVadSuppressTimer) { clearTimeout(sbVadSuppressTimer); sbVadSuppressTimer = null; }
+        if (sbMicStream) { sbMicStream.getAudioTracks().forEach(function(t) { t.enabled = false; }); }
+        if (sbWorkletNode) { sbWorkletNode.port.postMessage({ type: 'reset' }); }
+        sbRefreshUI();
+      }
+      if (val === 'idle') {
+        sbAgentStatus = 'idle';
+        sbNextPlayTime = sbAudioContext ? sbAudioContext.currentTime : 0;
+        // 1200ms cooldown after speaking (room reverb + echo tail)
+        if (sbVadSuppressTimer) clearTimeout(sbVadSuppressTimer);
+        sbVadSuppressTimer = setTimeout(function() {
+          sbVadSuppressed = false;
+          sbVadSuppressTimer = null;
+          if (sbWorkletNode) { sbWorkletNode.port.postMessage({ type: 'reset' }); }
+          if (sbMicStream) { sbMicStream.getAudioTracks().forEach(function(t) { t.enabled = true; }); }
+        }, 1200);
+        sbRefreshUI();
+      }
+      if (val === 'connected') {
+        sbAgentStatus = 'idle';
+        sbNextPlayTime = sbAudioContext ? sbAudioContext.currentTime : 0;
+        sbVadSuppressed = true;
+        if (sbMicStream) { sbMicStream.getAudioTracks().forEach(function(t) { t.enabled = false; }); }
+        if (sbWorkletNode) { sbWorkletNode.port.postMessage({ type: 'reset' }); }
+        sbRefreshUI();
+      }
+    }
+
+    if (msg.type === 'transcript') {
+      addTranscriptMsg(msg.role, msg.text);
+    }
+
+    if (msg.type === 'latency') {
+      var lat = document.getElementById('sbLatency');
+      if (lat) lat.innerHTML = '<span>STT: ' + (msg.stt || '\u2014') + 'ms</span><span>LLM: ' + (msg.llm || '\u2014') + 'ms</span><span>TTS: ' + (msg.tts || '\u2014') + 'ms</span>';
+    }
+
+    if (msg.type === 'debug') {
+      debugLog.unshift(msg);
+      if (debugLog.length > 10) debugLog.pop();
+      updateDebugPanel();
+    }
+
+    if (msg.type === 'navigate') {
+      handleNavigateEvent(msg);
+    }
+
+    if (msg.type === 'set_view_mode') {
+      handleViewModeEvent(msg);
+    }
+
+    if (msg.type === 'conversion') {
+      addTranscriptMsg('system', 'Booking triggered: ' + (msg.reason || ''));
+    }
+
+    if (msg.type === 'profile_update') {
+      addTranscriptMsg('system', 'Profile: ' + msg.field + ' = ' + msg.value);
+    }
+
+    if (msg.type === 'state_update') {
+      addTranscriptMsg('system', 'State: ' + msg.new_state + ' (' + (msg.reason || '') + ')');
+    }
+
+    if (msg.type === 'error') {
+      showToast(msg.message, 'error');
+      addTranscriptMsg('error', msg.message);
+    }
+  };
+
+  sandboxWs.onclose = function() {
+    // Auto-reconnect (max 3 attempts)
+    if (wsReconnectAttempts < 3) {
+      wsReconnectAttempts++;
+      setTimeout(function() {
+        if (!sandboxWs || sandboxWs.readyState === WebSocket.CLOSED) {
+          connectWebSocket(url);
+        }
+      }, 2000);
+    } else {
+      addTranscriptMsg('error', 'Connection lost. Click Apply & Restart to reconnect.');
+    }
+  };
+
+  sandboxWs.onerror = function() {
+    showToast('WebSocket connection failed \u2014 check API keys in Railway', 'error');
+  };
+}
+
+/* ── Matterport Navigation (with fade transition) ── */
+function handleNavigateEvent(msg) {
+  if (!msg.sweepId) {
+    addTranscriptMsg('system', 'Room not found: ' + (msg.roomName || ''));
+    return;
+  }
+  addTranscriptMsg('system', 'Navigating to: ' + (msg.roomName || msg.sweepId));
+
+  var iframe = document.querySelector('#sbTourContainer iframe');
+  if (!iframe) return;
+
+  var modelId = (document.getElementById('sbModelId').value || '').trim();
+  var fadeEl = document.getElementById('sbFade');
+  var newUrl = 'https://my.matterport.com/show/?m=' + encodeURIComponent(modelId) + '&ss=' + encodeURIComponent(msg.sweepId) + '&sr=-.05,.5&play=1&qs=1';
+
+  if (fadeEl) {
+    fadeEl.classList.add('active');
+    setTimeout(function() {
+      iframe.src = newUrl;
+      iframe.addEventListener('load', function onLoad() {
+        iframe.removeEventListener('load', onLoad);
+        setTimeout(function() { fadeEl.classList.remove('active'); }, 400);
+      }, { once: true });
+      setTimeout(function() { fadeEl.classList.remove('active'); }, 4000);
+    }, 350);
+  } else {
+    iframe.src = newUrl;
+  }
+}
+
+/* ── View Mode (floorplan/dollhouse/inside) ── */
+function handleViewModeEvent(msg) {
+  var iframe = document.querySelector('#sbTourContainer iframe');
+  if (!iframe) return;
+
+  var modelId = (document.getElementById('sbModelId').value || '').trim();
+  var mode = msg.mode;
+  var base = 'https://my.matterport.com/show/?m=' + encodeURIComponent(modelId) + '&play=1&qs=1';
+  if (mode === 'floorplan') base += '&f=1&fp=1';
+  else if (mode === 'dollhouse') base += '&dh=1';
+
+  var fadeEl = document.getElementById('sbFade');
+  if (fadeEl) {
+    fadeEl.classList.add('active');
+    setTimeout(function() {
+      iframe.src = base;
+      iframe.addEventListener('load', function onLoad() {
+        iframe.removeEventListener('load', onLoad);
+        setTimeout(function() { fadeEl.classList.remove('active'); }, 400);
+      }, { once: true });
+      setTimeout(function() { fadeEl.classList.remove('active'); }, 4000);
+    }, 350);
+  } else {
+    iframe.src = base;
+  }
+  addTranscriptMsg('system', 'View mode: ' + mode);
 }
 
 /* ═══════════════════════════════════════════════
