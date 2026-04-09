@@ -647,17 +647,28 @@ var VAD_WORKLET_CODE = [
 
 /* ═══════════════════════════════════════════════
    DEFAULT SYSTEM — production settings overview
-   Shows how customers' agent setup looks
+   All values hardcoded from production codebase
    ═══════════════════════════════════════════════ */
+var PROD_DEFAULTS = {
+  llm: { model: 'gpt-5.4-mini', temperature: 0.7, maxTokens: 200, contextTurns: 16, maxGptCalls: 50 },
+  stt: { provider: 'Deepgram', model: 'nova-3', sampleRate: '24 kHz', format: 'PCM16 LE', minDuration: '500ms', timeout: '8s', minConfidence: 0.65 },
+  tts: { provider: 'Cartesia', model: 'sonic-2', version: '2025-04-16', sampleRate: '24 kHz', format: 'PCM S16LE', timeout: '15s' },
+  vad: { speechThreshold: 0.015, silenceDuration: '1000ms', speechFramesToStart: 3, preRollFrames: 8, minSpeechFrames: 10, frameSize: 128 },
+  session: { idleTimeout: '5 min', maxDuration: '20 min', echoSuppression: '1200ms', ttsCooldown: '1500ms', silenceFollowUp: '20s', freeTrialLimit: '10 min' },
+  behavior: { greeting: 'Auto on connect', interruption: 'VAD-based', maxResponse: '2–3 sentences', navigation: 'Sweep ID', conversion: 'Tool call trigger', ttsStreamThreshold: '4+ words' },
+  prompts: {
+    hotel: 'You are a virtual employee for a hotel. You are embedded inside a 3D virtual tour of the property. Your job is to greet visitors, understand what they are looking for, recommend the right room type, and guide them towards making a booking. Be warm, professional, and knowledgeable.',
+    education: 'You are a virtual employee for an educational institution. You are embedded inside a 3D virtual tour of the campus. Your job is to greet prospective students, answer questions about programs, facilities, and campus life, and guide them towards scheduling a visit or applying.',
+    retail: 'You are a virtual employee for a retail showroom. You are embedded inside a 3D virtual tour. Your job is to greet visitors, understand what they are looking for, and guide them towards making a purchase or booking a consultation.',
+    real_estate_sale: 'You are a virtual employee for a real estate agency. You are embedded inside a 3D virtual tour of a property for sale. Highlight key features, answer questions about the property and neighborhood, and guide buyers towards scheduling a viewing.',
+    real_estate_development: 'You are a virtual employee for a real estate development. You are embedded inside a 3D virtual tour of a new project. Showcase the project, answer questions about units and amenities, and guide buyers towards booking a consultation.'
+  }
+};
+
 function loadDefaultSystem() {
   var c = document.getElementById('page-default-system');
+  var d = PROD_DEFAULTS;
 
-  c.innerHTML = '<div class="page-label">AGENT BUILDER</div>'
-    + '<h1 class="page-heading">Default System</h1>'
-    + '<p class="page-sub">Current production settings across all customer agents.</p>'
-    + '<div id="dsContent"><p style="color:var(--muted)">Loading...</p></div>';
-
-  // Load production status for each vertical
   var verticals = [
     { key: 'hotel', label: 'Hotel' },
     { key: 'education', label: 'Education' },
@@ -666,77 +677,95 @@ function loadDefaultSystem() {
     { key: 'real_estate_development', label: 'Real Estate (Development)' }
   ];
 
-  // Fetch production status (one call — defaults are same for all)
-  api('/admin/production-status?vertical=hotel')
-    .then(function(data) {
-      if (data.error) {
-        document.getElementById('dsContent').innerHTML = '<p style="color:var(--red)">Could not load production settings.</p>';
-        return;
-      }
+  var html = '<div class="page-label">AGENT BUILDER</div>'
+    + '<h1 class="page-heading">Default System</h1>'
+    + '<p class="page-sub">Current production settings across all customer agents.</p>';
 
-      var html = '';
+  // ── LLM ──
+  html += '<div class="ds-section">'
+    + '<h3 class="section-title" style="font-size:22px;margin-bottom:16px">LLM</h3>'
+    + '<div class="kpi-grid" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr))">'
+    + dsCard('Model', d.llm.model)
+    + dsCard('Temperature', d.llm.temperature)
+    + dsCard('Max Tokens', d.llm.maxTokens)
+    + dsCard('Context Turns', d.llm.contextTurns)
+    + dsCard('Max GPT Calls', d.llm.maxGptCalls)
+    + '</div></div>';
 
-      // ── Pipeline Settings Card ──
-      html += '<div class="ds-section">'
-        + '<h3 class="section-title" style="font-size:22px;margin-bottom:16px">Voice Pipeline</h3>'
-        + '<div class="kpi-grid" style="grid-template-columns:repeat(auto-fill,minmax(180px,1fr))">'
-        + dsCard('LLM Model', data.model || 'gpt-5.4-mini')
-        + dsCard('Temperature', data.temperature || 0.7)
-        + dsCard('STT', data.sttModel || 'Deepgram Nova-2')
-        + dsCard('TTS', data.ttsModel || 'Cartesia Flash')
-        + dsCard('VAD Silence', (data.vadSilenceFrames || 50) + ' frames')
-        + dsCard('Sample Rate', '24 kHz')
-        + '</div></div>';
+  // ── STT ──
+  html += '<div class="ds-section">'
+    + '<h3 class="section-title" style="font-size:22px;margin-bottom:16px">Speech-to-Text</h3>'
+    + '<div class="kpi-grid" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr))">'
+    + dsCard('Provider', d.stt.provider)
+    + dsCard('Model', d.stt.model)
+    + dsCard('Sample Rate', d.stt.sampleRate)
+    + dsCard('Format', d.stt.format)
+    + dsCard('Min Duration', d.stt.minDuration)
+    + dsCard('Timeout', d.stt.timeout)
+    + dsCard('Min Confidence', d.stt.minConfidence)
+    + '</div></div>';
 
-      // ── Agent Behavior Card ──
-      html += '<div class="ds-section">'
-        + '<h3 class="section-title" style="font-size:22px;margin-bottom:16px">Agent Behavior</h3>'
-        + '<div class="kpi-grid" style="grid-template-columns:repeat(auto-fill,minmax(180px,1fr))">'
-        + dsCard('Greeting', 'Auto on connect')
-        + dsCard('Interruption', 'VAD-based')
-        + dsCard('Echo Suppression', '1200ms cooldown')
-        + dsCard('Max Response', '2–3 sentences')
-        + dsCard('Navigation', 'Sweep ID')
-        + dsCard('Conversion', 'Tool call trigger')
-        + '</div></div>';
+  // ── TTS ──
+  html += '<div class="ds-section">'
+    + '<h3 class="section-title" style="font-size:22px;margin-bottom:16px">Text-to-Speech</h3>'
+    + '<div class="kpi-grid" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr))">'
+    + dsCard('Provider', d.tts.provider)
+    + dsCard('Model', d.tts.model)
+    + dsCard('Version', d.tts.version)
+    + dsCard('Sample Rate', d.tts.sampleRate)
+    + dsCard('Format', d.tts.format)
+    + dsCard('Timeout', d.tts.timeout)
+    + '</div></div>';
 
-      // ── Per-Vertical Prompts ──
-      html += '<div class="ds-section">'
-        + '<h3 class="section-title" style="font-size:22px;margin-bottom:16px">System Prompts by Vertical</h3>';
+  // ── VAD ──
+  html += '<div class="ds-section">'
+    + '<h3 class="section-title" style="font-size:22px;margin-bottom:16px">Voice Activity Detection</h3>'
+    + '<div class="kpi-grid" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr))">'
+    + dsCard('Energy Threshold', d.vad.speechThreshold)
+    + dsCard('Silence Duration', d.vad.silenceDuration)
+    + dsCard('Speech Frames', d.vad.speechFramesToStart)
+    + dsCard('Pre-roll Frames', d.vad.preRollFrames)
+    + dsCard('Min Speech', d.vad.minSpeechFrames + ' frames')
+    + dsCard('Frame Size', d.vad.frameSize + ' samples')
+    + '</div></div>';
 
-      var defaultPrompts = {
-        hotel: 'You are a virtual employee for a hotel. You are embedded inside a 3D virtual tour of the property. Your job is to greet visitors, understand what they are looking for, recommend the right room type, and guide them towards making a booking. Be warm, professional, and knowledgeable.',
-        education: 'You are a virtual employee for an educational institution. You are embedded inside a 3D virtual tour of the campus. Your job is to greet prospective students, answer questions about programs, facilities, and campus life, and guide them towards scheduling a visit or applying.',
-        retail: 'You are a virtual employee for a retail showroom. You are embedded inside a 3D virtual tour. Your job is to greet visitors, understand what they are looking for, and guide them towards making a purchase or booking a consultation.',
-        real_estate_sale: 'You are a virtual employee for a real estate agency. You are embedded inside a 3D virtual tour of a property for sale. Highlight key features, answer questions about the property and neighborhood, and guide buyers towards scheduling a viewing.',
-        real_estate_development: 'You are a virtual employee for a real estate development. You are embedded inside a 3D virtual tour of a new project. Showcase the project, answer questions about units and amenities, and guide buyers towards booking a consultation.'
-      };
+  // ── Session ──
+  html += '<div class="ds-section">'
+    + '<h3 class="section-title" style="font-size:22px;margin-bottom:16px">Session &amp; Timing</h3>'
+    + '<div class="kpi-grid" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr))">'
+    + dsCard('Idle Timeout', d.session.idleTimeout)
+    + dsCard('Max Duration', d.session.maxDuration)
+    + dsCard('Echo Suppress', d.session.echoSuppression)
+    + dsCard('TTS Cooldown', d.session.ttsCooldown)
+    + dsCard('Silence Follow-up', d.session.silenceFollowUp)
+    + dsCard('Free Trial', d.session.freeTrialLimit)
+    + '</div></div>';
 
-      verticals.forEach(function(v) {
-        html += '<div class="ds-prompt-card">'
-          + '<div class="ds-prompt-label">' + esc(v.label) + '</div>'
-          + '<div class="ds-prompt-text">' + esc(defaultPrompts[v.key] || 'No default prompt configured.') + '</div>'
-          + '</div>';
-      });
+  // ── Agent Behavior ──
+  html += '<div class="ds-section">'
+    + '<h3 class="section-title" style="font-size:22px;margin-bottom:16px">Agent Behavior</h3>'
+    + '<div class="kpi-grid" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr))">'
+    + dsCard('Greeting', d.behavior.greeting)
+    + dsCard('Interruption', d.behavior.interruption)
+    + dsCard('Max Response', d.behavior.maxResponse)
+    + dsCard('Navigation', d.behavior.navigation)
+    + dsCard('Conversion', d.behavior.conversion)
+    + dsCard('TTS Stream', d.behavior.ttsStreamThreshold)
+    + '</div></div>';
 
-      html += '</div>';
+  // ── Prompts per vertical ──
+  html += '<div class="ds-section">'
+    + '<h3 class="section-title" style="font-size:22px;margin-bottom:16px">System Prompts by Vertical</h3>';
 
-      // ── DB Stats (if available) ──
-      if (data.tenantCount !== '—') {
-        html += '<div class="ds-section">'
-          + '<h3 class="section-title" style="font-size:22px;margin-bottom:16px">Live Stats</h3>'
-          + '<div class="kpi-grid" style="grid-template-columns:repeat(auto-fill,minmax(180px,1fr))">'
-          + dsCard('Active Agents', data.tenantCount)
-          + dsCard('Avg Conversion', data.avgConversion + '%')
-          + dsCard('Avg Minutes/mo', data.avgMinutes)
-          + '</div></div>';
-      }
+  verticals.forEach(function(v) {
+    html += '<div class="ds-prompt-card">'
+      + '<div class="ds-prompt-label">' + esc(v.label) + '</div>'
+      + '<div class="ds-prompt-text">' + esc(d.prompts[v.key] || '') + '</div>'
+      + '</div>';
+  });
+  html += '</div>';
 
-      document.getElementById('dsContent').innerHTML = html;
-    })
-    .catch(function() {
-      document.getElementById('dsContent').innerHTML = '<p style="color:var(--red)">Failed to load production settings.</p>';
-    });
+  c.innerHTML = html;
 }
 
 function dsCard(label, value) {
@@ -744,6 +773,24 @@ function dsCard(label, value) {
     + '<div class="kpi-label">' + esc(label) + '</div>'
     + '<div class="kpi-value" style="font-size:22px">' + esc(String(value)) + '</div>'
     + '</div>';
+}
+
+/* ── Apply default system to sandbox ── */
+function applyDefaultSystem() {
+  var d = PROD_DEFAULTS;
+  var v = document.getElementById('sbVertical').value || 'hotel';
+  // Model
+  var modelSel = document.getElementById('sbModel');
+  if (modelSel) { modelSel.value = d.llm.model; plog('MODEL', _prevModel, d.llm.model, 'from default system'); _prevModel = d.llm.model; }
+  // Temperature
+  var tempSlider = document.getElementById('sbTemp');
+  var tempVal = document.getElementById('sbTempVal');
+  if (tempSlider) { var oldT = tempSlider.value; tempSlider.value = d.llm.temperature; if (tempVal) tempVal.textContent = d.llm.temperature; plog('TEMPERATURE', oldT, d.llm.temperature, 'from default system'); }
+  // System prompt
+  var prompt = d.prompts[v] || d.prompts.hotel;
+  var el = document.getElementById('sbPrompt');
+  if (el) { el.value = prompt; plog('SYSTEM_PROMPT', '', 'default ' + v, 'from default system'); }
+  showToast('Default system applied', 'success');
 }
 
 function loadSandbox() {
@@ -782,6 +829,9 @@ function loadSandbox() {
     + '<div class="prod-ref-box" id="prodRefBox">'
     + '<div class="prod-ref-content" id="prodRefContent"><span style="color:var(--muted);font-style:italic;font-size:11px">Loading production settings...</span></div>'
     + '</div>'
+
+    // Load Default System button
+    + '<button class="btn btn-outline btn-sm" onclick="applyDefaultSystem()" style="width:100%;margin-bottom:20px">↻ Load Default System</button>'
 
     // LLM Model
     + '<div class="form-group">'
@@ -1299,64 +1349,29 @@ function validateRoomMappings() {
 
 /* ══════════════════════════════════════════════════
    PRODUCTION REFERENCE — always visible info box
+   Uses PROD_DEFAULTS as fallback when API unavailable
    ══════════════════════════════════════════════════ */
-var prodRefData = null;
+function renderProdRefContent(contentEl, vertical) {
+  var d = PROD_DEFAULTS;
+  var vLabel = (vertical || 'hotel').replace(/_/g, ' ');
+  vLabel = vLabel.charAt(0).toUpperCase() + vLabel.slice(1);
+  contentEl.innerHTML = '<div class="prod-ref-title">PRODUCTION DEFAULTS — ' + esc(vLabel) + '</div>'
+    + '<div class="prod-ref-grid">'
+    + '<span class="prod-ref-item">' + d.llm.model + '</span>'
+    + '<span class="prod-ref-item">temp ' + d.llm.temperature + '</span>'
+    + '<span class="prod-ref-item">STT: ' + d.stt.model + '</span>'
+    + '<span class="prod-ref-item">TTS: ' + d.tts.model + '</span>'
+    + '<span class="prod-ref-item">VAD: ' + d.vad.speechThreshold + ' threshold</span>'
+    + '<span class="prod-ref-item">Echo: ' + d.session.echoSuppression + '</span>'
+    + '</div>';
+}
 
 function loadProductionRef() {
   var vertical = document.getElementById('sbVertical');
   if (!vertical) return;
   var contentEl = document.getElementById('prodRefContent');
   if (!contentEl) return;
-  contentEl.innerHTML = '<span style="color:var(--muted);font-style:italic;font-size:11px">Loading...</span>';
-
-  api('/admin/production-status?vertical=' + encodeURIComponent(vertical.value))
-    .then(function(data) {
-      prodRefData = data;
-      if (data.error) {
-        contentEl.innerHTML = '<span style="color:var(--muted);font-style:italic;font-size:11px">No DB connection</span>';
-        return;
-      }
-      var vLabel = (data.vertical || 'unknown').replace(/_/g, ' ');
-      vLabel = vLabel.charAt(0).toUpperCase() + vLabel.slice(1);
-
-      contentEl.innerHTML = '<div class="prod-ref-title">PRODUCTION SETTINGS — ' + esc(vLabel) + '</div>'
-        + '<div class="prod-ref-grid">'
-        + '<span class="prod-ref-item">' + esc(data.model) + '</span>'
-        + '<span class="prod-ref-item">temp ' + data.temperature + '</span>'
-        + '<span class="prod-ref-item">STT: ' + esc(data.sttModel || 'Nova-2') + '</span>'
-        + '<span class="prod-ref-item">TTS: ' + esc(data.ttsModel || 'Cartesia') + '</span>'
-        + '<span class="prod-ref-item">VAD: ' + (data.vadSilenceFrames || 50) + ' frames</span>'
-        + (data.tenantCount !== '—' ? '<span class="prod-ref-item">' + data.tenantCount + ' agents</span>' : '')
-        + (data.avgConversion !== '—' ? '<span class="prod-ref-item">' + data.avgConversion + '% conv</span>' : '')
-        + '</div>'
-        + '<button class="prod-ref-apply" onclick="applyProdSettings()">Apply production settings</button>';
-    })
-    .catch(function() {
-      contentEl.innerHTML = '<span style="color:var(--muted);font-style:italic;font-size:11px">Unavailable</span>';
-    });
-}
-
-function applyProdSettings() {
-  if (!prodRefData) return;
-  var modelSel = document.getElementById('sbModel');
-  if (modelSel) {
-    var prodModel = prodRefData.model || 'gpt-5.4-mini';
-    for (var i = 0; i < modelSel.options.length; i++) {
-      if (modelSel.options[i].value === prodModel) { modelSel.value = prodModel; break; }
-    }
-    plog('MODEL', _prevModel, prodModel, 'from production');
-    _prevModel = prodModel;
-  }
-  var tempSlider = document.getElementById('sbTemp');
-  var tempVal = document.getElementById('sbTempVal');
-  if (tempSlider && prodRefData.temperature !== undefined) {
-    var oldTemp = tempSlider.value;
-    tempSlider.value = prodRefData.temperature;
-    if (tempVal) tempVal.textContent = prodRefData.temperature;
-    plog('TEMPERATURE', oldTemp, String(prodRefData.temperature), 'from production');
-    _prevTemp = String(prodRefData.temperature);
-  }
-  showToast('Production settings applied', 'success');
+  renderProdRefContent(contentEl, vertical.value);
 }
 
 /* ══════════════════════════════════════════════════
