@@ -813,66 +813,60 @@ body.sidebar-collapsed .main{margin-left:var(--sidebar-collapsed)}
 }
 .space-add-btn:hover{border-color:var(--black);color:var(--black)}
 
-/* ═══════════════════════════════════════
-   PRODUCTION REFERENCE DROPDOWN
-   ═══════════════════════════════════════ */
-.prod-ref-toggle{
-  width:100%;
-  display:flex;align-items:center;justify-content:space-between;
-  padding:8px 14px;
+.space-goto{
+  width:26px;height:26px;
   border:1px solid var(--border);
-  border-radius:10px;
+  border-radius:6px;
   background:var(--white);
-  font-size:12px;
-  font-family:var(--sans);
   color:var(--muted);
+  font-size:10px;
   cursor:pointer;
+  display:grid;place-items:center;
+  flex-shrink:0;
   transition:all 0.15s;
 }
-.prod-ref-toggle:hover{border-color:var(--black);color:var(--black)}
-.prod-ref-toggle .prod-ref-chevron{font-size:10px;transition:transform 0.2s}
-.prod-ref-toggle.open .prod-ref-chevron{transform:rotate(180deg)}
+.space-goto:hover{background:var(--black);color:var(--white);border-color:var(--black)}
 
-.prod-ref-panel{
-  display:none;
-  margin-top:8px;
+/* ═══════════════════════════════════════
+   PRODUCTION REFERENCE BOX (always visible)
+   ═══════════════════════════════════════ */
+.prod-ref-box{
   background:var(--cream);
   border:1px solid var(--border);
   border-radius:10px;
-  padding:16px;
-  font-size:12px;
-  line-height:1.8;
+  padding:10px 14px;
+  margin-bottom:20px;
 }
-.prod-ref-panel.open{display:block}
-.prod-ref-panel .prod-ref-heading{
+.prod-ref-title{
   font-size:10px;letter-spacing:0.1em;text-transform:uppercase;
   color:var(--muted);font-weight:600;margin-bottom:6px;
 }
-.prod-ref-panel .prod-ref-row{
-  display:flex;justify-content:space-between;
-  padding:2px 0;font-size:12px;
+.prod-ref-grid{
+  display:flex;flex-wrap:wrap;gap:4px 10px;
+  margin-bottom:8px;
 }
-.prod-ref-panel .prod-ref-row .prod-ref-label{color:var(--muted)}
-.prod-ref-panel .prod-ref-row .prod-ref-value{font-weight:500;color:var(--black)}
-.prod-ref-sep{
-  border:none;border-top:1px solid var(--border);
-  margin:10px 0;
+.prod-ref-item{
+  font-size:11px;
+  color:var(--black);
+  font-weight:500;
+  background:var(--white);
+  padding:2px 8px;
+  border-radius:4px;
+  border:1px solid var(--border);
 }
-.prod-ref-panel .prod-ref-apply{
-  width:100%;margin-top:12px;
-  padding:8px 16px;
-  border:1px solid var(--black);
+.prod-ref-apply{
+  width:100%;
+  padding:6px 12px;
+  border:1px solid var(--border);
   border-radius:980px;
   background:var(--white);
-  color:var(--black);
-  font-size:12px;font-weight:500;
+  color:var(--muted);
+  font-size:11px;font-weight:500;
   font-family:var(--sans);
   cursor:pointer;
   transition:all 0.15s;
 }
-.prod-ref-panel .prod-ref-apply:hover{background:var(--black);color:var(--white)}
-.prod-ref-panel.loading .prod-ref-content{color:var(--muted);font-style:italic}
-.prod-ref-panel.error .prod-ref-content{color:var(--red);font-style:italic}
+.prod-ref-apply:hover{background:var(--black);color:var(--white);border-color:var(--black)}
 
 /* ═══════════════════════════════════════
    PERSISTENT DEBUG LOG

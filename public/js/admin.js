@@ -676,15 +676,10 @@ function loadSandbox() {
     + '<option value="hotel">Hotel</option><option value="education">Education</option><option value="retail">Retail</option>'
     + '<option value="real_estate_sale">Real Estate (Sale)</option><option value="real_estate_development">Real Estate (Development)</option><option value="other">Other</option></select></div>'
 
-    // Production Reference
-    + '<div class="form-group">'
-    + '<label class="form-label">Production Reference <span class="sb-tooltip" data-tip="Shows the actual settings used by existing customers on this vertical. Use as reference while you test.">?</span></label>'
-    + '<button class="prod-ref-toggle" id="prodRefToggle" onclick="toggleProdRef()">'
-    + '<span>Show production settings</span><span class="prod-ref-chevron">▾</span>'
-    + '</button>'
-    + '<div class="prod-ref-panel" id="prodRefPanel">'
-    + '<div class="prod-ref-content" id="prodRefContent">Loading...</div>'
-    + '</div></div>'
+    // Production Reference — always visible
+    + '<div class="prod-ref-box" id="prodRefBox">'
+    + '<div class="prod-ref-content" id="prodRefContent"><span style="color:var(--muted);font-style:italic;font-size:11px">Loading production settings...</span></div>'
+    + '</div>'
 
     // LLM Model
     + '<div class="form-group">'
@@ -714,9 +709,9 @@ function loadSandbox() {
     + '<button class="btn btn-outline btn-sm" onclick="syncFromURL()" id="sbSyncBtn">Sync</button>'
     + '</div></div>'
 
-    // Space Mappings (matches production client dashboard)
+    // Space Mappings (matches production rooms.html)
     + '<div class="form-group">'
-    + '<label class="form-label">Space Mappings <span class="sb-tooltip" data-tip="Space mappings connect rooms in your Matterport tour to your agent. Each space needs a name and a Sweep ID. The agent uses these to navigate visitors to the right location.">?</span></label>'
+    + '<label class="form-label">Space Mappings <span class="sb-tooltip" data-tip="Connect rooms in your Matterport tour to your agent. Each space needs a name and a Sweep ID so the agent can navigate visitors to the right location.">?</span></label>'
     + '<ul class="space-list" id="spaceList"><li class="space-empty">No spaces configured</li></ul>'
     + '<div id="spaceEditPanel" style="display:none"></div>'
     + '<div id="addSpaceForm" style="display:none">'
@@ -724,15 +719,15 @@ function loadSandbox() {
     + '<div class="field-group"><label>Space name</label>'
     + '<input type="text" id="newSpaceName" placeholder="e.g. Lobby, Restaurant, Suite 401"></div>'
     + '<div class="field-group"><label>Matterport Sweep ID or URL</label>'
-    + '<input type="text" id="newSweepId" placeholder="Paste a Matterport URL or enter a Sweep ID" oninput="extractSweepFromInput(this)">'
+    + '<input type="text" id="newSweepId" placeholder="Paste the URL from the tour or a Sweep ID" oninput="extractSweepFromInput(this)">'
     + '<div class="sweep-extract-info" id="sweepExtractInfo"></div>'
     + '<button class="sweep-help-toggle" type="button" onclick="document.getElementById(\'sweepHelpBody\').classList.toggle(\'open\')">How to find your Sweep ID</button>'
     + '<div class="sweep-help-body" id="sweepHelpBody">'
-    + '<ol><li>Open your Matterport tour in a browser</li>'
+    + '<ol><li>Load a Matterport tour in the sandbox (right panel)</li>'
     + '<li>Navigate to the room you want to map</li>'
-    + '<li>Copy the URL from the address bar</li>'
-    + '<li>Paste it here — we\'ll extract the Sweep ID automatically</li></ol>'
-    + '<p style="margin-top:8px;font-size:11px;color:var(--muted)">The Sweep ID is the <code>ss=</code> parameter in the Matterport URL, e.g. <code>?m=...&amp;ss=<strong>abc123</strong></code></p>'
+    + '<li>Look at the address bar — copy the full URL</li>'
+    + '<li>Paste it here — the Sweep ID is extracted automatically</li></ol>'
+    + '<p style="margin-top:8px;font-size:11px;color:var(--muted)"><strong>Tip:</strong> You can also open the tour in a new tab, navigate to a room, and copy the URL. The Sweep ID is the <code>ss=</code> parameter, e.g. <code>?m=...&amp;ss=<strong>abc123</strong></code></p>'
     + '</div></div>'
     + '<div class="space-btn-row">'
     + '<button class="btn btn-dark btn-sm" onclick="doAddSpace()">Add space</button>'
@@ -1108,10 +1103,11 @@ function renderSpaceList() {
     var hasSweep = room.sweepId && room.sweepId.length > 3;
     var li = document.createElement('li');
     li.className = 'space-item';
-    li.onclick = function() { editSpace(key); };
     li.innerHTML = '<span class="space-dot ' + (hasSweep ? 'connected' : 'missing') + '"></span>'
       + '<span class="space-name">' + esc(room.label) + '</span>'
-      + '<span class="space-sweep">' + (hasSweep ? esc(room.sweepId) : '<span style="color:var(--red)">No Sweep ID</span>') + '</span>';
+      + '<span class="space-sweep">' + (hasSweep ? esc(room.sweepId) : '<span style="color:var(--red)">No Sweep ID</span>') + '</span>'
+      + (hasSweep ? '<button class="space-goto" onclick="event.stopPropagation();goToSweep(\'' + esc(room.sweepId) + '\')" title="Navigate tour to this space">▶</button>' : '');
+    li.onclick = function() { editSpace(key); };
     ul.appendChild(li);
   });
   syncSpacesToHiddenField();
@@ -1121,6 +1117,31 @@ function renderSpaceList() {
 function syncSpacesToHiddenField() {
   var ta = document.getElementById('sbMappings');
   if (ta) ta.value = JSON.stringify(localRooms, null, 2);
+}
+
+/* ── Navigate tour iframe to a sweep ID (like production rooms.html) ── */
+function goToSweep(sweepId) {
+  if (!sweepId) return;
+  var modelId = (document.getElementById('sbModelId').value || '').trim();
+  if (!modelId) { showToast('Load a Matterport tour first', 'error'); return; }
+  var iframe = document.querySelector('#sbTourContainer iframe');
+  if (!iframe) { showToast('No tour loaded', 'error'); return; }
+  var fadeEl = document.getElementById('sbFade');
+  var newUrl = 'https://my.matterport.com/show/?m=' + encodeURIComponent(modelId) + '&ss=' + encodeURIComponent(sweepId) + '&sr=-.05,.5&play=1&qs=1';
+  if (fadeEl) {
+    fadeEl.classList.add('active');
+    setTimeout(function() {
+      iframe.src = newUrl;
+      iframe.addEventListener('load', function onLoad() {
+        iframe.removeEventListener('load', onLoad);
+        setTimeout(function() { fadeEl.classList.remove('active'); }, 400);
+      }, { once: true });
+      setTimeout(function() { fadeEl.classList.remove('active'); }, 4000);
+    }, 350);
+  } else {
+    iframe.src = newUrl;
+  }
+  showToast('Navigating to sweep...', 'success');
 }
 
 /* ── Edit space (click on existing space) ── */
@@ -1212,72 +1233,50 @@ function validateRoomMappings() {
 }
 
 /* ══════════════════════════════════════════════════
-   PRODUCTION REFERENCE DROPDOWN
+   PRODUCTION REFERENCE — always visible info box
    ══════════════════════════════════════════════════ */
 var prodRefData = null;
-
-function toggleProdRef() {
-  var panel = document.getElementById('prodRefPanel');
-  var toggle = document.getElementById('prodRefToggle');
-  if (!panel || !toggle) return;
-  var isOpen = panel.classList.contains('open');
-  panel.classList.toggle('open');
-  toggle.classList.toggle('open');
-  if (!isOpen && !prodRefData) loadProductionRef();
-}
 
 function loadProductionRef() {
   var vertical = document.getElementById('sbVertical');
   if (!vertical) return;
   var contentEl = document.getElementById('prodRefContent');
   if (!contentEl) return;
-  contentEl.innerHTML = '<span style="color:var(--muted);font-style:italic">Loading...</span>';
+  contentEl.innerHTML = '<span style="color:var(--muted);font-style:italic;font-size:11px">Loading...</span>';
 
   api('/admin/production-status?vertical=' + encodeURIComponent(vertical.value))
     .then(function(data) {
       prodRefData = data;
       if (data.error) {
-        contentEl.innerHTML = '<span style="color:var(--red);font-style:italic">Production status unavailable</span>';
+        contentEl.innerHTML = '<span style="color:var(--muted);font-style:italic;font-size:11px">No DB connection</span>';
         return;
       }
       var vLabel = (data.vertical || 'unknown').replace(/_/g, ' ');
       vLabel = vLabel.charAt(0).toUpperCase() + vLabel.slice(1);
 
-      var html = '<div class="prod-ref-heading">Current Production Settings</div>'
-        + prodRefRow('Model', data.model)
-        + prodRefRow('Temperature', data.temperature)
-        + prodRefRow('VAD silence', data.vadSilenceFrames + ' frames')
-        + prodRefRow('STT', data.sttModel)
-        + prodRefRow('TTS', data.ttsModel)
-        + '<hr class="prod-ref-sep">'
-        + '<div class="prod-ref-heading">Live Data — ' + esc(vLabel) + ' vertical</div>'
-        + prodRefRow('Active agents', data.tenantCount)
-        + prodRefRow('Avg conversion rate', data.avgConversion + '%')
-        + prodRefRow('Avg minutes/month', data.avgMinutes)
-        + '<hr class="prod-ref-sep">'
+      contentEl.innerHTML = '<div class="prod-ref-title">PRODUCTION — ' + esc(vLabel) + '</div>'
+        + '<div class="prod-ref-grid">'
+        + '<span class="prod-ref-item">' + esc(data.model) + '</span>'
+        + '<span class="prod-ref-item">temp ' + data.temperature + '</span>'
+        + '<span class="prod-ref-item">' + data.tenantCount + ' agents</span>'
+        + '<span class="prod-ref-item">' + data.avgConversion + '% conv</span>'
+        + '</div>'
         + '<button class="prod-ref-apply" onclick="applyProdSettings()">Apply production settings</button>';
-      contentEl.innerHTML = html;
     })
     .catch(function() {
-      contentEl.innerHTML = '<span style="color:var(--red);font-style:italic">Production status unavailable</span>';
+      contentEl.innerHTML = '<span style="color:var(--muted);font-style:italic;font-size:11px">Unavailable</span>';
     });
-}
-
-function prodRefRow(label, value) {
-  return '<div class="prod-ref-row"><span class="prod-ref-label">' + label + '</span><span class="prod-ref-value">' + value + '</span></div>';
 }
 
 function applyProdSettings() {
   if (!prodRefData) return;
-  // Apply production values to sandbox controls
   var modelSel = document.getElementById('sbModel');
   if (modelSel) {
     var prodModel = prodRefData.model || 'gpt-5.4-mini';
-    // Check if option exists
     for (var i = 0; i < modelSel.options.length; i++) {
       if (modelSel.options[i].value === prodModel) { modelSel.value = prodModel; break; }
     }
-    plog('MODEL', _prevModel, prodModel, 'from production ref');
+    plog('MODEL', _prevModel, prodModel, 'from production');
     _prevModel = prodModel;
   }
   var tempSlider = document.getElementById('sbTemp');
@@ -1286,7 +1285,7 @@ function applyProdSettings() {
     var oldTemp = tempSlider.value;
     tempSlider.value = prodRefData.temperature;
     if (tempVal) tempVal.textContent = prodRefData.temperature;
-    plog('TEMPERATURE', oldTemp, String(prodRefData.temperature), 'from production ref');
+    plog('TEMPERATURE', oldTemp, String(prodRefData.temperature), 'from production');
     _prevTemp = String(prodRefData.temperature);
   }
   showToast('Production settings applied', 'success');
