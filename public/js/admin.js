@@ -820,7 +820,7 @@ function loadSandbox() {
 
     // Vertical
     + '<div class="form-group">'
-    + '<label class="form-label">Vertical</label>'
+    + '<label class="form-label">Vertical <span class="sb-tooltip" data-tip="The business type this agent serves. Determines the default system prompt, conversion logic, and room mapper fields.">?</span></label>'
     + '<select class="form-select" id="sbVertical" onchange="onVerticalChange(this.value)">'
     + '<option value="hotel">Hotel</option><option value="education">Education</option><option value="retail">Retail</option>'
     + '<option value="real_estate_sale">Real Estate (Sale)</option><option value="real_estate_development">Real Estate (Development)</option><option value="other">Other</option></select></div>'
@@ -835,17 +835,17 @@ function loadSandbox() {
 
     // LLM Model
     + '<div class="form-group">'
-    + '<label class="form-label">LLM Model</label>'
+    + '<label class="form-label">LLM Model <span class="sb-tooltip" data-tip="The OpenAI model used for generating agent responses. Production uses gpt-5.4-mini. Higher models cost more but may improve quality.">?</span></label>'
     + '<select class="form-select" id="sbModel" onchange="onModelChange(this.value)"><option value="gpt-5.4-mini">gpt-5.4-mini (production)</option><option value="gpt-4o-mini">gpt-4o-mini</option><option value="gpt-4o">gpt-4o</option><option value="gpt-4-turbo">gpt-4-turbo</option></select></div>'
 
     // Temperature
     + '<div class="form-group">'
-    + '<label class="form-label">Temperature: <span id="sbTempVal">0.7</span></label>'
+    + '<label class="form-label">Temperature: <span id="sbTempVal">0.7</span> <span class="sb-tooltip" data-tip="Controls response randomness. 0 = deterministic, 1 = creative. Production uses 0.7 for natural but consistent responses.">?</span></label>'
     + '<input type="range" id="sbTemp" min="0" max="1" step="0.1" value="0.7" style="width:100%" oninput="onTempChange(this.value)"></div>'
 
     // System Prompt
     + '<div class="form-group">'
-    + '<label class="form-label">System Prompt</label>'
+    + '<label class="form-label">System Prompt <span class="sb-tooltip" data-tip="The instructions that define the agent\'s personality, knowledge, and behavior. This is sent to the LLM at the start of every conversation.">?</span></label>'
     + '<textarea class="form-textarea" id="sbPrompt" rows="5" placeholder="Enter system prompt..."></textarea>'
     + '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">'
     + '<button class="btn btn-outline btn-sm" onclick="resetPrompt()">Reset to default</button>'
@@ -854,7 +854,7 @@ function loadSandbox() {
 
     // Property Data
     + '<div class="form-group">'
-    + '<label class="form-label">Property Data</label>'
+    + '<label class="form-label">Property Data <span class="sb-tooltip" data-tip="Business-specific data the agent can reference during conversations — e.g. room types, prices, facilities, policies. Injected into the LLM context alongside the system prompt.">?</span></label>'
     + '<textarea class="form-textarea" id="sbData" rows="3" placeholder="Business data the agent references..."></textarea>'
     + '<div style="display:flex;gap:8px;margin-top:8px;align-items:center">'
     + '<input class="form-input" id="sbSyncUrl" placeholder="https://example.com" style="flex:1;min-height:0;padding:7px 12px">'
@@ -863,7 +863,7 @@ function loadSandbox() {
 
     // Room Mappings (matches production rooms.html)
     + '<div class="form-group">'
-    + '<label class="form-label">Marked Rooms</label>'
+    + '<label class="form-label">Marked Rooms <span class="sb-tooltip" data-tip="Map rooms in your Matterport tour to names the agent knows. When the agent recommends a room, it uses the Sweep ID to navigate the visitor to that exact location in the 3D tour.">?</span></label>'
     + '<p style="font-size:11px;color:var(--muted);margin-bottom:8px">These are the areas your AI guide knows about</p>'
     + '<div class="room-mapper-howto" id="roomMapperHowto">'
     + '<p style="font-size:12px;color:var(--muted);line-height:1.6;margin:0"><strong style="color:var(--black)">How it works:</strong> Open your tour in a new tab, walk to a room, press <kbd>U</kbd> to copy the link, then click <strong>"+ Add Room"</strong> and paste it.</p>'
