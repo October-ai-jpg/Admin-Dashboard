@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin Login — October AI</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --cream:#F5F0E8;--cream-dark:#EDE8DF;--black:#1A1A1A;--muted:#6B6560;
+  --border:rgba(26,26,26,0.12);--white:#fff;
+  --serif:'Cormorant Garamond',Georgia,serif;
+  --sans:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+}
+html{-webkit-font-smoothing:antialiased}
+body{background:var(--cream);color:var(--black);font-family:var(--sans);font-size:14px;line-height:1.6;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.login-card{background:var(--white);border:1px solid var(--border);border-radius:20px;padding:56px 48px;max-width:420px;width:100%;text-align:center;box-shadow:0 4px 40px rgba(0,0,0,0.04)}
+.login-logo{font-family:var(--serif);font-size:24px;letter-spacing:-0.02em;margin-bottom:8px}
+.login-sub{font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:var(--muted);margin-bottom:40px}
+.login-field{width:100%;padding:14px 18px;border:1px solid var(--border);border-radius:980px;font-size:14px;font-family:var(--sans);outline:none;transition:border 0.2s;margin-bottom:16px;text-align:center}
+.login-field:focus{border-color:var(--black)}
+.login-btn{width:100%;padding:14px 24px;background:var(--black);color:var(--white);border:none;border-radius:980px;font-size:14px;font-weight:500;font-family:var(--sans);cursor:pointer;transition:opacity 0.2s}
+.login-btn:hover{opacity:0.85}
+.login-btn:disabled{opacity:0.4;cursor:not-allowed}
+.login-error{color:#c0392b;font-size:13px;margin-top:12px;display:none}
+</style>
+</head>
+<body>
+
+<div class="login-card">
+  <div class="login-logo">October AI</div>
+  <div class="login-sub">Admin Dashboard</div>
+  <form id="loginForm">
+    <input type="password" class="login-field" id="password" placeholder="Enter admin password" autocomplete="current-password" autofocus>
+    <button type="submit" class="login-btn" id="loginBtn">Sign in</button>
+    <div class="login-error" id="loginError">Invalid password. Please try again.</div>
+  </form>
+</div>
+
+<script>
+(function() {
+  // Check if already authed
+  var token = localStorage.getItem('october_admin_token');
+  if (token) {
+    fetch('/auth/verify', { headers: { 'x-admin-token': token } })
+      .then(function(r) { if (r.ok) window.location.href = '/dashboard'; })
+      .catch(function() {});
+  }
+
+  document.getElementById('loginForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    var pw = document.getElementById('password').value;
+    var btn = document.getElementById('loginBtn');
+    var err = document.getElementById('loginError');
+    btn.disabled = true;
+    err.style.display = 'none';
+
+    fetch('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pw })
+    })
+    .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+    .then(function(res) {
+      if (res.ok) {
+        localStorage.setItem('october_admin_token', res.data.token);
+        window.location.href = '/dashboard';
+      } else {
+        err.style.display = 'block';
+        btn.disabled = false;
+      }
+    })
+    .catch(function() { err.style.display = 'block'; btn.disabled = false; });
+  });
+})();
+</script>
+</body>
+</html>
