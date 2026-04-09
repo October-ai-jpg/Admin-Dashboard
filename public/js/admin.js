@@ -859,6 +859,10 @@ function loadSandbox() {
     + '<div style="display:flex;gap:8px;margin-top:8px;align-items:center">'
     + '<input class="form-input" id="sbSyncUrl" placeholder="https://example.com" style="flex:1;min-height:0;padding:7px 12px">'
     + '<button class="btn btn-outline btn-sm" onclick="syncFromURL()" id="sbSyncBtn">Sync</button>'
+    + '</div>'
+    + '<div style="display:flex;gap:8px;margin-top:8px;align-items:center">'
+    + '<input type="file" id="sbFileInput" accept=".pdf,.txt,.csv,.json,.md,.xml,.docx" style="display:none" onchange="uploadPropertyFile(this)">'
+    + '<button class="btn btn-outline btn-sm" onclick="document.getElementById(\'sbFileInput\').click()" id="sbUploadBtn" style="flex:1">📄 Upload PDF / file</button>'
     + '</div></div>'
 
     // Room Mappings (matches production rooms.html)
@@ -1177,6 +1181,59 @@ function syncFromURL() {
     btn.textContent = 'Sync';
     btn.disabled = false;
     showToast('Could not access this URL. Try pasting the content manually.', 'error');
+  });
+}
+
+/* ── Upload Property File (PDF, TXT, CSV, etc.) ── */
+function uploadPropertyFile(input) {
+  var file = input.files && input.files[0];
+  if (!file) return;
+  var btn = document.getElementById('sbUploadBtn');
+  btn.textContent = 'Uploading...';
+  btn.disabled = true;
+
+  // For plain text files: read client-side
+  var ext = file.name.split('.').pop().toLowerCase();
+  if (['txt', 'csv', 'json', 'md', 'xml'].indexOf(ext) !== -1) {
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      document.getElementById('sbData').value = e.target.result || '';
+      plog('FILE_UPLOAD', '', file.name, 'text file loaded (' + ext + ')');
+      showToast('Loaded: ' + file.name, 'success');
+      btn.textContent = '📄 Upload PDF / file';
+      btn.disabled = false;
+      input.value = '';
+    };
+    reader.onerror = function() {
+      showToast('Could not read file', 'error');
+      btn.textContent = '📄 Upload PDF / file';
+      btn.disabled = false;
+      input.value = '';
+    };
+    reader.readAsText(file);
+    return;
+  }
+
+  // For PDF / DOCX: send to server
+  var formData = new FormData();
+  formData.append('file', file);
+  fetch('/admin/extract-file', {
+    method: 'POST',
+    headers: { 'x-admin-token': TOKEN },
+    body: formData
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    btn.textContent = '📄 Upload PDF / file';
+    btn.disabled = false;
+    input.value = '';
+    if (data.error) { showToast(data.error, 'error'); return; }
+    document.getElementById('sbData').value = data.text || '';
+    plog('FILE_UPLOAD', '', file.name, data.source || 'raw');
+    showToast('Extracted from: ' + file.name, 'success');
+  }).catch(function() {
+    btn.textContent = '📄 Upload PDF / file';
+    btn.disabled = false;
+    input.value = '';
+    showToast('Failed to extract text from file', 'error');
   });
 }
 

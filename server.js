@@ -4,6 +4,8 @@ const WebSocket = require('ws');
 const path = require('path');
 const fs = require('fs');
 const { Pool } = require('pg');
+const multer = require('multer');
+const pdfParse = require('pdf-parse');
 
 const app = express();
 const server = http.createServer(app);
@@ -210,6 +212,78 @@ app.post('/admin/scrape', requireAuth, async (req, res) => {
   } catch(e) {
     console.error('[SCRAPE] Error:', e.message);
     res.status(500).json({ error: 'Could not access this URL. Try pasting the content manually.' });
+  }
+});
+
+/* ══════════════════════════════════════════
+   FILE UPLOAD — Extract text from PDF/files
+   ══════════════════════════════════════════ */
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB max
+
+app.post('/admin/extract-file', requireAuth, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+  const { originalname, mimetype, buffer } = req.file;
+  const ext = path.extname(originalname).toLowerCase();
+  console.log('[EXTRACT] File:', originalname, 'Type:', mimetype, 'Size:', buffer.length);
+
+  try {
+    let rawText = '';
+
+    if (ext === '.pdf' || mimetype === 'application/pdf') {
+      const data = await pdfParse(buffer);
+      rawText = data.text || '';
+      console.log('[EXTRACT] PDF pages:', data.numpages, 'chars:', rawText.length);
+    } else if (['.txt', '.csv', '.json', '.md', '.xml', '.html'].includes(ext)) {
+      rawText = buffer.toString('utf-8');
+    } else if (ext === '.docx') {
+      // Basic docx: extract text between <w:t> tags from word/document.xml
+      const AdmZip = (() => { try { return require('adm-zip'); } catch(e) { return null; } })();
+      if (AdmZip) {
+        const zip = new AdmZip(buffer);
+        const doc = zip.getEntry('word/document.xml');
+        if (doc) {
+          const xml = doc.getData().toString('utf-8');
+          rawText = xml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        }
+      } else {
+        rawText = buffer.toString('utf-8').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      }
+    } else {
+      rawText = buffer.toString('utf-8');
+    }
+
+    if (!rawText.trim()) {
+      return res.json({ text: '', source: 'empty', filename: originalname });
+    }
+
+    // Optionally structure with OpenAI (same as URL sync)
+    if (process.env.OPENAI_API_KEY && rawText.length > 100) {
+      const llmResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + process.env.OPENAI_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: 'Extract all useful business information from this document. Return as clean, structured text. Include: business name, description, services/products, rooms/spaces, pricing, hours, contact info, location, policies, and any other relevant details. Output text only, no markdown formatting.' },
+            { role: 'user', content: rawText.substring(0, 30000) }
+          ],
+          max_tokens: 2000,
+          temperature: 0.3
+        }),
+        signal: AbortSignal.timeout(25000)
+      });
+      if (llmResponse.ok) {
+        const llmData = await llmResponse.json();
+        const extracted = llmData.choices?.[0]?.message?.content || rawText;
+        return res.json({ text: extracted, source: 'extracted', filename: originalname });
+      }
+    }
+
+    res.json({ text: rawText.substring(0, 50000), source: 'raw', filename: originalname });
+  } catch(e) {
+    console.error('[EXTRACT] Error:', e.message);
+    res.status(500).json({ error: 'Could not extract text from this file: ' + e.message });
   }
 });
 
