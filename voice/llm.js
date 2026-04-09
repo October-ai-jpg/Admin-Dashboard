@@ -18,7 +18,7 @@ async function generateResponse(systemPrompt, messages, model, temperature) {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      model: model || 'gpt-4o-mini',
+      model: model || 'gpt-5.4-mini',
       messages: chatMessages,
       temperature: temperature || 0.7,
       max_tokens: 300
