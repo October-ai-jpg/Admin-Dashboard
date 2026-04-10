@@ -1,123 +1,16 @@
 /**
  * LLM — OpenAI GPT Streaming with Tool Calling + Leak Suppressor
- * Pipeline version: 2.0
+ * Pipeline version: 3.0
  *
- * Changes from v1:
- *  - SSE streaming instead of batch
- *  - Buffer-based tool call leak suppressor (matches production)
- *  - 5 tools: navigate_to_room, trigger_conversion, update_user_profile,
- *             update_conversation_state, set_view_mode
- *  - Dynamic tool definitions from room mappings
+ * v3 changes:
+ *  - buildTools removed (now in services/agentPersona.js)
+ *  - Model/temperature hardcoded to production values
+ *  - Tool definitions come from agentPersona.buildTools()
+ *  - SSE streaming with buffer-based leak suppressor
  *  - AbortController timeout (12s)
- *  - max_completion_tokens configurable
  */
 
 var GPT_TIMEOUT_MS = 12000;
-
-
-/* ═══════════════════════════════════════════════════════════════
- * Tool Definitions — matches production agentPersona.js
- * ═══════════════════════════════════════════════════════════════ */
-
-/**
- * Build tools array dynamically based on config.
- * @param {object} roomMappings - { sweepId: { label, ... }, ... }
- * @param {string} vertical - 'hotel', 'real_estate_sale', etc.
- */
-function buildTools(roomMappings, vertical) {
-  var tools = [];
-  var placeIds = roomMappings ? Object.keys(roomMappings) : [];
-
-  if (placeIds.length > 0) {
-    var roomNames = placeIds.map(function (key) {
-      var val = roomMappings[key];
-      return (typeof val === 'string') ? val : (val.label || key);
-    }).filter(Boolean);
-
-    tools.push({
-      type: 'function',
-      function: {
-        name: 'navigate_to_room',
-        description: 'Show a room in the 3D tour. Available rooms: ' + roomNames.join(', '),
-        parameters: {
-          type: 'object',
-          properties: {
-            room_name: { type: 'string', description: 'The name of the room to navigate to' }
-          },
-          required: ['room_name']
-        }
-      }
-    });
-  }
-
-  tools.push({
-    type: 'function',
-    function: {
-      name: 'trigger_conversion',
-      description: 'Open the booking or conversion page for the visitor when they express clear interest.',
-      parameters: {
-        type: 'object',
-        properties: {
-          reason: { type: 'string', description: 'Brief reason for triggering conversion' }
-        },
-        required: ['reason']
-      }
-    }
-  });
-
-  tools.push({
-    type: 'function',
-    function: {
-      name: 'update_user_profile',
-      description: 'Save visitor info silently. Call every time they mention: dates, group size, purpose, budget, preferences, name.',
-      parameters: {
-        type: 'object',
-        properties: {
-          field: { type: 'string', description: 'The field to update (e.g. name, check_in_date, party_size, interests, budget, purpose)' },
-          value: { type: 'string', description: 'The value to set' }
-        },
-        required: ['field', 'value']
-      }
-    }
-  });
-
-  tools.push({
-    type: 'function',
-    function: {
-      name: 'update_conversation_state',
-      description: 'Move conversation to next phase. qualifying = gathering info. recommending = showing spaces. closing = visitor wants to proceed.',
-      parameters: {
-        type: 'object',
-        properties: {
-          new_state: { type: 'string', enum: ['qualifying', 'recommending', 'closing'], description: 'New phase' },
-          reason: { type: 'string', description: 'Why transitioning' }
-        },
-        required: ['new_state', 'reason']
-      }
-    }
-  });
-
-  // View mode switching for real estate verticals
-  if (vertical === 'real_estate_sale' || vertical === 'real_estate_development') {
-    tools.push({
-      type: 'function',
-      function: {
-        name: 'set_view_mode',
-        description: "Switch 3D tour view. 'inside' for walk-through, 'floorplan' for top-down, 'dollhouse' for 3D overview.",
-        parameters: {
-          type: 'object',
-          properties: {
-            mode: { type: 'string', enum: ['inside', 'floorplan', 'dollhouse'], description: 'View mode' },
-            reason: { type: 'string', description: 'Why switching view' }
-          },
-          required: ['mode']
-        }
-      }
-    });
-  }
-
-  return tools;
-}
 
 
 /* ═══════════════════════════════════════════════════════════════
@@ -359,4 +252,4 @@ async function streamGPT(opts, onTextChunk, onToolCall, onDone) {
   }
 }
 
-module.exports = { streamGPT, buildTools, createLeakSuppressor };
+module.exports = { streamGPT, createLeakSuppressor };

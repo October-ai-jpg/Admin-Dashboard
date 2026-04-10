@@ -7,6 +7,11 @@ const { Pool } = require('pg');
 const multer = require('multer');
 const pdfParse = require('pdf-parse');
 
+/* ── Production-identical services ── */
+const { mergePropertyData } = require('./services/dataMerger');
+const { compileContext } = require('./services/contextCompiler');
+const { buildSystemPrompt, buildTools, VERTICAL_CONFIG } = require('./services/agentPersona');
+
 const app = express();
 const server = http.createServer(app);
 
@@ -317,6 +322,100 @@ app.post('/admin/extract-file', requireAuth, upload.single('file'), async (req, 
   } catch(e) {
     console.error('[EXTRACT] Error:', e.message);
     res.status(500).json({ error: 'Could not extract text from this file: ' + e.message });
+  }
+});
+
+/* ══════════════════════════════════════════
+   COMPILE CONTEXT — GPT-4o-mini structuring
+   (identical to production contextCompiler)
+   ══════════════════════════════════════════ */
+app.post('/admin/compile-context', requireAuth, async (req, res) => {
+  const { propertyData, propertyName, vertical, bookingUrl, roomMappings } = req.body;
+  if (!propertyData || propertyData.length < 50) {
+    return res.status(400).json({ error: 'Property data too short (min 50 chars)' });
+  }
+  if (!process.env.OPENAI_API_KEY) {
+    return res.status(400).json({ error: 'OPENAI_API_KEY not configured — cannot compile context' });
+  }
+  try {
+    const startTime = Date.now();
+    const compiled = await compileContext(propertyData, propertyName, vertical, bookingUrl, roomMappings);
+    if (!compiled) {
+      return res.status(500).json({ error: 'Compilation returned empty result' });
+    }
+    res.json({
+      compiledContext: compiled,
+      chars: compiled.length,
+      durationMs: Date.now() - startTime
+    });
+  } catch (e) {
+    console.error('[COMPILE] Error:', e.message);
+    res.status(500).json({ error: 'Compilation failed: ' + e.message });
+  }
+});
+
+/* ══════════════════════════════════════════
+   PREVIEW PROMPT — show what agentPersona generates
+   (read-only preview, identical to production)
+   ══════════════════════════════════════════ */
+app.post('/admin/preview-prompt', requireAuth, (req, res) => {
+  const {
+    vertical = 'hotel',
+    agentName = '',
+    propertyName = '',
+    compiledContext = '',
+    language = 'en',
+    conversionUrl = '',
+    roomMappings = {},
+    turnCount = 0,
+    conversationState = 'greeting',
+    userProfile = {},
+    navigatedRooms = [],
+    elapsedMinutes = 0,
+    propertyDetails = null
+  } = req.body;
+
+  // Build places map from roomMappings (supports both label-object and flat-string forms)
+  var places = {};
+  if (roomMappings && typeof roomMappings === 'object') {
+    Object.keys(roomMappings).forEach(function(key) {
+      var entry = roomMappings[key];
+      places[key] = typeof entry === 'object' ? (entry.label || key) : entry;
+    });
+  }
+
+  try {
+    var systemPrompt = buildSystemPrompt({
+      vertical,
+      propertyName: agentName || propertyName,
+      places,
+      compiledContext,
+      language,
+      dateTime: new Date().toLocaleString('en-GB', { timeZone: 'Europe/Copenhagen' }),
+      conversationState,
+      userProfile,
+      navigatedRooms,
+      lastRecommendedRoom: null,
+      turnCount,
+      elapsedMinutes,
+      roomMappings,
+      propertyDetails
+    });
+
+    var tools = buildTools({
+      places,
+      vertical
+    });
+
+    res.json({
+      systemPrompt,
+      tools,
+      characterCount: systemPrompt.length,
+      toolCount: tools.length
+    });
+  } catch (e) {
+    console.error('[PREVIEW] Error:', e.message);
+    res.status(500).json({ error: 'Preview failed: ' + e.message });
   }
 });
 

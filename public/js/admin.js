@@ -561,6 +561,12 @@ var sbDemoOpen = false;
 var sbConfigCollapsed = false;
 var sbInputBarOpen = false;
 
+/* ── Property data state (3-source pipeline) ── */
+var sandboxManualData = '';
+var sandboxScrapedData = '';
+var sandboxCompiledContext = '';
+var sandboxActiveDataTab = 'manual';
+
 /* ── VAD Parameters (matches production) ── */
 var VAD_SPEECH_THRESHOLD = 0.015;
 var VAD_SILENCE_MS = 1000;
@@ -775,23 +781,7 @@ function dsCard(label, value) {
     + '</div>';
 }
 
-/* ── Apply default system to sandbox ── */
-function applyDefaultSystem() {
-  var d = PROD_DEFAULTS;
-  var v = document.getElementById('sbVertical').value || 'hotel';
-  // Model
-  var modelSel = document.getElementById('sbModel');
-  if (modelSel) { modelSel.value = d.llm.model; plog('MODEL', _prevModel, d.llm.model, 'from default system'); _prevModel = d.llm.model; }
-  // Temperature
-  var tempSlider = document.getElementById('sbTemp');
-  var tempVal = document.getElementById('sbTempVal');
-  if (tempSlider) { var oldT = tempSlider.value; tempSlider.value = d.llm.temperature; if (tempVal) tempVal.textContent = d.llm.temperature; plog('TEMPERATURE', oldT, d.llm.temperature, 'from default system'); }
-  // System prompt
-  var prompt = d.prompts[v] || d.prompts.hotel;
-  var el = document.getElementById('sbPrompt');
-  if (el) { el.value = prompt; plog('SYSTEM_PROMPT', '', 'default ' + v, 'from default system'); }
-  showToast('Default system applied', 'success');
-}
+/* ── (applyDefaultSystem removed — production uses dynamic prompt generation via agentPersona.js) ── */
 
 function loadSandbox() {
   var c = document.getElementById('page-sandbox');
@@ -799,7 +789,7 @@ function loadSandbox() {
   var html = '<div id="sbKeyBanner"></div>'
     + '<div class="page-label">AGENT BUILDER</div>'
     + '<h1 class="page-heading">Sandbox</h1>'
-    + '<p class="page-sub">Test voice agents with the production pipeline.</p>'
+    + '<p class="page-sub">Test voice agents with the production pipeline. Matches October AI 1:1.</p>'
     + '<div class="sandbox-layout">'
 
     // ═══ ZONE 1: CONFIG PANEL (collapsible) ═══
@@ -814,77 +804,145 @@ function loadSandbox() {
 
     // Load from Tenant
     + '<div class="form-group">'
-    + '<label class="form-label">Load from Tenant <span class="sb-tooltip" data-tip="Load an existing customer\'s full configuration into the sandbox — their Matterport tour, system prompt, property data, room mappings, and vertical. Useful for debugging or testing a specific customer\'s agent setup.">?</span></label>'
+    + '<label class="form-label">Load from Tenant <span class="sb-tooltip" data-tip="Load an existing customer\'s full configuration — Matterport tour, property data, room mappings, vertical, agent name, and language.">?</span></label>'
     + '<select class="form-select" id="sbTenantSelect" onchange="loadTenantData(this.value)"><option value="">— Select a tenant —</option></select>'
     + '</div>'
 
-    // Vertical
-    + '<div class="form-group">'
-    + '<label class="form-label">Vertical <span class="sb-tooltip" data-tip="The business type this agent serves. Determines the default system prompt, conversion logic, and room mapper fields.">?</span></label>'
-    + '<select class="form-select" id="sbVertical" onchange="onVerticalChange(this.value)">'
-    + '<option value="hotel">Hotel</option><option value="education">Education</option><option value="retail">Retail</option>'
-    + '<option value="real_estate_sale">Real Estate (Sale)</option><option value="real_estate_development">Real Estate (Development)</option><option value="other">Other</option></select></div>'
+    // ─── AGENT SETTINGS ───
+    + '<div class="sb-section-header">Agent Settings</div>'
 
-    // Production Reference — always visible
-    + '<div class="prod-ref-box" id="prodRefBox">'
-    + '<div class="prod-ref-content" id="prodRefContent"><span style="color:var(--muted);font-style:italic;font-size:11px">Loading production settings...</span></div>'
+    // Vertical (all 12 production verticals)
+    + '<div class="form-group">'
+    + '<label class="form-label">Vertical <span class="sb-tooltip" data-tip="Business type. Determines system prompt structure, conversion logic, room fields, and tool definitions. Matches production agentPersona.js.">?</span></label>'
+    + '<select class="form-select" id="sbVertical" onchange="onVerticalChange(this.value)">'
+    + '<option value="hotel">Hotel</option>'
+    + '<option value="real_estate_sale">Real Estate (Sale)</option>'
+    + '<option value="real_estate_rental">Real Estate (Rental)</option>'
+    + '<option value="real_estate_development">Real Estate (Development)</option>'
+    + '<option value="development">Development</option>'
+    + '<option value="venue">Venue</option>'
+    + '<option value="showroom">Showroom</option>'
+    + '<option value="retail">Retail</option>'
+    + '<option value="education">Education</option>'
+    + '<option value="museum">Museum</option>'
+    + '<option value="restaurant">Restaurant</option>'
+    + '<option value="other">Other</option>'
+    + '</select></div>'
+
+    // Agent Name
+    + '<div class="form-group">'
+    + '<label class="form-label">Agent Name <span class="sb-tooltip" data-tip="The property/business name shown in the system prompt. In production this comes from the tenant\'s agent_name field.">?</span></label>'
+    + '<input class="form-input" id="sbAgentName" placeholder="e.g. Hotel Nørrebro, DIS Copenhagen">'
     + '</div>'
 
-    // Load Default System button
-    + '<button class="btn btn-outline btn-sm" onclick="applyDefaultSystem()" style="width:100%;margin-bottom:20px">↻ Load Default System</button>'
-
-    // LLM Model
+    // Language
     + '<div class="form-group">'
-    + '<label class="form-label">LLM Model <span class="sb-tooltip" data-tip="The OpenAI model used for generating agent responses. Production uses gpt-5.4-mini. Higher models cost more but may improve quality.">?</span></label>'
-    + '<select class="form-select" id="sbModel" onchange="onModelChange(this.value)"><option value="gpt-5.4-mini">gpt-5.4-mini (production)</option><option value="gpt-4o-mini">gpt-4o-mini</option><option value="gpt-4o">gpt-4o</option><option value="gpt-4-turbo">gpt-4-turbo</option></select></div>'
+    + '<label class="form-label">Language <span class="sb-tooltip" data-tip="The language the agent responds in. Production reads this from tenant settings.">?</span></label>'
+    + '<select class="form-select" id="sbLanguage">'
+    + '<option value="en">English</option>'
+    + '<option value="da">Dansk</option>'
+    + '<option value="de">Deutsch</option>'
+    + '<option value="sv">Svenska</option>'
+    + '<option value="no">Norsk</option>'
+    + '<option value="fi">Suomi</option>'
+    + '<option value="fr">Français</option>'
+    + '<option value="es">Español</option>'
+    + '<option value="it">Italiano</option>'
+    + '<option value="nl">Nederlands</option>'
+    + '<option value="pt">Português</option>'
+    + '<option value="ja">日本語</option>'
+    + '<option value="zh">中文</option>'
+    + '<option value="ko">한국어</option>'
+    + '</select></div>'
 
-    // Temperature
+    // Conversion URL
     + '<div class="form-group">'
-    + '<label class="form-label">Temperature: <span id="sbTempVal">0.7</span> <span class="sb-tooltip" data-tip="Controls response randomness. 0 = deterministic, 1 = creative. Production uses 0.7 for natural but consistent responses.">?</span></label>'
-    + '<input type="range" id="sbTemp" min="0" max="1" step="0.1" value="0.7" style="width:100%" oninput="onTempChange(this.value)"></div>'
+    + '<label class="form-label">Conversion URL <span class="sb-tooltip" data-tip="The booking/contact URL opened when the agent triggers conversion. In production this comes from tenant settings (booking_url).">?</span></label>'
+    + '<input class="form-input" id="sbConversionUrl" placeholder="https://booking.example.com">'
+    + '</div>'
 
-    // System Prompt
-    + '<div class="form-group">'
-    + '<label class="form-label">System Prompt <span class="sb-tooltip" data-tip="The instructions that define the agent\'s personality, knowledge, and behavior. This is sent to the LLM at the start of every conversation.">?</span></label>'
-    + '<textarea class="form-textarea" id="sbPrompt" rows="5" placeholder="Enter system prompt..."></textarea>'
-    + '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">'
-    + '<button class="btn btn-outline btn-sm" onclick="resetPrompt()">Reset to default</button>'
-    + '<button class="btn btn-outline btn-sm" onclick="savePromptAsTemplate()">Save as template</button>'
-    + '</div></div>'
+    // Fixed production values info
+    + '<div class="sb-fixed-info">'
+    + '<span>Model: gpt-5.4-mini</span><span>Temp: 0.7</span><span>Turns: 16</span>'
+    + '</div>'
 
-    // Property Data
-    + '<div class="form-group">'
-    + '<label class="form-label">Property Data <span class="sb-tooltip" data-tip="Business-specific data the agent can reference during conversations — e.g. room types, prices, facilities, policies. Injected into the LLM context alongside the system prompt.">?</span></label>'
-    + '<textarea class="form-textarea" id="sbData" rows="3" placeholder="Business data the agent references..." style="min-height:60px;max-height:300px;resize:vertical"></textarea>'
-    + '<div style="display:flex;gap:8px;margin-top:8px;align-items:center">'
+    // ─── PROPERTY DATA (3-source pipeline) ───
+    + '<div class="sb-section-header">Property Data</div>'
+
+    + '<div class="sb-data-tabs">'
+    + '<button class="sb-data-tab active" data-tab="manual" onclick="switchDataTab(\'manual\')">Manual</button>'
+    + '<button class="sb-data-tab" data-tab="sync" onclick="switchDataTab(\'sync\')">Sync / Upload</button>'
+    + '<button class="sb-data-tab" data-tab="compiled" onclick="switchDataTab(\'compiled\')">Compiled</button>'
+    + '</div>'
+
+    // Tab: Manual data
+    + '<div class="sb-data-panel active" id="sbTabManual">'
+    + '<textarea class="form-textarea" id="sbManualData" rows="4" placeholder="Manually enter property data — room types, prices, policies, amenities..." style="min-height:80px;max-height:300px;resize:vertical" oninput="updateWordCount()"></textarea>'
+    + '</div>'
+
+    // Tab: Sync / Upload
+    + '<div class="sb-data-panel" id="sbTabSync">'
+    + '<div style="margin-bottom:8px">'
+    + '<label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;display:block;margin-bottom:6px">Sync from website</label>'
+    + '<div style="display:flex;gap:8px;align-items:center">'
     + '<input class="form-input" id="sbSyncUrl" placeholder="https://example.com" style="flex:1;min-height:0;padding:7px 12px">'
     + '<button class="btn btn-outline btn-sm" onclick="syncFromURL()" id="sbSyncBtn">Sync</button>'
     + '</div>'
-    + '<div style="display:flex;gap:8px;margin-top:8px;align-items:center">'
+    + '</div>'
+    + '<div style="margin-top:12px">'
+    + '<label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;display:block;margin-bottom:6px">Upload file</label>'
     + '<input type="file" id="sbFileInput" accept=".pdf,.txt,.csv,.json,.md,.xml,.docx" style="display:none" onchange="uploadPropertyFile(this)">'
-    + '<button class="btn btn-outline btn-sm" onclick="document.getElementById(\'sbFileInput\').click()" id="sbUploadBtn" style="flex:1">📄 Upload PDF / file</button>'
-    + '</div></div>'
+    + '<button class="btn btn-outline btn-sm" onclick="document.getElementById(\'sbFileInput\').click()" id="sbUploadBtn" style="width:100%">Upload PDF / file</button>'
+    + '</div>'
+    + '<textarea class="form-textarea" id="sbScrapedData" rows="3" placeholder="Scraped/uploaded data appears here..." style="min-height:60px;max-height:200px;resize:vertical;margin-top:8px" oninput="updateWordCount()"></textarea>'
+    + '</div>'
+
+    // Tab: Compiled context
+    + '<div class="sb-data-panel" id="sbTabCompiled">'
+    + '<div class="sb-compile-status" id="sbCompileStatus">'
+    + '<span style="color:var(--muted);font-size:12px">Not compiled yet. Click "Compile Context" to process data with GPT-4o-mini.</span>'
+    + '</div>'
+    + '<textarea class="form-textarea" id="sbCompiledContext" rows="5" placeholder="Compiled context will appear here after processing..." style="min-height:80px;max-height:300px;resize:vertical" readonly></textarea>'
+    + '<button class="btn btn-outline btn-sm" onclick="compileContext()" id="sbCompileBtn" style="width:100%;margin-top:8px">Compile Context (GPT-4o-mini)</button>'
+    + '</div>'
+
+    // Word count bar
+    + '<div class="sb-word-count" id="sbWordCount">'
+    + '<span id="sbWordCountText">0 words</span>'
+    + '<div class="sb-word-bar"><div class="sb-word-bar-fill" id="sbWordBarFill" style="width:0%"></div></div>'
+    + '</div>'
 
     // Room Mappings (matches production rooms.html)
-    + '<div class="form-group">'
-    + '<label class="form-label">Marked Rooms <span class="sb-tooltip" data-tip="Map rooms in your Matterport tour to names the agent knows. When the agent recommends a room, it uses the Sweep ID to navigate the visitor to that exact location in the 3D tour.">?</span></label>'
+    + '<div class="sb-section-header" style="margin-top:20px">Marked Rooms</div>'
+    + '<div class="form-group" style="margin-top:0">'
     + '<p style="font-size:11px;color:var(--muted);margin-bottom:8px">These are the areas your AI guide knows about</p>'
     + '<div class="room-mapper-howto" id="roomMapperHowto">'
     + '<p style="font-size:12px;color:var(--muted);line-height:1.6;margin:0"><strong style="color:var(--black)">How it works:</strong> Open your tour in a new tab, walk to a room, press <kbd>U</kbd> to copy the link, then click <strong>"+ Add Room"</strong> and paste it.</p>'
-    + '<button class="btn btn-outline btn-sm" onclick="openTourInNewTab()" style="margin-top:8px;width:100%">Open tour in new tab ↗</button>'
+    + '<button class="btn btn-outline btn-sm" onclick="openTourInNewTab()" style="margin-top:8px;width:100%">Open tour in new tab</button>'
     + '</div>'
     + '<div class="room-card-list" id="roomCardList"></div>'
     + '<button class="space-add-btn" onclick="openAddRoomModal()">+ Add Room</button>'
     + '<textarea class="form-textarea" id="sbMappings" rows="0" style="display:none"></textarea>'
     + '</div>'
 
+    // ─── DEMO QUESTIONS ───
+    + '<div class="sb-section-header" style="margin-top:20px">Demo Questions</div>'
+    + '<div class="form-group" style="margin-top:0">'
+    + '<p style="font-size:11px;color:var(--muted);margin-bottom:8px">Quick-try questions shown as chips in the voice overlay</p>'
+    + '<input class="form-input sb-demo-input" id="sbDemoQ1" placeholder="e.g. Can you show me around?">'
+    + '<input class="form-input sb-demo-input" id="sbDemoQ2" placeholder="e.g. What rooms do you have?">'
+    + '<input class="form-input sb-demo-input" id="sbDemoQ3" placeholder="e.g. How much does it cost?">'
+    + '<input class="form-input sb-demo-input" id="sbDemoQ4" placeholder="(optional)">'
+    + '<input class="form-input sb-demo-input" id="sbDemoQ5" placeholder="(optional)">'
+    + '</div>'
+
     // Action buttons
-    + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">'
-    + '<button class="btn btn-dark" onclick="applyAndRestart()" style="flex:1">Apply &amp; Restart Session</button>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">'
+    + '<button class="btn btn-dark" onclick="saveAndStartSession()" style="flex:1">Save &amp; Start Session</button>'
     + '</div>'
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">'
+    + '<button class="btn btn-outline btn-sm" onclick="previewSystemPrompt()" style="flex:1">Preview System Prompt</button>'
     + '<button class="btn btn-outline btn-sm" onclick="saveSandboxConfig()">Save config</button>'
-    + '<button class="btn btn-outline btn-sm" onclick="exportSystemPrompt()">Export prompt</button>'
     + '</div>'
 
     // Persistent Debug Log
@@ -944,13 +1002,11 @@ function loadSandbox() {
     + '<button onclick="sendTextInput()">Send</button>'
     + '</div>'
 
-    // Demo question button
+    // Demo question button (chips populated dynamically)
     + '<button class="sb-demo-btn" id="sbDemoBtn" onclick="toggleDemoPanel()">?</button>'
     + '<div class="sb-demo-panel" id="sbDemoPanel">'
     + '<div class="sb-demo-title">Try asking</div>'
-    + '<button class="sb-demo-chip" onclick="sendDemoQuestion(this)">Can you show me around?</button>'
-    + '<button class="sb-demo-chip" onclick="sendDemoQuestion(this)">What rooms do you have?</button>'
-    + '<button class="sb-demo-chip" onclick="sendDemoQuestion(this)">How much does it cost?</button>'
+    + '<div id="sbDemoChips"></div>'
     + '</div>'
 
     // Latency display
@@ -978,19 +1034,32 @@ function loadSandbox() {
     + '<button class="btn btn-dark btn-sm" onclick="confirmAddRoom()">Add Room</button>'
     + '</div>'
     + '</div>'
+    + '</div>'
+
+    // ═══ PREVIEW PROMPT MODAL ═══
+    + '<div class="room-modal-overlay" id="promptPreviewOverlay" onclick="if(event.target===this)closePromptPreview()">'
+    + '<div class="room-modal" style="max-width:700px;max-height:80vh;overflow:auto">'
+    + '<h3 style="font-family:var(--serif);font-size:22px;font-weight:400;margin-bottom:16px">System Prompt Preview</h3>'
+    + '<div id="promptPreviewMeta" style="font-size:11px;color:var(--muted);margin-bottom:12px"></div>'
+    + '<textarea class="form-textarea" id="promptPreviewText" rows="20" readonly style="font-family:monospace;font-size:11px;min-height:300px"></textarea>'
+    + '<div style="display:flex;gap:8px;margin-top:12px">'
+    + '<button class="btn btn-dark btn-sm" onclick="navigator.clipboard.writeText(document.getElementById(\'promptPreviewText\').value);showToast(\'Copied!\',\'success\')">Copy</button>'
+    + '<button class="btn btn-outline btn-sm" onclick="closePromptPreview()">Close</button>'
+    + '</div>'
+    + '</div>'
     + '</div>';
 
   c.innerHTML = html;
 
   // Init
-  resetPrompt();
   loadTenantDropdown();
   checkAPIKeys();
   initTooltips();
-  loadProductionRef();
   initPlogDaySelect();
   renderPlog();
   renderRoomCards();
+  updateWordCount();
+  populateDemoChips();
 }
 
 /* ── API Key Banner ── */
@@ -1060,40 +1129,181 @@ function loadTour() {
   showToast('Tour loaded', 'success');
 }
 
-/* ── Reset Prompt to Default ── */
-function resetPrompt() {
-  var vertical = document.getElementById('sbVertical');
-  if (!vertical) return;
-  var prompts = {
-    hotel: 'You are a virtual employee for a hotel. You are embedded inside a 3D virtual tour of the property. Your job is to greet visitors, understand what they are looking for, recommend the right room type, and guide them towards making a booking. Be warm, professional, and knowledgeable. Keep responses concise (2-3 sentences max). Ask questions to understand the guest needs.',
-    education: 'You are a virtual employee for an educational institution. You are embedded inside a 3D virtual tour of the campus. Your job is to greet prospective students, answer questions about programs, facilities, and campus life, and guide them towards scheduling a visit or applying. Be enthusiastic and informative. Keep responses concise.',
-    retail: 'You are a virtual employee for a retail showroom. You are embedded inside a 3D virtual tour. Your job is to greet visitors, understand what they are looking for, and guide them towards making a purchase or booking a consultation. Be helpful and knowledgeable. Keep responses concise.',
-    real_estate_sale: 'You are a virtual employee for a real estate agency. You are embedded inside a 3D virtual tour of a property for sale. Highlight key features, answer questions about the property and neighborhood, and guide buyers towards scheduling a viewing. Be professional and informative. Keep responses concise.',
-    real_estate_development: 'You are a virtual employee for a real estate development. You are embedded inside a 3D virtual tour of a new project. Showcase the project, answer questions about units and amenities, and guide buyers towards booking a consultation. Be professional and enthusiastic. Keep responses concise.',
-    other: 'You are a virtual employee embedded inside a 3D virtual tour. Greet visitors, answer their questions, and guide them towards a conversion action. Be helpful and professional. Keep responses concise.'
-  };
-  var el = document.getElementById('sbPrompt');
-  if (el) el.value = prompts[vertical.value] || prompts.other;
+/* ── (resetPrompt removed — production generates prompts dynamically via agentPersona.js) ── */
+
+/* ═══════════════════════════════════════════════════
+   NEW SANDBOX FUNCTIONS — Production-matching pipeline
+   ═══════════════════════════════════════════════════ */
+
+/* ── Data tab switching ── */
+function switchDataTab(tab) {
+  sandboxActiveDataTab = tab;
+  document.querySelectorAll('.sb-data-tab').forEach(function(el) {
+    el.classList.toggle('active', el.getAttribute('data-tab') === tab);
+  });
+  document.getElementById('sbTabManual').classList.toggle('active', tab === 'manual');
+  document.getElementById('sbTabSync').classList.toggle('active', tab === 'sync');
+  document.getElementById('sbTabCompiled').classList.toggle('active', tab === 'compiled');
 }
 
-/* ── Save Prompt as Template ── */
-function savePromptAsTemplate() {
-  var content = document.getElementById('sbPrompt').value;
-  if (!content) { showToast('Prompt is empty', 'error'); return; }
-  var html = '<h2>Save as Template</h2>'
-    + '<div class="form-group"><label class="form-label">Template Name</label><input class="form-input" id="tmplName" placeholder="e.g. Hotel v2 - warm tone"></div>'
-    + '<button class="btn btn-dark" onclick="doSaveTemplate()">Save</button>';
-  showModal(html);
+/* ── Word count bar ── */
+function updateWordCount() {
+  var manual = (document.getElementById('sbManualData') || {}).value || '';
+  var scraped = (document.getElementById('sbScrapedData') || {}).value || '';
+  var combined = (manual + ' ' + scraped).trim();
+  var words = combined ? combined.split(/\s+/).length : 0;
+  var chars = combined.length;
+
+  var textEl = document.getElementById('sbWordCountText');
+  var barEl = document.getElementById('sbWordBarFill');
+  if (textEl) textEl.textContent = words + ' words / ' + chars + ' chars';
+
+  // Production compiled context target is ~2000 tokens (~8000 chars). Show fill relative to that.
+  var pct = Math.min(100, Math.round((chars / 8000) * 100));
+  if (barEl) {
+    barEl.style.width = pct + '%';
+    barEl.style.background = pct > 90 ? 'var(--red)' : pct > 60 ? 'var(--green)' : 'var(--muted)';
+  }
 }
-function doSaveTemplate() {
-  var name = document.getElementById('tmplName').value;
-  if (!name) { showToast('Enter a name', 'error'); return; }
-  var content = document.getElementById('sbPrompt').value;
-  var vertical = document.getElementById('sbVertical').value;
-  api('/api/prompts', { method: 'POST', body: JSON.stringify({ name: name, vertical: vertical, content: content }) }).then(function() {
-    closeModal();
-    showToast('Template saved', 'success');
-  }).catch(function() { showToast('Failed to save', 'error'); });
+
+/* ── Compile Context (GPT-4o-mini, matches production contextCompiler) ── */
+function compileContext() {
+  var manual = (document.getElementById('sbManualData') || {}).value || '';
+  var scraped = (document.getElementById('sbScrapedData') || {}).value || '';
+  var combined = manual;
+  if (manual && scraped) combined = manual + '\n\n--- Scraped Data ---\n\n' + scraped;
+  else if (scraped) combined = scraped;
+
+  if (!combined.trim()) {
+    showToast('No property data to compile. Add data in Manual or Sync tab first.', 'error');
+    return;
+  }
+
+  var btn = document.getElementById('sbCompileBtn');
+  var statusEl = document.getElementById('sbCompileStatus');
+  btn.textContent = 'Compiling...';
+  btn.disabled = true;
+  if (statusEl) statusEl.innerHTML = '<span style="color:var(--muted);font-size:12px">Compiling with GPT-4o-mini...</span>';
+
+  fetch('/admin/compile-context', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-admin-token': TOKEN },
+    body: JSON.stringify({
+      propertyData: combined,
+      propertyName: (document.getElementById('sbAgentName') || {}).value || '',
+      vertical: (document.getElementById('sbVertical') || {}).value || 'hotel',
+      bookingUrl: (document.getElementById('sbConversionUrl') || {}).value || '',
+      roomMappings: localRooms
+    })
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    btn.textContent = 'Compile Context (GPT-4o-mini)';
+    btn.disabled = false;
+    if (data.error) {
+      showToast(data.error, 'error');
+      if (statusEl) statusEl.innerHTML = '<span style="color:var(--red);font-size:12px">Compilation failed: ' + esc(data.error) + '</span>';
+      return;
+    }
+    sandboxCompiledContext = data.compiledContext || '';
+    var ctxEl = document.getElementById('sbCompiledContext');
+    if (ctxEl) ctxEl.value = sandboxCompiledContext;
+    if (statusEl) statusEl.innerHTML = '<span style="color:var(--green);font-size:12px">Compiled: ' + (data.chars || 0) + ' chars in ' + (data.durationMs || 0) + 'ms</span>';
+    plog('COMPILE', '', sandboxCompiledContext.length + ' chars', 'GPT-4o-mini, ' + (data.durationMs || 0) + 'ms');
+    showToast('Context compiled', 'success');
+    // Switch to compiled tab to show result
+    switchDataTab('compiled');
+  }).catch(function(err) {
+    btn.textContent = 'Compile Context (GPT-4o-mini)';
+    btn.disabled = false;
+    if (statusEl) statusEl.innerHTML = '<span style="color:var(--red);font-size:12px">Compilation error</span>';
+    showToast('Failed to compile context', 'error');
+    console.error('[COMPILE]', err);
+  });
+}
+
+/* ── Preview System Prompt (shows what agentPersona would generate) ── */
+function previewSystemPrompt() {
+  var overlay = document.getElementById('promptPreviewOverlay');
+  if (!overlay) return;
+
+  var metaEl = document.getElementById('promptPreviewMeta');
+  var textEl = document.getElementById('promptPreviewText');
+  if (textEl) textEl.value = 'Generating preview...';
+  if (metaEl) metaEl.textContent = '';
+  overlay.classList.add('open');
+
+  // Build the config for preview
+  var manual = (document.getElementById('sbManualData') || {}).value || '';
+  var scraped = (document.getElementById('sbScrapedData') || {}).value || '';
+  var propertyData = manual;
+  if (manual && scraped) propertyData = manual + '\n\n--- Scraped Data ---\n\n' + scraped;
+  else if (scraped) propertyData = scraped;
+
+  fetch('/admin/preview-prompt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-admin-token': TOKEN },
+    body: JSON.stringify({
+      vertical: (document.getElementById('sbVertical') || {}).value || 'hotel',
+      agentName: (document.getElementById('sbAgentName') || {}).value || '',
+      language: (document.getElementById('sbLanguage') || {}).value || 'en',
+      conversionUrl: (document.getElementById('sbConversionUrl') || {}).value || '',
+      compiledContext: sandboxCompiledContext || propertyData,
+      roomMappings: localRooms
+    })
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    if (data.error) {
+      if (textEl) textEl.value = 'Error: ' + data.error;
+      return;
+    }
+    if (textEl) textEl.value = data.systemPrompt || '';
+    if (metaEl) metaEl.textContent = (data.characterCount || 0) + ' chars | ' + (data.toolCount || 0) + ' tools';
+  }).catch(function(err) {
+    if (textEl) textEl.value = 'Failed to generate preview: ' + err.message;
+  });
+}
+
+function closePromptPreview() {
+  var overlay = document.getElementById('promptPreviewOverlay');
+  if (overlay) overlay.classList.remove('open');
+}
+
+/* ── Get Demo Questions from inputs ── */
+function getDemoQuestions() {
+  var qs = [];
+  for (var i = 1; i <= 5; i++) {
+    var el = document.getElementById('sbDemoQ' + i);
+    if (el && el.value.trim()) qs.push(el.value.trim());
+  }
+  return qs;
+}
+
+/* ── Populate demo chips in voice overlay from inputs ── */
+function populateDemoChips() {
+  var container = document.getElementById('sbDemoChips');
+  if (!container) return;
+  var qs = getDemoQuestions();
+  if (qs.length === 0) {
+    // Default demo questions
+    qs = ['Can you show me around?', 'What rooms do you have?', 'How much does it cost?'];
+  }
+  container.innerHTML = qs.map(function(q) {
+    return '<button class="sb-demo-chip" onclick="sendDemoQuestion(this)">' + esc(q) + '</button>';
+  }).join('');
+}
+
+/* ── Save & Start Session (replaces old applyAndRestart) ── */
+function saveAndStartSession() {
+  if (!validateRoomMappings()) return;
+  // Store data state
+  sandboxManualData = (document.getElementById('sbManualData') || {}).value || '';
+  sandboxScrapedData = (document.getElementById('sbScrapedData') || {}).value || '';
+  // Update demo chips
+  populateDemoChips();
+  // Update loading overlay name
+  var nameEl = document.getElementById('sbLoadingName');
+  var agentName = (document.getElementById('sbAgentName') || {}).value || 'AI Concierge';
+  if (nameEl) nameEl.textContent = agentName;
+  plog('SESSION', '', 'start', 'Save & Start Session');
+  startSandboxSession();
 }
 
 /* ── Load from Tenant ── */
@@ -1132,10 +1342,30 @@ function applyTenantData(t) {
     document.getElementById('sbModelId').value = t.matterport_model_id;
     loadTour();
   }
-  // Property data
+  // Agent name
+  var nameEl = document.getElementById('sbAgentName');
+  if (nameEl) nameEl.value = t.agent_name || t.name || '';
+  // Language
+  var langEl = document.getElementById('sbLanguage');
+  if (langEl && t.language) langEl.value = t.language;
+  // Conversion URL
+  var urlEl = document.getElementById('sbConversionUrl');
+  if (urlEl && t.booking_url) urlEl.value = t.booking_url;
+  // Property data → manual data tab
   if (t.property_data) {
-    document.getElementById('sbData').value = typeof t.property_data === 'string' ? t.property_data : JSON.stringify(t.property_data, null, 2);
+    var dataStr = typeof t.property_data === 'string' ? t.property_data : JSON.stringify(t.property_data, null, 2);
+    var manualEl = document.getElementById('sbManualData');
+    if (manualEl) manualEl.value = dataStr;
+    sandboxManualData = dataStr;
     plog('PROPERTY_DATA', '', 'loaded from ' + tenantName);
+  }
+  // Compiled context (if tenant has it)
+  if (t.compiled_context) {
+    sandboxCompiledContext = typeof t.compiled_context === 'string' ? t.compiled_context : JSON.stringify(t.compiled_context, null, 2);
+    var compiledEl = document.getElementById('sbCompiledContext');
+    if (compiledEl) compiledEl.value = sandboxCompiledContext;
+    var statusEl = document.getElementById('sbCompileStatus');
+    if (statusEl) statusEl.innerHTML = '<span style="color:var(--green);font-size:12px">Loaded from tenant</span>';
   }
   // Room mappings — load into space mapper
   if (t.room_mappings) {
@@ -1152,13 +1382,19 @@ function applyTenantData(t) {
       _prevVertical = t.vertical;
     }
   }
-  // Reset prompt for new vertical
-  resetPrompt();
-  loadProductionRef();
+  // Demo questions (if tenant has them)
+  if (t.demo_questions && Array.isArray(t.demo_questions)) {
+    for (var i = 0; i < 5; i++) {
+      var qEl = document.getElementById('sbDemoQ' + (i + 1));
+      if (qEl) qEl.value = t.demo_questions[i] || '';
+    }
+    populateDemoChips();
+  }
+  updateWordCount();
   showToast('Loaded: ' + tenantName, 'success');
 }
 
-/* ── Sync from URL (Jina Reader) ── */
+/* ── Sync from URL (Jina Reader) → scraped data tab ── */
 function syncFromURL() {
   var url = document.getElementById('sbSyncUrl').value.trim();
   if (!url) { showToast('Enter a URL', 'error'); return; }
@@ -1174,8 +1410,11 @@ function syncFromURL() {
     btn.textContent = 'Sync';
     btn.disabled = false;
     if (data.error) { showToast(data.error, 'error'); return; }
-    document.getElementById('sbData').value = data.text || '';
-    plog('SYNC', url, 'property data synced', data.source || 'raw');
+    var scrapedEl = document.getElementById('sbScrapedData');
+    if (scrapedEl) scrapedEl.value = data.text || '';
+    sandboxScrapedData = data.text || '';
+    plog('SYNC', url, 'scraped data synced', data.source || 'raw');
+    updateWordCount();
     showToast('Synced from website', 'success');
   }).catch(function(e) {
     btn.textContent = 'Sync';
@@ -1184,19 +1423,29 @@ function syncFromURL() {
   });
 }
 
-/* ── Upload Property File (PDF, TXT, CSV, etc.) ── */
+/* ── Upload Property File (PDF, TXT, CSV, etc.) → scraped data tab ── */
 function uploadPropertyFile(input) {
   var file = input.files && input.files[0];
   if (!file) return;
   var btn = document.getElementById('sbUploadBtn');
-  var dataEl = document.getElementById('sbData');
-  btn.textContent = 'Extracting text…';
+  var dataEl = document.getElementById('sbScrapedData');
+  btn.textContent = 'Extracting...';
   btn.disabled = true;
 
   function resetBtn() {
-    btn.textContent = '📄 Upload PDF / file';
+    btn.textContent = 'Upload PDF / file';
     btn.disabled = false;
     input.value = '';
+  }
+
+  function setScrapedData(text) {
+    if (dataEl) {
+      dataEl.value = text;
+      dataEl.style.height = 'auto';
+      dataEl.style.height = Math.min(dataEl.scrollHeight, 200) + 'px';
+    }
+    sandboxScrapedData = text;
+    updateWordCount();
   }
 
   // For plain text files: read client-side
@@ -1204,11 +1453,9 @@ function uploadPropertyFile(input) {
   if (['txt', 'csv', 'json', 'md', 'xml'].indexOf(ext) !== -1) {
     var reader = new FileReader();
     reader.onload = function(e) {
-      dataEl.value = e.target.result || '';
-      dataEl.style.height = 'auto';
-      dataEl.style.height = Math.min(dataEl.scrollHeight, 300) + 'px';
+      setScrapedData(e.target.result || '');
       plog('FILE_UPLOAD', '', file.name, 'text file loaded (' + ext + ')');
-      showToast('✓ Loaded: ' + file.name, 'success');
+      showToast('Loaded: ' + file.name, 'success');
       resetBtn();
     };
     reader.onerror = function() {
@@ -1233,16 +1480,12 @@ function uploadPropertyFile(input) {
       showToast('No text found in file — is it a scanned image PDF?', 'error');
       return;
     }
-    dataEl.value = data.text;
-    // Auto-expand textarea to fit content (up to max-height)
-    dataEl.style.height = 'auto';
-    dataEl.style.height = Math.min(dataEl.scrollHeight, 300) + 'px';
-    var info = '✓ ' + file.name;
+    setScrapedData(data.text);
+    var info = file.name;
     if (data.pages) info += ' (' + data.pages + ' pages)';
     if (data.source === 'structured') info += ' — AI-structured';
-    else info += ' — text extracted';
     plog('FILE_UPLOAD', '', file.name, (data.source || 'raw') + (data.pages ? ', ' + data.pages + ' pages' : ''));
-    showToast(info, 'success');
+    showToast('Loaded: ' + info, 'success');
   }).catch(function(err) {
     resetBtn();
     showToast('Failed to extract text from file', 'error');
@@ -1636,39 +1879,13 @@ function exportPlog() {
    CHANGE HANDLERS — Log to persistent debug log
    ══════════════════════════════════════════════════ */
 var _prevVertical = 'hotel';
-var _prevTemp = '0.7';
-var _prevModel = 'gpt-5.4-mini';
 
 function onVerticalChange(val) {
   plog('VERTICAL', _prevVertical, val);
   _prevVertical = val;
-  resetPrompt();
-  loadProductionRef();
 }
 
-function onTempChange(val) {
-  document.getElementById('sbTempVal').textContent = val;
-  // Debounce logging
-  if (onTempChange._timer) clearTimeout(onTempChange._timer);
-  onTempChange._timer = setTimeout(function() {
-    if (val !== _prevTemp) {
-      plog('TEMPERATURE', _prevTemp, val);
-      _prevTemp = val;
-    }
-  }, 500);
-}
-
-function onModelChange(val) {
-  plog('MODEL', _prevModel, val);
-  _prevModel = val;
-}
-
-/* ── Apply & Restart Session ── */
-function applyAndRestart() {
-  if (!validateRoomMappings()) return;
-  plog('SESSION', '', 'restart', 'Apply & Restart clicked');
-  startSandboxSession();
-}
+/* (onTempChange, onModelChange removed — model and temperature are fixed in production) */
 
 /* ── Save Configuration ── */
 function saveSandboxConfig() {
@@ -1682,31 +1899,25 @@ function doSaveConfig() {
   if (!name) { showToast('Enter a name', 'error'); return; }
   api('/api/configs', { method: 'POST', body: JSON.stringify({
     name: name,
-    vertical: document.getElementById('sbVertical').value,
-    temperature: parseFloat(document.getElementById('sbTemp').value),
-    model: document.getElementById('sbModel').value,
-    systemPrompt: document.getElementById('sbPrompt').value,
-    propertyData: document.getElementById('sbData').value,
+    vertical: (document.getElementById('sbVertical') || {}).value || 'hotel',
+    agentName: (document.getElementById('sbAgentName') || {}).value || '',
+    language: (document.getElementById('sbLanguage') || {}).value || 'en',
+    conversionUrl: (document.getElementById('sbConversionUrl') || {}).value || '',
+    manualData: (document.getElementById('sbManualData') || {}).value || '',
+    scrapedData: (document.getElementById('sbScrapedData') || {}).value || '',
+    compiledContext: sandboxCompiledContext || '',
     roomMappings: document.getElementById('sbMappings').value,
-    modelId: document.getElementById('sbModelId').value
+    modelId: (document.getElementById('sbModelId') || {}).value || '',
+    demoQuestions: getDemoQuestions()
   })}).then(function() {
     closeModal();
     showToast('Configuration saved', 'success');
   }).catch(function() { showToast('Failed to save', 'error'); });
 }
 
-/* ── Export System Prompt ── */
+/* ── Export System Prompt (now uses preview modal) ── */
 function exportSystemPrompt() {
-  var prompt = document.getElementById('sbPrompt').value;
-  var vertical = document.getElementById('sbVertical').value;
-  if (!prompt) { showToast('System prompt is empty', 'error'); return; }
-  var html = '<h2>Deploy to October AI</h2>'
-    + '<p style="color:var(--muted);font-size:13px;margin-bottom:16px">Copy this prompt to <code>services/agentPersona.js</code> in the <code>-october-ai</code> repo under the <strong>' + esc(vertical) + '</strong> case statement.</p>'
-    + '<textarea class="form-textarea" id="exportPromptText" rows="14" readonly style="font-family:monospace;font-size:12px">' + esc(prompt) + '</textarea>'
-    + '<div style="display:flex;gap:8px;margin-top:12px">'
-    + '<button class="btn btn-dark" onclick="navigator.clipboard.writeText(document.getElementById(\'exportPromptText\').value);showToast(\'Copied to clipboard!\',\'success\')">Copy to clipboard</button>'
-    + '<button class="btn btn-outline" onclick="closeModal()">Done</button></div>';
-  showModal(html);
+  previewSystemPrompt();
 }
 
 /* ══════════════════════════════════════════════════
@@ -2021,14 +2232,22 @@ function connectWebSocket(url) {
     wsReconnectAttempts = 0;
     console.log('[SANDBOX] WebSocket connected');
 
-    // Send config
+    // Send config (production-matching fields — no model/temp/systemPrompt)
+    var manual = (document.getElementById('sbManualData') || {}).value || '';
+    var scraped = (document.getElementById('sbScrapedData') || {}).value || '';
+    var propertyData = manual;
+    if (manual && scraped) propertyData = manual + '\n\n--- Scraped Data ---\n\n' + scraped;
+    else if (scraped) propertyData = scraped;
+
     var config = {
-      systemPrompt: document.getElementById('sbPrompt').value,
-      vertical: document.getElementById('sbVertical').value,
-      temperature: parseFloat(document.getElementById('sbTemp').value),
-      model: document.getElementById('sbModel').value,
-      propertyData: document.getElementById('sbData').value,
-      roomMappings: document.getElementById('sbMappings').value
+      vertical: (document.getElementById('sbVertical') || {}).value || 'hotel',
+      agentName: (document.getElementById('sbAgentName') || {}).value || '',
+      language: (document.getElementById('sbLanguage') || {}).value || 'en',
+      conversionUrl: (document.getElementById('sbConversionUrl') || {}).value || '',
+      compiledContext: sandboxCompiledContext || '',
+      propertyData: propertyData,
+      roomMappings: (document.getElementById('sbMappings') || {}).value || '{}',
+      demoQuestions: getDemoQuestions()
     };
     sandboxWs.send(JSON.stringify({ type: 'config', config: config }));
 
@@ -2162,7 +2381,7 @@ function connectWebSocket(url) {
         }
       }, 2000);
     } else {
-      addTranscriptMsg('error', 'Connection lost. Click Apply & Restart to reconnect.');
+      addTranscriptMsg('error', 'Connection lost. Click Save & Start Session to reconnect.');
     }
   };
 
@@ -2332,8 +2551,11 @@ function testPromptInSandbox(id) {
   api('/api/prompts/' + id).then(function(p) {
     navigateTo('sandbox');
     setTimeout(function() {
-      document.getElementById('sbPrompt').value = p.content;
-      document.getElementById('sbVertical').value = p.vertical;
+      var vertEl = document.getElementById('sbVertical');
+      if (vertEl && p.vertical) vertEl.value = p.vertical;
+      // Store prompt content as manual data for the agent to reference
+      var manualEl = document.getElementById('sbManualData');
+      if (manualEl && p.content) manualEl.value = p.content;
       showToast('Prompt loaded in sandbox', 'success');
     }, 200);
   });
@@ -2405,18 +2627,24 @@ function createConfig() {
   var notes = document.getElementById('newCfgNotes').value;
   if (!name) { showToast('Name required', 'error'); return; }
 
-  // Grab current sandbox state if available
-  var sbPrompt = document.getElementById('sbPrompt');
-  var sbTemp = document.getElementById('sbTemp');
-  var sbData = document.getElementById('sbData');
+  // Grab current sandbox state if available (production-matching fields)
+  var sbAgentName = document.getElementById('sbAgentName');
+  var sbLanguage = document.getElementById('sbLanguage');
+  var sbConversionUrl = document.getElementById('sbConversionUrl');
+  var sbManualData = document.getElementById('sbManualData');
+  var sbScrapedData = document.getElementById('sbScrapedData');
   var sbMappings = document.getElementById('sbMappings');
 
   api('/api/configs', { method: 'POST', body: JSON.stringify({
     name: name, vertical: vertical, notes: notes,
-    systemPrompt: sbPrompt ? sbPrompt.value : '',
-    temperature: sbTemp ? parseFloat(sbTemp.value) : 0.7,
-    propertyData: sbData ? sbData.value : '',
-    roomMappings: sbMappings ? sbMappings.value : '{}'
+    agentName: sbAgentName ? sbAgentName.value : '',
+    language: sbLanguage ? sbLanguage.value : 'en',
+    conversionUrl: sbConversionUrl ? sbConversionUrl.value : '',
+    manualData: sbManualData ? sbManualData.value : '',
+    scrapedData: sbScrapedData ? sbScrapedData.value : '',
+    compiledContext: sandboxCompiledContext || '',
+    roomMappings: sbMappings ? sbMappings.value : '{}',
+    demoQuestions: getDemoQuestions()
   })}).then(function() {
     closeModal();
     loadConfigurations();
@@ -2428,11 +2656,17 @@ function loadConfigInSandbox(id) {
   api('/api/configs/' + id).then(function(cfg) {
     navigateTo('sandbox');
     setTimeout(function() {
-      if (cfg.systemPrompt) document.getElementById('sbPrompt').value = cfg.systemPrompt;
-      if (cfg.vertical) document.getElementById('sbVertical').value = cfg.vertical;
-      if (cfg.temperature) { document.getElementById('sbTemp').value = cfg.temperature; document.getElementById('sbTempVal').textContent = cfg.temperature; }
-      if (cfg.propertyData) document.getElementById('sbData').value = cfg.propertyData;
-      if (cfg.roomMappings) document.getElementById('sbMappings').value = cfg.roomMappings;
+      if (cfg.vertical) { var el = document.getElementById('sbVertical'); if (el) el.value = cfg.vertical; }
+      if (cfg.agentName) { var el = document.getElementById('sbAgentName'); if (el) el.value = cfg.agentName; }
+      if (cfg.language) { var el = document.getElementById('sbLanguage'); if (el) el.value = cfg.language; }
+      if (cfg.conversionUrl) { var el = document.getElementById('sbConversionUrl'); if (el) el.value = cfg.conversionUrl; }
+      if (cfg.manualData || cfg.propertyData) { var el = document.getElementById('sbManualData'); if (el) el.value = cfg.manualData || cfg.propertyData || ''; }
+      if (cfg.scrapedData) { var el = document.getElementById('sbScrapedData'); if (el) el.value = cfg.scrapedData; }
+      if (cfg.compiledContext) { sandboxCompiledContext = cfg.compiledContext; var el = document.getElementById('sbCompiledContext'); if (el) el.value = cfg.compiledContext; }
+      if (cfg.roomMappings) { var el = document.getElementById('sbMappings'); if (el) el.value = cfg.roomMappings; try { renderSpaces(JSON.parse(cfg.roomMappings)); } catch(e) {} }
+      if (cfg.demoQuestions && Array.isArray(cfg.demoQuestions)) { for (var i = 0; i < 5; i++) { var qEl = document.getElementById('sbDemoQ' + (i + 1)); if (qEl) qEl.value = cfg.demoQuestions[i] || ''; } populateDemoChips(); }
+      if (cfg.modelId) { var el = document.getElementById('sbModelId'); if (el) el.value = cfg.modelId; }
+      updateWordCount();
       showToast('Configuration loaded', 'success');
     }, 200);
   });

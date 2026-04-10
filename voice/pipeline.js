@@ -1,26 +1,24 @@
 /**
- * Voice Pipeline — Streaming Sandbox (matches October AI production architecture)
- * Pipeline version: 2.0
+ * Voice Pipeline — Streaming Sandbox (1:1 match with October AI production)
+ * Pipeline version: 3.0
  *
  * Architecture: STT → streaming LLM → streaming TTS (concurrent)
  * TTS starts playing while LLM is still generating text.
  *
- * Changes from v1:
- *  - Streaming pipeline instead of sequential batch
- *  - Text stream bridge between LLM and TTS
- *  - Currency normalization via ttsNormalize
- *  - Noise filtering via stt.filterNoise
- *  - Echo detection (word-overlap)
- *  - Repetition detection + TTS feed cutoff
- *  - Tool call leak detection (safety-net on top of LLM suppressor)
- *  - Debug timing events with per-turn breakdown
- *  - 5 tools matching production
+ * v3 changes:
+ *  - Uses production agentPersona.js for system prompt generation
+ *  - System prompt regenerated per GPT call with conversation state
+ *  - Fixed model (gpt-5.4-mini) and temperature (0.7) — not configurable
+ *  - Session state tracking: userProfile, navigatedRooms, conversationState
+ *  - Tool calls update session state (matching production pipeline)
+ *  - navigate_to_room uses room_id (not room_name) matching production
  */
 
 var { transcribeAudio, filterNoise } = require('./stt');
-var { streamGPT, buildTools } = require('./llm');
+var { streamGPT } = require('./llm');
 var { streamTTS } = require('./tts');
 var { wrapStreamForTTS } = require('./ttsNormalize');
+var agentPersona = require('../services/agentPersona');
 
 
 /* ═══════════════════════════════════════════════════════════════
@@ -55,35 +53,23 @@ function createTextStream(queue, isDone) {
 
 
 /* ═══════════════════════════════════════════════════════════════
- * Default System Prompts by Vertical
- * ═══════════════════════════════════════════════════════════════ */
-
-function getDefaultPrompt(vertical) {
-  var defaults = {
-    hotel: 'You are a virtual concierge for a hotel. You are embedded inside a 3D virtual tour of the property. Your job is to greet visitors, understand what they are looking for, recommend the right room type, and guide them towards making a booking. Be warm, professional, and knowledgeable. Keep responses concise (2-3 sentences max). Ask questions to understand the guest needs. Always end with a question.',
-    education: 'You are a virtual enrollment advisor for an educational institution. You are embedded inside a 3D virtual tour of the campus. Your job is to greet prospective students, answer questions about programs, facilities, and campus life, and guide them towards scheduling a visit or applying. Be enthusiastic and informative. Keep responses concise.',
-    retail: 'You are a virtual showroom advisor. You are embedded inside a 3D virtual tour. Your job is to greet visitors, understand what they are looking for, highlight relevant products, and guide them towards making a purchase or booking a consultation. Be helpful and knowledgeable. Keep responses concise.',
-    real_estate_sale: 'You are a virtual property advisor. You are embedded inside a 3D virtual tour of a property for sale. Your job is to highlight key features, answer questions about the property, neighborhood, and pricing, and guide interested buyers towards scheduling a viewing. Be professional and informative. Keep responses concise.',
-    real_estate_development: 'You are a virtual project advisor for a real estate development. You are embedded inside a 3D virtual tour of a new development project. Your job is to showcase the project, answer questions about units, amenities, and pricing, and guide interested buyers towards booking a consultation. Be professional and enthusiastic. Keep responses concise.',
-    other: 'You are a virtual employee embedded inside a 3D virtual tour. Your job is to greet visitors, answer their questions, and guide them towards a conversion action. Be helpful and professional. Keep responses concise.'
-  };
-  return defaults[vertical] || defaults.other;
-}
-
-
-/* ═══════════════════════════════════════════════════════════════
  * Session Handler — WebSocket session lifecycle
  * ═══════════════════════════════════════════════════════════════ */
 
 function handleTestSession(ws) {
+  // Config from client (production-matching fields only)
   var config = {
-    systemPrompt: '',
     vertical: 'hotel',
-    temperature: 0.7,
-    model: 'gpt-5.4-mini',
+    agentName: '',
+    language: 'en',
+    conversionUrl: '',
+    compiledContext: '',
     propertyData: '',
-    roomMappings: '{}'
+    roomMappings: '{}',
+    demoQuestions: []
   };
+
+  // Session state (matches production voice/index.js)
   var conversationHistory = [];
   var sessionId = 'session_' + Date.now();
   var isProcessing = false;
@@ -92,6 +78,10 @@ function handleTestSession(ws) {
   var cancelTTS = null;
   var ttsActive = false;
   var conversationState = 'greeting';
+  var userProfile = {};
+  var navigatedRooms = [];
+  var lastRecommendedRoom = null;
+  var sessionStartedAt = Date.now();
 
   console.log('[SANDBOX] New streaming session connected');
 
@@ -110,22 +100,28 @@ function handleTestSession(ws) {
 
         if (msg.type === 'config') {
           config = {
-            systemPrompt: msg.config.systemPrompt || '',
             vertical: msg.config.vertical || 'hotel',
-            temperature: parseFloat(msg.config.temperature) || 0.7,
-            model: msg.config.model || 'gpt-5.4-mini',
+            agentName: msg.config.agentName || '',
+            language: msg.config.language || 'en',
+            conversionUrl: msg.config.conversionUrl || '',
+            compiledContext: msg.config.compiledContext || '',
             propertyData: msg.config.propertyData || '',
-            roomMappings: msg.config.roomMappings || '{}'
+            roomMappings: msg.config.roomMappings || '{}',
+            demoQuestions: msg.config.demoQuestions || []
           };
           conversationHistory = [];
           sessionId = 'session_' + Date.now();
           turnCount = 0;
           lastTranscription = '';
           conversationState = 'greeting';
+          userProfile = {};
+          navigatedRooms = [];
+          lastRecommendedRoom = null;
+          sessionStartedAt = Date.now();
           if (cancelTTS) { cancelTTS(); cancelTTS = null; }
           ttsActive = false;
           isProcessing = false;
-          console.log('[SANDBOX] Config applied — vertical:', config.vertical, 'model:', config.model, 'temperature:', config.temperature);
+          console.log('[SANDBOX] Config applied — vertical:', config.vertical, 'agent:', config.agentName, 'lang:', config.language);
           safeSend({ type: 'config_ack', sessionId: sessionId });
           return;
         }
@@ -136,6 +132,10 @@ function handleTestSession(ws) {
           turnCount = 0;
           lastTranscription = '';
           conversationState = 'greeting';
+          userProfile = {};
+          navigatedRooms = [];
+          lastRecommendedRoom = null;
+          sessionStartedAt = Date.now();
           if (cancelTTS) { cancelTTS(); cancelTTS = null; }
           ttsActive = false;
           isProcessing = false;
@@ -187,6 +187,55 @@ function handleTestSession(ws) {
     if (ws.readyState === 1) {
       ws.send(buffer);
     }
+  }
+
+
+  /* ── Build places map from roomMappings ── */
+  function getPlaces() {
+    var parsedMappings = {};
+    try { parsedMappings = JSON.parse(config.roomMappings || '{}'); } catch (e) {}
+    var places = {};
+    Object.keys(parsedMappings).forEach(function(key) {
+      var entry = parsedMappings[key];
+      places[key] = typeof entry === 'object' ? (entry.label || key) : entry;
+    });
+    return places;
+  }
+
+
+  /* ── Build system prompt using production agentPersona ── */
+  function generateSystemPrompt() {
+    var parsedMappings = {};
+    try { parsedMappings = JSON.parse(config.roomMappings || '{}'); } catch (e) {}
+    var places = getPlaces();
+    var elapsedMinutes = Math.round((Date.now() - sessionStartedAt) / 60000);
+
+    return agentPersona.buildSystemPrompt({
+      vertical: config.vertical,
+      propertyName: config.agentName,
+      places: places,
+      compiledContext: config.compiledContext || config.propertyData || '',
+      language: config.language || 'en',
+      dateTime: new Date().toLocaleString('en-GB', { timeZone: 'Europe/Copenhagen' }),
+      conversationState: conversationState,
+      userProfile: userProfile,
+      navigatedRooms: navigatedRooms,
+      lastRecommendedRoom: lastRecommendedRoom,
+      turnCount: turnCount,
+      elapsedMinutes: elapsedMinutes,
+      roomMappings: parsedMappings,
+      propertyDetails: null
+    });
+  }
+
+
+  /* ── Build tools using production agentPersona ── */
+  function generateTools() {
+    var places = getPlaces();
+    return agentPersona.buildTools({
+      places: places,
+      vertical: config.vertical
+    });
   }
 
 
@@ -265,23 +314,21 @@ function handleTestSession(ws) {
     try {
       conversationHistory.push({ role: 'user', content: text });
 
-      // Trim history to 20 turns (matches production)
-      while (conversationHistory.length > 20) {
+      // Trim history to 16 turns (matches production contextTurns)
+      while (conversationHistory.length > 16) {
         conversationHistory.shift();
       }
 
-      // Build system prompt
-      var systemPrompt = buildSystemPrompt();
+      // Generate system prompt using production agentPersona (regenerated per call)
+      var systemPrompt = generateSystemPrompt();
 
-      // Build tools
-      var parsedMappings = {};
-      try { parsedMappings = JSON.parse(config.roomMappings || '{}'); } catch (e) {}
-      var tools = buildTools(parsedMappings, config.vertical);
+      // Generate tools using production agentPersona
+      var tools = generateTools();
 
       safeSend({ type: 'status', value: 'thinking' });
       var llmStart = Date.now();
 
-      console.log('[SANDBOX] Turn ' + currentTurn + ' — streaming GPT (' + config.model + ', temp=' + config.temperature + ')');
+      console.log('[SANDBOX] Turn ' + currentTurn + ' — streaming GPT (gpt-5.4-mini, temp=0.7, state=' + conversationState + ')');
 
       // Run streaming GPT + concurrent TTS
       var result = await runStreamingTurn(systemPrompt, tools, timings, llmStart);
@@ -303,7 +350,7 @@ function handleTestSession(ws) {
           });
 
           var followStart = Date.now();
-          var followResult = await runStreamingTurn(systemPrompt, tools, timings, followStart);
+          var followResult = await runStreamingTurn(generateSystemPrompt(), tools, timings, followStart);
           timings.llm += followResult.llmMs;
           timings.tts = followResult.ttsMs;
           result.text = followResult.text;
@@ -331,8 +378,8 @@ function handleTestSession(ws) {
         llmFirstTokens: responseText.substring(0, 80),
         ttsMs: timings.tts || 0,
         totalMs: timings.total,
-        temperature: config.temperature,
-        model: config.model,
+        temperature: 0.7,
+        model: 'gpt-5.4-mini',
         toolsCalled: toolsUsed,
         state: conversationState
       });
@@ -385,8 +432,8 @@ function handleTestSession(ws) {
           {
             systemPrompt: systemPrompt,
             messages: conversationHistory,
-            model: config.model,
-            temperature: config.temperature,
+            model: 'gpt-5.4-mini',
+            temperature: 0.7,
             tools: tools,
             maxTokens: 200
           },
@@ -537,37 +584,49 @@ function handleTestSession(ws) {
   }
 
 
-  /* ── Tool Call Handler ── */
+  /* ── Tool Call Handler (matches production pipeline.js handleToolCall) ── */
   function handleToolCall(toolName, args, roomMappings) {
     console.log('[SANDBOX] Tool call:', toolName, JSON.stringify(args));
 
     if (toolName === 'navigate_to_room') {
+      // Production uses room_id (the key in roomMappings), not room_name
+      var roomId = args.room_id || '';
+      var entry = roomMappings[roomId];
       var sweepId = null;
-      var roomName = (args.room_name || '').toLowerCase();
-      if (roomMappings) {
-        for (var key in roomMappings) {
-          var val = roomMappings[key];
-          var label = (typeof val === 'string') ? val : (val.label || key);
-          if (label.toLowerCase().includes(roomName) || roomName.includes(label.toLowerCase())) {
-            sweepId = (typeof val === 'string') ? key : (val.sweepId || val.sweep_id || key);
-            break;
-          }
-        }
+      var roomLabel = roomId;
+
+      if (entry) {
+        sweepId = (typeof entry === 'object') ? (entry.sweepId || entry.sweep_id) : null;
+        roomLabel = (typeof entry === 'object') ? (entry.label || roomId) : entry;
       }
-      safeSend({ type: 'navigate', sweepId: sweepId, roomName: args.room_name });
+
+      // Track navigated rooms (matching production)
+      if (roomId && navigatedRooms.indexOf(roomId) === -1) {
+        navigatedRooms.push(roomId);
+      }
+      lastRecommendedRoom = roomId;
+
+      safeSend({ type: 'navigate', sweepId: sweepId, roomName: roomLabel, roomId: roomId });
       if (sweepId) {
-        return { success: true, message: 'Navigating the tour to ' + args.room_name };
+        return { success: true, message: 'Navigating the tour to ' + roomLabel };
       } else {
-        return { success: false, message: 'Room not found in tour mappings: ' + args.room_name };
+        return { success: false, message: 'Room not found in tour mappings: ' + roomId };
       }
     }
 
     if (toolName === 'trigger_conversion') {
-      safeSend({ type: 'conversion', reason: args.reason });
+      // Update conversation state to closing (matching production)
+      conversationState = 'closing';
+      safeSend({ type: 'conversion', reason: args.message || args.reason });
+      safeSend({ type: 'state_change', state: 'closing', reason: 'conversion triggered' });
       return { success: true, message: 'Booking page opened for visitor' };
     }
 
     if (toolName === 'update_user_profile') {
+      // Track user profile (matching production)
+      if (args.field && args.value) {
+        userProfile[args.field] = args.value;
+      }
       safeSend({ type: 'profile_update', field: args.field, value: args.value });
       console.log('[SANDBOX] Profile update:', args.field, '=', args.value);
       return { success: true, message: 'Noted: ' + args.field + ' = ' + args.value };
@@ -592,42 +651,11 @@ function handleTestSession(ws) {
   }
 
 
-  /* ── Build System Prompt ── */
-  function buildSystemPrompt() {
-    var prompt = config.systemPrompt || getDefaultPrompt(config.vertical);
-
-    if (config.propertyData) {
-      prompt += '\n\n--- PROPERTY DATA ---\n' + config.propertyData;
-    }
-
-    if (config.roomMappings && config.roomMappings !== '{}') {
-      try {
-        var mappings = JSON.parse(config.roomMappings);
-        var keys = Object.keys(mappings);
-        if (keys.length > 0) {
-          var roomList = keys.map(function (key) {
-            var val = mappings[key];
-            var label = (typeof val === 'string') ? val : (val.label || key);
-            return '- ' + label;
-          }).join('\n');
-          prompt += '\n\n--- AVAILABLE ROOMS/SPACES ---\nYou can navigate the virtual tour to show these spaces:\n' + roomList;
-          prompt += '\nUse the navigate_to_room tool when the visitor wants to see a specific room or when you want to recommend one.';
-        }
-      } catch (e) {}
-    }
-
-    prompt += '\n\nIMPORTANT: Keep responses concise (2-3 sentences max). You are having a real-time voice conversation. Always include spoken text AND tool calls in the same response — never return only a tool call without text.';
-    prompt += '\nConversation state: ' + conversationState + ' | Turn: ' + turnCount;
-
-    return prompt;
-  }
-
-
   ws.on('close', function () {
-    console.log('[SANDBOX] Session ended:', sessionId, '— Turns:', turnCount);
+    console.log('[SANDBOX] Session ended:', sessionId, '— Turns:', turnCount, '— State:', conversationState);
     if (cancelTTS) { cancelTTS(); cancelTTS = null; }
   });
 }
 
 
-module.exports = { handleTestSession, getDefaultPrompt };
+module.exports = { handleTestSession };
