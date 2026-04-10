@@ -2052,7 +2052,12 @@ function sbGetPlaybackGain() {
 function sbPlayPCM16Chunk(pcm16Buffer) {
   try {
     var ctx = sbEnsureAudioContext();
-    if (ctx.state !== 'running') { try { ctx.resume(); } catch(e) {} }
+    if (ctx.state !== 'running') {
+      try { ctx.resume(); } catch(e) {}
+      if (ctx.state !== 'running') {
+        console.warn('[AUDIO] ✗ AudioContext is ' + ctx.state + ' — chunk dropped. Click anywhere on the page to unlock audio.');
+      }
+    }
 
     var int16 = new Int16Array(pcm16Buffer);
     var float32 = new Float32Array(int16.length);
@@ -2271,6 +2276,10 @@ function connectWebSocket(url) {
   sandboxWs.onmessage = function(event) {
     // Binary = PCM16 audio chunk → play immediately (gapless)
     if (event.data instanceof ArrayBuffer) {
+      window.__sbAudioChunkCount = (window.__sbAudioChunkCount || 0) + 1;
+      if (window.__sbAudioChunkCount === 1) {
+        console.log('[AUDIO] ✓ first binary chunk received, bytes=' + event.data.byteLength + ' ctx.state=' + (sbAudioContext && sbAudioContext.state));
+      }
       // Suppress VAD on first audio byte (echo suppression)
       if (!sbVadSuppressed) {
         sbVadSuppressed = true;
@@ -2281,6 +2290,17 @@ function connectWebSocket(url) {
       sbAgentStatus = 'speaking';
       sbRefreshUI();
       sbPlayPCM16Chunk(event.data);
+      return;
+    }
+
+    // Non-ArrayBuffer binary (e.g. Blob) — handle gracefully
+    if (event.data instanceof Blob) {
+      console.warn('[AUDIO] ✗ received Blob instead of ArrayBuffer — binaryType misconfigured');
+      event.data.arrayBuffer().then(function(buf) {
+        sbAgentStatus = 'speaking';
+        sbRefreshUI();
+        sbPlayPCM16Chunk(buf);
+      });
       return;
     }
 
