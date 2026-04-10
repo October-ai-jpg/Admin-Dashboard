@@ -2423,13 +2423,26 @@ function handleNavigateEvent(msg) {
 /* ── View Mode (floorplan/dollhouse/inside) ── */
 function handleViewModeEvent(msg) {
   var iframe = document.querySelector('#sbTourContainer iframe');
-  if (!iframe) return;
+  if (!iframe) {
+    console.warn('[ViewMode] ✗ no iframe in #sbTourContainer — load a tour first');
+    addTranscriptMsg('system', '⚠ Cannot switch view: load a tour first');
+    return;
+  }
 
   var modelId = (document.getElementById('sbModelId').value || '').trim();
+  if (!modelId) {
+    console.warn('[ViewMode] ✗ sbModelId input is empty');
+    addTranscriptMsg('system', '⚠ Cannot switch view: no model ID');
+    return;
+  }
+
   var mode = msg.mode;
   var base = 'https://my.matterport.com/show/?m=' + encodeURIComponent(modelId) + '&play=1&qs=1';
   if (mode === 'floorplan') base += '&f=1&fp=1';
   else if (mode === 'dollhouse') base += '&dh=1';
+
+  console.log('[ViewMode] → ' + mode + ' (model=' + modelId + ') url=' + base);
+  addTranscriptMsg('system', 'Switching to ' + mode + ' view…');
 
   var fadeEl = document.getElementById('sbFade');
   if (fadeEl) {
@@ -2438,6 +2451,7 @@ function handleViewModeEvent(msg) {
       iframe.src = base;
       iframe.addEventListener('load', function onLoad() {
         iframe.removeEventListener('load', onLoad);
+        console.log('[ViewMode] ✓ iframe reloaded in ' + mode + ' mode');
         setTimeout(function() { fadeEl.classList.remove('active'); }, 400);
       }, { once: true });
       setTimeout(function() { fadeEl.classList.remove('active'); }, 4000);
@@ -2445,7 +2459,6 @@ function handleViewModeEvent(msg) {
   } else {
     iframe.src = base;
   }
-  addTranscriptMsg('system', 'View mode: ' + mode);
 }
 
 /* ═══════════════════════════════════════════════
