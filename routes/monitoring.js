@@ -463,10 +463,15 @@ module.exports = function(pool) {
      ═══════════════════════════════════════ */
   router.get('/tenants', async (req, res) => {
     try {
+      // Production schema uses t.model_id (Matterport model id). Alias it as
+      // matterport_model_id so the existing admin.js client code keeps working.
       const result = await query(`
         SELECT t.id, t.name, t.agent_name, t.property_data, t.room_mappings,
-               t.matterport_model_id, t.hotel_url,
-               COALESCE(t.conversion_url, t.booking_url) as conversion_url,
+               t.model_id AS matterport_model_id, t.hotel_url,
+               COALESCE(t.conversion_url, t.booking_url) AS conversion_url,
+               COALESCE(t.language, 'en') AS language,
+               t.compiled_context,
+               t.property_details,
                cl.vertical
         FROM tenants t
         LEFT JOIN clients cl ON cl.id = t.client_id
@@ -474,7 +479,8 @@ module.exports = function(pool) {
       `);
       res.json(result.rows);
     } catch(e) {
-      // If matterport_model_id column doesn't exist, retry without it
+      console.error('Tenants query error:', e.message);
+      // Minimal fallback — drop any columns that may be missing in dev DBs
       try {
         const fallback = await query(`
           SELECT t.id, t.name, t.agent_name, t.property_data, t.room_mappings,
@@ -485,7 +491,7 @@ module.exports = function(pool) {
         `);
         res.json(fallback.rows);
       } catch(e2) {
-        console.error('Tenants query error:', e2.message);
+        console.error('Tenants fallback query error:', e2.message);
         res.json([]);
       }
     }

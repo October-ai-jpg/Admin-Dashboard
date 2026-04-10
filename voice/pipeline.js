@@ -1,46 +1,35 @@
 /**
- * Voice Pipeline — Streaming Sandbox (1:1 match with October AI production)
- * Pipeline version: 3.0
+ * voice/pipeline.js — Orchestrates: STT → LLM → TTS for one turn
  *
- * Architecture: STT → streaming LLM → streaming TTS (concurrent)
- * TTS starts playing while LLM is still generating text.
- *
- * v3 changes:
- *  - Uses production agentPersona.js for system prompt generation
- *  - System prompt regenerated per GPT call with conversation state
- *  - Fixed model (gpt-5.4-mini) and temperature (0.7) — not configurable
- *  - Session state tracking: userProfile, navigatedRooms, conversationState
- *  - Tool calls update session state (matching production pipeline)
- *  - navigate_to_room uses room_id (not room_name) matching production
+ * Ported 1:1 from production (platform/voice/pipeline.js).
  */
 
-var { transcribeAudio, filterNoise } = require('./stt');
-var { streamGPT } = require('./llm');
-var { streamTTS } = require('./tts');
-var { wrapStreamForTTS } = require('./ttsNormalize');
-var agentPersona = require('../services/agentPersona');
+const { transcribeAudio, filterNoise } = require("./stt");
+const { streamGPT } = require("./llm");
+const { streamTTS } = require("../services/tts");
+const { transitionState } = require("./session");
+const { wrapStreamForTTS } = require("./ttsNormalize");
+const { logMessage, logConversion } = require("../routes/analytics");
+const { query } = require("../db/index");
 
-
-/* ═══════════════════════════════════════════════════════════════
- * Text Stream Bridge — event-driven between GPT and TTS
- * (matches production pipeline.js createTextStream)
- * ═══════════════════════════════════════════════════════════════ */
-
+/**
+ * Event-driven text stream bridge between GPT and TTS.
+ */
 function createTextStream(queue, isDone) {
-  var waitResolve = null;
-  var stream = {
-    push: function (chunk) {
+  let waitResolve = null;
+  const stream = {
+    push(chunk) {
       queue.push(chunk);
       if (waitResolve) { waitResolve(); waitResolve = null; }
     },
-    finish: function () {
+    finish() {
       if (waitResolve) { waitResolve(); waitResolve = null; }
     },
-    [Symbol.asyncIterator]: function () {
+    [Symbol.asyncIterator]() {
       return {
-        next: async function () {
+        async next() {
           while (queue.length === 0 && !isDone()) {
-            await new Promise(function (r) { waitResolve = r; });
+            await new Promise(r => { waitResolve = r; });
           }
           if (queue.length > 0) return { value: queue.shift(), done: false };
           return { value: undefined, done: true };
@@ -51,611 +40,569 @@ function createTextStream(queue, isDone) {
   return stream;
 }
 
-
-/* ═══════════════════════════════════════════════════════════════
- * Session Handler — WebSocket session lifecycle
- * ═══════════════════════════════════════════════════════════════ */
-
-function handleTestSession(ws) {
-  // Config from client (production-matching fields only)
-  var config = {
-    vertical: 'hotel',
-    agentName: '',
-    language: 'en',
-    conversionUrl: '',
-    compiledContext: '',
-    propertyData: '',
-    roomMappings: '{}',
-    demoQuestions: []
+/**
+ * Handle a tool call from GPT.
+ */
+function handleToolCall(toolName, args, session, clientWs) {
+  const send = (data) => {
+    try { if (clientWs.readyState === 1) clientWs.send(JSON.stringify(data)); } catch (e) {}
   };
 
-  // Session state (matches production voice/index.js)
-  var conversationHistory = [];
-  var sessionId = 'session_' + Date.now();
-  var isProcessing = false;
-  var turnCount = 0;
-  var lastTranscription = '';
-  var cancelTTS = null;
-  var ttsActive = false;
-  var conversationState = 'greeting';
-  var userProfile = {};
-  var navigatedRooms = [];
-  var lastRecommendedRoom = null;
-  var sessionStartedAt = Date.now();
-
-  console.log('[SANDBOX] New streaming session connected');
-
-  ws.on('message', async function (data) {
-    try {
-      // Detect JSON vs binary audio
-      var isJSON = false;
-      if (typeof data === 'string') {
-        isJSON = true;
-      } else if (Buffer.isBuffer(data) && data.length > 0 && data[0] === 0x7b) {
-        isJSON = true;
+  switch (toolName) {
+    case "navigate_to_room": {
+      const roomId = args.room_id;
+      if (!roomId || !session.places[roomId]) break;
+      const label = typeof session.places[roomId] === "object"
+        ? session.places[roomId].label : session.places[roomId];
+      if (!session.recommendedRooms.includes(roomId)) session.recommendedRooms.push(roomId);
+      session.lastRecommendedRoom = roomId;
+      session.navigatedRooms.push(roomId);
+      session.toolsUsed.navigate_to_room = (session.toolsUsed.navigate_to_room || 0) + 1;
+      send({ type: "navigate", roomId, label });
+      console.log(`[Pipeline] navigate_to_room: ${roomId} (${label})`);
+      if (session.conversationId) {
+        logConversion(session.tenantId, session.conversationId, "navigation", { roomId, reason: args.reason }).catch(() => {});
+        // Track rooms shown
+        query(
+          `UPDATE conversations SET rooms_shown = COALESCE(rooms_shown, '[]'::jsonb) || $1::jsonb WHERE id = $2`,
+          [JSON.stringify([roomId]), session.conversationId]
+        ).catch(() => {});
       }
-
-      if (isJSON) {
-        var msg = JSON.parse(data.toString());
-
-        if (msg.type === 'config') {
-          config = {
-            vertical: msg.config.vertical || 'hotel',
-            agentName: msg.config.agentName || '',
-            language: msg.config.language || 'en',
-            conversionUrl: msg.config.conversionUrl || '',
-            compiledContext: msg.config.compiledContext || '',
-            propertyData: msg.config.propertyData || '',
-            roomMappings: msg.config.roomMappings || '{}',
-            demoQuestions: msg.config.demoQuestions || []
-          };
-          conversationHistory = [];
-          sessionId = 'session_' + Date.now();
-          turnCount = 0;
-          lastTranscription = '';
-          conversationState = 'greeting';
-          userProfile = {};
-          navigatedRooms = [];
-          lastRecommendedRoom = null;
-          sessionStartedAt = Date.now();
-          if (cancelTTS) { cancelTTS(); cancelTTS = null; }
-          ttsActive = false;
-          isProcessing = false;
-          console.log('[SANDBOX] Config applied — vertical:', config.vertical, 'agent:', config.agentName, 'lang:', config.language);
-          safeSend({ type: 'config_ack', sessionId: sessionId });
-          return;
-        }
-
-        if (msg.type === 'reset') {
-          conversationHistory = [];
-          sessionId = 'session_' + Date.now();
-          turnCount = 0;
-          lastTranscription = '';
-          conversationState = 'greeting';
-          userProfile = {};
-          navigatedRooms = [];
-          lastRecommendedRoom = null;
-          sessionStartedAt = Date.now();
-          if (cancelTTS) { cancelTTS(); cancelTTS = null; }
-          ttsActive = false;
-          isProcessing = false;
-          safeSend({ type: 'reset_ack', sessionId: sessionId });
-          return;
-        }
-
-        if (msg.type === 'text_input') {
-          if (isProcessing) {
-            safeSend({ type: 'error', message: 'Still processing previous input — please wait.' });
-            return;
-          }
-          safeSend({ type: 'transcript', role: 'user', text: msg.text });
-          await processUserInput(msg.text);
-          return;
-        }
-
-        if (msg.type === 'interrupt') {
-          if (cancelTTS) {
-            cancelTTS();
-            cancelTTS = null;
-          }
-          ttsActive = false;
-          isProcessing = false;
-          safeSend({ type: 'status', value: 'idle' });
-          return;
-        }
-
-        return;
-      }
-
-      // Binary data = PCM16 audio from VAD (24kHz)
-      if (Buffer.isBuffer(data) && data.length > 200 && !isProcessing && !ttsActive) {
-        await processAudio(data);
-      }
-    } catch (e) {
-      console.error('[SANDBOX] WS message error:', e.message);
-      safeSend({ type: 'error', message: e.message });
+      break;
     }
-  });
-
-  function safeSend(obj) {
-    if (ws.readyState === 1) {
-      ws.send(typeof obj === 'string' ? obj : JSON.stringify(obj));
-    }
-  }
-
-  function safeSendBinary(buffer) {
-    if (ws.readyState === 1) {
-      ws.send(buffer);
-    }
-  }
-
-
-  /* ── Build places map from roomMappings ── */
-  function getPlaces() {
-    var parsedMappings = {};
-    try { parsedMappings = JSON.parse(config.roomMappings || '{}'); } catch (e) {}
-    var places = {};
-    Object.keys(parsedMappings).forEach(function(key) {
-      var entry = parsedMappings[key];
-      places[key] = typeof entry === 'object' ? (entry.label || key) : entry;
-    });
-    return places;
-  }
-
-
-  /* ── Build system prompt using production agentPersona ── */
-  function generateSystemPrompt() {
-    var parsedMappings = {};
-    try { parsedMappings = JSON.parse(config.roomMappings || '{}'); } catch (e) {}
-    var places = getPlaces();
-    var elapsedMinutes = Math.round((Date.now() - sessionStartedAt) / 60000);
-
-    return agentPersona.buildSystemPrompt({
-      vertical: config.vertical,
-      propertyName: config.agentName,
-      places: places,
-      compiledContext: config.compiledContext || config.propertyData || '',
-      language: config.language || 'en',
-      dateTime: new Date().toLocaleString('en-GB', { timeZone: 'Europe/Copenhagen' }),
-      conversationState: conversationState,
-      userProfile: userProfile,
-      navigatedRooms: navigatedRooms,
-      lastRecommendedRoom: lastRecommendedRoom,
-      turnCount: turnCount,
-      elapsedMinutes: elapsedMinutes,
-      roomMappings: parsedMappings,
-      propertyDetails: null
-    });
-  }
-
-
-  /* ── Build tools using production agentPersona ── */
-  function generateTools() {
-    var places = getPlaces();
-    return agentPersona.buildTools({
-      places: places,
-      vertical: config.vertical
-    });
-  }
-
-
-  /* ── STT Processing ── */
-  async function processAudio(audioBuffer) {
-    if (isProcessing) return;
-    isProcessing = true;
-    var timings = {};
-
-    try {
-      safeSend({ type: 'status', value: 'transcribing' });
-      var sttStart = Date.now();
-      var sttResult = await transcribeAudio(audioBuffer);
-      timings.stt = Date.now() - sttStart;
-
-      var transcript = sttResult.text;
-      var confidence = sttResult.confidence;
-
-      console.log('[SANDBOX] STT: "' + transcript + '" (' + timings.stt + 'ms, conf=' + confidence.toFixed(2) + ')');
-
-      // Noise filtering (matches production)
-      var filterResult = filterNoise(transcript, lastTranscription, confidence);
-      if (filterResult.filtered) {
-        console.log('[SANDBOX] Filtered (' + filterResult.reason + '): "' + transcript + '"');
-        safeSend({ type: 'status', value: 'idle' });
-        isProcessing = false;
-        return;
-      }
-
-      var cleanTranscript = filterResult.text;
-
-      // Echo detection (matches production)
-      var lastAssistantMsg = null;
-      for (var i = conversationHistory.length - 1; i >= 0; i--) {
-        if (conversationHistory[i].role === 'assistant') {
-          lastAssistantMsg = conversationHistory[i];
-          break;
+    case "trigger_conversion": {
+      session.toolsUsed.trigger_conversion = (session.toolsUsed.trigger_conversion || 0) + 1;
+      transitionState(session, "closing");
+      // Retail: use productUrl from last recommended room if available
+      var convUrl = session.conversionUrl;
+      if ((session.vertical === "retail" || session.vertical === "showroom") && session.lastRecommendedRoom) {
+        var roomData = session.roomMappings[session.lastRecommendedRoom];
+        if (roomData && roomData.productUrl) {
+          convUrl = roomData.productUrl;
+          console.log("[Pipeline] Retail: using productUrl from room", session.lastRecommendedRoom);
         }
       }
-      if (lastAssistantMsg) {
-        var assistantWords = lastAssistantMsg.content.toLowerCase().split(/\s+/).slice(0, 15).join(' ');
-        var userWords = cleanTranscript.toLowerCase().split(/\s+/).slice(0, 15).join(' ');
-        var aSet = {};
-        assistantWords.split(' ').forEach(function (w) { aSet[w] = true; });
-        var uWords = userWords.split(' ');
-        var overlap = uWords.filter(function (w) { return aSet[w]; }).length;
-        if (uWords.length >= 3 && overlap / uWords.length > 0.6) {
-          console.log('[SANDBOX] Echo detected (' + overlap + '/' + uWords.length + ' overlap)');
-          safeSend({ type: 'status', value: 'idle' });
-          isProcessing = false;
-          return;
+      send({ type: "conversion", url: convUrl, message: args.message || "" });
+      console.log("[Pipeline] trigger_conversion:", args.message);
+      if (session.conversationId) {
+        logConversion(session.tenantId, session.conversationId, "booking_click", { message: args.message, source: "gpt_function" }).catch(() => {});
+        // Track rooms clicked (the last recommended room)
+        var clickedRoom = session.lastRecommendedRoom || "unknown";
+        query(
+          `UPDATE conversations SET rooms_clicked = COALESCE(rooms_clicked, '[]'::jsonb) || $1::jsonb WHERE id = $2`,
+          [JSON.stringify([clickedRoom]), session.conversationId]
+        ).catch(() => {});
+      }
+      break;
+    }
+    case "update_user_profile": {
+      const { field, value } = args;
+      if (field && session.userProfile.hasOwnProperty(field)) {
+        if (field === "preferences" && Array.isArray(session.userProfile.preferences)) {
+          session.userProfile.preferences.push(value);
+        } else {
+          session.userProfile[field] = value;
+        }
+        console.log(`[Pipeline] update_user_profile: ${field} = ${value}`);
+        // Persist contact info on conversation row
+        if (session.conversationId && ["name", "email", "phone"].includes(field) && value) {
+          var col = field === "name" ? "guest_name" : field === "email" ? "guest_email" : "guest_phone";
+          query(`UPDATE conversations SET ${col} = $1 WHERE id = $2`, [value, session.conversationId]).catch(() => {});
         }
       }
-
-      lastTranscription = cleanTranscript;
-      safeSend({ type: 'transcript', role: 'user', text: cleanTranscript });
-      safeSend({ type: 'status', value: 'thinking' });
-      await processUserInput(cleanTranscript, timings);
-    } catch (e) {
-      console.error('[SANDBOX] STT error:', e.message);
-      safeSend({ type: 'error', message: 'Speech-to-text error: ' + e.message });
-      safeSend({ type: 'status', value: 'idle' });
-      isProcessing = false;
+      break;
     }
-  }
-
-
-  /* ── Streaming LLM + TTS Processing ── */
-  async function processUserInput(text, timings) {
-    if (!timings) timings = {};
-    isProcessing = true;
-    turnCount++;
-    var currentTurn = turnCount;
-    var toolsUsed = [];
-
-    try {
-      conversationHistory.push({ role: 'user', content: text });
-
-      // Trim history to 16 turns (matches production contextTurns)
-      while (conversationHistory.length > 16) {
-        conversationHistory.shift();
-      }
-
-      // Generate system prompt using production agentPersona (regenerated per call)
-      var systemPrompt = generateSystemPrompt();
-
-      // Generate tools using production agentPersona
-      var tools = generateTools();
-
-      safeSend({ type: 'status', value: 'thinking' });
-      var llmStart = Date.now();
-
-      console.log('[SANDBOX] Turn ' + currentTurn + ' — streaming GPT (gpt-5.4-mini, temp=0.7, state=' + conversationState + ')');
-
-      // Run streaming GPT + concurrent TTS
-      var result = await runStreamingTurn(systemPrompt, tools, timings, llmStart);
-
-      timings.llm = result.llmMs;
-      timings.tts = result.ttsMs;
-
-      // Handle tool calls — if GPT returned tools but no text, do follow-up
-      if (result.hadToolCalls) {
-        for (var i = 0; i < result.toolResults.length; i++) {
-          toolsUsed.push(result.toolResults[i]);
-        }
-
-        if (!result.text.trim()) {
-          console.log('[SANDBOX] Tool-only response — follow-up GPT for spoken reply');
-          conversationHistory.push({
-            role: 'user',
-            content: '[Tools executed. Now respond to the visitor naturally based on what you just learned/did. Do NOT call any tools again.]'
-          });
-
-          var followStart = Date.now();
-          var followResult = await runStreamingTurn(generateSystemPrompt(), tools, timings, followStart);
-          timings.llm += followResult.llmMs;
-          timings.tts = followResult.ttsMs;
-          result.text = followResult.text;
-        }
-      }
-
-      // Store assistant response in history
-      var responseText = result.text || 'I apologize, I could not generate a response.';
-      conversationHistory.push({ role: 'assistant', content: responseText });
-      safeSend({ type: 'transcript', role: 'assistant', text: responseText });
-
-      // Wait for TTS to finish before going idle
-      if (!ttsActive) {
-        safeSend({ type: 'status', value: 'idle' });
-      }
-
-      // Debug timing event
-      timings.total = (timings.stt || 0) + (timings.llm || 0) + (timings.tts || 0);
-      safeSend({
-        type: 'debug',
-        turn: currentTurn,
-        sttMs: timings.stt || 0,
-        sttText: text,
-        llmMs: timings.llm || 0,
-        llmFirstTokens: responseText.substring(0, 80),
-        ttsMs: timings.tts || 0,
-        totalMs: timings.total,
-        temperature: 0.7,
-        model: 'gpt-5.4-mini',
-        toolsCalled: toolsUsed,
-        state: conversationState
-      });
-
-    } catch (e) {
-      console.error('[SANDBOX] Processing error:', e.message);
-      safeSend({ type: 'error', message: e.message });
-      safeSend({ type: 'status', value: 'idle' });
-    }
-
-    if (!ttsActive) {
-      isProcessing = false;
-    }
-  }
-
-
-  /* ── Run one streaming GPT → TTS turn ── */
-  async function runStreamingTurn(systemPrompt, tools, timings, llmStart) {
-    return new Promise(async function (resolve) {
-      var fullText = '';
-      var gptDone = false;
-      var ttsStarted = false;
-      var hadToolCalls = false;
-      var toolResults = [];
-      var repeating = false;
-      var tGptFirst = 0;
-      var ttsMs = 0;
-      var ttsStartTime = 0;
-      var resolved = false;
-
-      var parsedMappings = {};
-      try { parsedMappings = JSON.parse(config.roomMappings || '{}'); } catch (e) {}
-
-      // Text stream bridge: LLM pushes text → TTS consumes it
-      var textStream = wrapStreamForTTS(createTextStream([], function () { return gptDone; }));
-
-      // Tool call leak detection (safety-net)
-      var TOOL_LEAK_BRACKET = /\[\s*(navigate|trigger|update|functions)/;
-      var TOOL_LEAK_BARE = /\b(navigate_to_room|trigger_conversion|update_user_profile|update_conversation_state)\b/;
-
-      function doResolve() {
-        if (resolved) return;
-        resolved = true;
-        var llmMs = Date.now() - llmStart;
-        resolve({ text: fullText, hadToolCalls: hadToolCalls, toolResults: toolResults, llmMs: llmMs, ttsMs: ttsMs });
-      }
-
-      try {
-        await streamGPT(
-          {
-            systemPrompt: systemPrompt,
-            messages: conversationHistory,
-            model: 'gpt-5.4-mini',
-            temperature: 0.7,
-            tools: tools,
-            maxTokens: 200
-          },
-
-          // onTextChunk
-          function (chunk) {
-            if (!tGptFirst) tGptFirst = Date.now();
-
-            fullText += chunk;
-
-            // Safety-net leak detection
-            if (!repeating && (TOOL_LEAK_BRACKET.test(fullText) || TOOL_LEAK_BARE.test(fullText))) {
-              console.warn('[SANDBOX] Tool leak detected (safety-net):', fullText.substring(0, 100));
-              repeating = true;
-              return;
-            }
-
-            // Repetition detection (matches production)
-            if (!repeating && fullText.length > 60) {
-              var dotIdx = fullText.indexOf('.');
-              if (dotIdx > 10 && dotIdx < fullText.length - 10) {
-                var first = fullText.substring(0, dotIdx + 1).trim();
-                var rest = fullText.substring(dotIdx + 1).trim();
-                var cmp = first.substring(0, Math.min(40, first.length));
-                if (rest.length >= cmp.length && rest.substring(0, cmp.length) === cmp) {
-                  console.warn('[SANDBOX] Sentence repetition detected');
-                  repeating = true;
-                }
-              }
-              if (!repeating && fullText.length > 120) {
-                var prefix = fullText.substring(0, 40);
-                var repeatIdx = fullText.indexOf(prefix, 40);
-                if (repeatIdx > 0) {
-                  console.warn('[SANDBOX] Full-response repetition at pos ' + repeatIdx);
-                  repeating = true;
-                }
-              }
-            }
-            if (repeating) return;
-
-            // Skip whitespace-only chunks
-            if (!chunk.trim()) return;
-
-            textStream.push(chunk);
-
-            // Start TTS when we have enough text (4 words, matches production)
-            if (!ttsStarted && !ttsActive && fullText.trim().split(/\s+/).length >= 4) {
-              ttsStarted = true;
-              ttsStartTime = Date.now();
-              startTTSStream(textStream, function () {
-                ttsMs = Date.now() - ttsStartTime;
-                doResolve();
-              });
-            }
-          },
-
-          // onToolCall
-          function (toolName, args) {
-            hadToolCalls = true;
-            var result = handleToolCall(toolName, args, parsedMappings);
-            toolResults.push({ name: toolName, args: args, result: result });
-          },
-
-          // onDone
-          function (finalText) {
-            gptDone = true;
-
-            // Clean corrupted text
-            if (repeating) {
-              var bracketIdx = fullText.lastIndexOf('[');
-              if (bracketIdx > 0) {
-                fullText = fullText.substring(0, bracketIdx).trim();
-              } else {
-                var prefix2 = fullText.substring(0, Math.min(40, fullText.length));
-                var rIdx = fullText.indexOf(prefix2, 40);
-                if (rIdx > 0) fullText = fullText.substring(0, rIdx).trim();
-              }
-            }
-
-            textStream.finish();
-
-            // Short text — start TTS now
-            if (!ttsStarted && !ttsActive && fullText.trim()) {
-              ttsStarted = true;
-              ttsStartTime = Date.now();
-              startTTSStream(textStream, function () {
-                ttsMs = Date.now() - ttsStartTime;
-                doResolve();
-              });
-            }
-
-            // No text at all (tool-only)
-            if (!ttsStarted) {
-              doResolve();
-            }
-          }
-        );
-      } catch (e) {
-        gptDone = true;
-        textStream.finish();
-        console.error('[SANDBOX] streamGPT error:', e.message);
-        doResolve();
-      }
-    });
-  }
-
-
-  /* ── Start TTS Streaming ── */
-  function startTTSStream(textStream, onFinish) {
-    if (cancelTTS) {
-      console.warn('[SANDBOX] Cancelling existing TTS before starting new stream');
-      cancelTTS();
-      cancelTTS = null;
-    }
-
-    ttsActive = true;
-    safeSend({ type: 'status', value: 'speaking' });
-    var ttsStart = Date.now();
-
-    cancelTTS = streamTTS(
-      textStream,
-
-      // onAudioChunk — send binary PCM16 directly to client
-      function (pcm16Chunk) {
-        safeSendBinary(pcm16Chunk);
-      },
-
-      // onDone
-      function () {
-        console.log('[SANDBOX] TTS done (' + (Date.now() - ttsStart) + 'ms)');
-        ttsActive = false;
-        isProcessing = false;
-        cancelTTS = null;
-        safeSend({ type: 'status', value: 'idle' });
-        if (onFinish) onFinish();
-      },
-
-      // onError
-      function (err) {
-        console.error('[SANDBOX] TTS error:', err);
-        ttsActive = false;
-        isProcessing = false;
-        cancelTTS = null;
-        safeSend({ type: 'status', value: 'idle' });
-        if (onFinish) onFinish();
-      }
-    );
-  }
-
-
-  /* ── Tool Call Handler (matches production pipeline.js handleToolCall) ── */
-  function handleToolCall(toolName, args, roomMappings) {
-    console.log('[SANDBOX] Tool call:', toolName, JSON.stringify(args));
-
-    if (toolName === 'navigate_to_room') {
-      // Production uses room_id (the key in roomMappings), not room_name
-      var roomId = args.room_id || '';
-      var entry = roomMappings[roomId];
-      var sweepId = null;
-      var roomLabel = roomId;
-
-      if (entry) {
-        sweepId = (typeof entry === 'object') ? (entry.sweepId || entry.sweep_id) : null;
-        roomLabel = (typeof entry === 'object') ? (entry.label || roomId) : entry;
-      }
-
-      // Track navigated rooms (matching production)
-      if (roomId && navigatedRooms.indexOf(roomId) === -1) {
-        navigatedRooms.push(roomId);
-      }
-      lastRecommendedRoom = roomId;
-
-      safeSend({ type: 'navigate', sweepId: sweepId, roomName: roomLabel, roomId: roomId });
-      if (sweepId) {
-        return { success: true, message: 'Navigating the tour to ' + roomLabel };
-      } else {
-        return { success: false, message: 'Room not found in tour mappings: ' + roomId };
-      }
-    }
-
-    if (toolName === 'trigger_conversion') {
-      // Update conversation state to closing (matching production)
-      conversationState = 'closing';
-      safeSend({ type: 'conversion', reason: args.message || args.reason });
-      safeSend({ type: 'state_change', state: 'closing', reason: 'conversion triggered' });
-      return { success: true, message: 'Booking page opened for visitor' };
-    }
-
-    if (toolName === 'update_user_profile') {
-      // Track user profile (matching production)
-      if (args.field && args.value) {
-        userProfile[args.field] = args.value;
-      }
-      safeSend({ type: 'profile_update', field: args.field, value: args.value });
-      console.log('[SANDBOX] Profile update:', args.field, '=', args.value);
-      return { success: true, message: 'Noted: ' + args.field + ' = ' + args.value };
-    }
-
-    if (toolName === 'update_conversation_state') {
+    case "update_conversation_state": {
       if (args.new_state) {
-        conversationState = args.new_state;
-        console.log('[SANDBOX] State → ' + conversationState + ' — ' + (args.reason || ''));
-        safeSend({ type: 'state_change', state: conversationState, reason: args.reason });
+        const ok = transitionState(session, args.new_state);
+        console.log(`[Pipeline] state → ${session.state} (${ok ? "ok" : "rejected"}) — ${args.reason}`);
       }
-      return { success: true, message: 'State updated to ' + args.new_state };
+      break;
     }
-
-    if (toolName === 'set_view_mode') {
-      safeSend({ type: 'set_view_mode', mode: args.mode });
-      console.log('[SANDBOX] View mode → ' + args.mode);
-      return { success: true, message: 'View mode set to ' + args.mode };
+    case "set_view_mode": {
+      const mode = args.mode;
+      if (!["inside", "floorplan", "dollhouse"].includes(mode)) break;
+      session.toolsUsed.set_view_mode = (session.toolsUsed.set_view_mode || 0) + 1;
+      send({ type: "set_view_mode", mode });
+      console.log(`[Pipeline] set_view_mode: ${mode} — ${args.reason || ""}`);
+      break;
     }
+    default:
+      console.warn("[Pipeline] Unknown tool:", toolName);
+  }
+}
 
-    return { success: false, message: 'Unknown tool: ' + toolName };
+let ttsStreamCounter = 0;
+
+/**
+ * Start TTS streaming. Returns cancel function.
+ * Cancels any existing TTS before starting a new one to prevent double streams.
+ */
+function startTTS(textStream, session, clientWs, t0, tSttDone, tGptFirst, onFinish, trigger = "unknown") {
+  const streamId = ++ttsStreamCounter;
+  const ttsStartedAt = Date.now();
+
+  // Guard: cancel existing TTS if still active
+  if (session.cancelTTS) {
+    console.warn(`[TTS-Guard] Stream #${streamId} (${trigger}): Cancelling existing TTS before starting new stream`);
+    session.cancelTTS();
+    session.cancelTTS = null;
   }
 
+  session.ttsActive = true;
+  console.log(`[TTS-Open] Stream #${streamId} trigger="${trigger}" t=${Date.now() - t0}ms`);
 
-  ws.on('close', function () {
-    console.log('[SANDBOX] Session ended:', sessionId, '— Turns:', turnCount, '— State:', conversationState);
-    if (cancelTTS) { cancelTTS(); cancelTTS = null; }
+  let tTtsFirst = 0;
+  const send = (data) => {
+    try { if (clientWs.readyState === 1) clientWs.send(JSON.stringify(data)); } catch (e) {}
+  };
+  send({ type: "status", value: "speaking" });
+
+  const cancel = streamTTS(
+    textStream,
+    (pcm16Chunk) => {
+      if (!tTtsFirst) {
+        tTtsFirst = Date.now();
+        console.log(`[Latency] STT=${tSttDone - t0}ms GPT_first=${tGptFirst - t0}ms TTS_first=${tTtsFirst - t0}ms`);
+      }
+      try { if (clientWs.readyState === 1) clientWs.send(pcm16Chunk); } catch (e) {}
+    },
+    () => {
+      console.log(`[TTS-Close] Stream #${streamId} (${trigger}) done — ${Date.now() - t0}ms`);
+      session.ttsSeconds = (session.ttsSeconds || 0) + (Date.now() - ttsStartedAt) / 1000;
+      session.ttsActive = false;
+      session.isProcessing = false; // Release turn lock only when audio is truly done
+      session.cancelTTS = null;
+      session.ttsEndedAt = Date.now();
+      send({ type: "status", value: "idle" });
+      console.log(`[Latency] TOTAL=${Date.now() - t0}ms`);
+      if (onFinish) onFinish();
+      session.onTTSDone?.();
+    },
+    (err) => {
+      console.error(`[TTS-Error] Stream #${streamId} (${trigger}):`, err);
+      session.ttsSeconds = (session.ttsSeconds || 0) + (Date.now() - ttsStartedAt) / 1000;
+      session.ttsActive = false;
+      session.isProcessing = false; // Release turn lock on error too
+      session.cancelTTS = null;
+      session.ttsEndedAt = Date.now();
+      send({ type: "status", value: "idle" });
+      if (onFinish) onFinish();
+      session.onTTSDone?.();
+    }
+  );
+  session.cancelTTS = cancel;
+  return cancel;
+}
+
+/**
+ * Run one GPT call → collect text + tool calls → start TTS if text.
+ * Returns { text, hadToolCalls }.
+ */
+async function runGPTAndTTS(session, userMessage, clientWs, t0, tSttDone, gptOptions = {}) {
+  let fullText = "";
+  let tGptFirst = 0;
+  let gptDone = false;
+  let ttsStarted = false;
+  let hadToolCalls = false;
+  let repeating = false;
+  const textStream = wrapStreamForTTS(createTextStream([], () => gptDone), session.language);
+
+  // Welcome-prefix stripper — runGPTAndTTS is always mid-conversation
+  // (the greeting goes through generateGreeting separately), so any
+  // "Welcome back", "Hi again" etc. at the start is an unwanted re-greeting.
+  // Fast-path: if the first non-whitespace char is not W/H/G, commit immediately (no latency).
+  let welcomeBuffer = "";
+  let welcomeDecided = false;
+  const WELCOME_PREFIX_RE = /^(welcome(\s*back)?[\s\-—,:.!]*|hi\s+again[\s\-—,:.!]*|hello\s+again[\s\-—,:.!]*|good\s+to\s+see\s+you(\s+again)?[\s\-—,:.!]*)/i;
+
+  const send = (data) => {
+    try { if (clientWs.readyState === 1) clientWs.send(JSON.stringify(data)); } catch (e) {}
+  };
+
+  await streamGPT(
+    session,
+    userMessage,
+
+    // onTextChunk
+    (chunk) => {
+      if (!tGptFirst) tGptFirst = Date.now();
+
+      // Strip any re-greeting prefix before it reaches TTS or fullText
+      if (!welcomeDecided) {
+        welcomeBuffer += chunk;
+        const trimmed = welcomeBuffer.trimStart();
+        if (trimmed.length === 0) return; // all whitespace so far
+        const firstChar = trimmed[0].toLowerCase();
+        if (firstChar !== 'w' && firstChar !== 'h' && firstChar !== 'g') {
+          // Fast path — cannot be a welcome, commit and continue
+          welcomeDecided = true;
+          chunk = welcomeBuffer;
+          welcomeBuffer = "";
+        } else if (trimmed.length < 25) {
+          return; // keep buffering until we can decide
+        } else {
+          welcomeDecided = true;
+          const match = trimmed.match(WELCOME_PREFIX_RE);
+          if (match) {
+            console.warn("[Pipeline] Stripped re-greeting prefix:", match[0]);
+            const leadWs = welcomeBuffer.length - trimmed.length;
+            chunk = welcomeBuffer.substring(leadWs + match[0].length);
+          } else {
+            chunk = welcomeBuffer;
+          }
+          welcomeBuffer = "";
+          if (!chunk) return;
+        }
+      }
+
+      fullText += chunk;
+
+      // Safety-net tool leak detection (primary suppression is in llm.js buffer)
+      const TOOL_LEAK_BRACKET = /\[\s*(navigate|trigger|update|functions)/;
+      const TOOL_LEAK_BARE = /\b(navigate_to_room|trigger_conversion|update_user_profile|update_conversation_state)\b/;
+      const TOOL_LEAK_PARTIAL = /\b(navigate_|trigger_|update_)/;
+      if (!repeating && (TOOL_LEAK_BRACKET.test(fullText) || TOOL_LEAK_BARE.test(fullText) || TOOL_LEAK_PARTIAL.test(fullText))) {
+        console.warn("[Pipeline] Tool call leak detected (safety-net):", fullText.substring(0, 100));
+        repeating = true;
+        return;
+      }
+
+      // Detect repetition — stop feeding TTS if GPT repeats itself
+      if (!repeating && fullText.length > 60) {
+        // 1. Same-sentence repetition: text after first "." starts the same as text before it
+        const dotIdx = fullText.indexOf('.');
+        if (dotIdx > 10 && dotIdx < fullText.length - 10) {
+          const first = fullText.substring(0, dotIdx + 1).trim();
+          const rest = fullText.substring(dotIdx + 1).trim();
+          const cmp = first.substring(0, Math.min(40, first.length));
+          if (rest.length >= cmp.length && rest.substring(0, cmp.length) === cmp) {
+            console.warn("[Pipeline] Sentence repetition detected — stopping TTS feed");
+            repeating = true;
+          }
+        }
+        // 2. Full-response repetition: the first 40 chars appear again later in the text
+        //    Catches GPT repeating entire multi-sentence answers
+        if (!repeating && fullText.length > 120) {
+          const prefix = fullText.substring(0, 40);
+          const repeatIdx = fullText.indexOf(prefix, 40);
+          if (repeatIdx > 0) {
+            console.warn("[Pipeline] Full-response repetition at pos " + repeatIdx + " — stopping TTS feed");
+            repeating = true;
+          }
+        }
+      }
+      if (repeating) return;
+
+      // Skip whitespace-only chunks (newlines, spaces) — Cartesia rejects empty transcripts
+      if (!chunk.trim()) return;
+
+      textStream.push(chunk);
+
+      // Skip TTS if another stream is already active (e.g. from a previous runGPTAndTTS call in the same turn)
+      if (!ttsStarted && !session.ttsActive && fullText.trim().split(/\s+/).length >= 4) {
+        ttsStarted = true;
+        startTTS(textStream, session, clientWs, t0, tSttDone, tGptFirst, undefined, "gpt-stream-threshold");
+      }
+    },
+
+    // onToolCall
+    (toolName, args) => {
+      hadToolCalls = true;
+      handleToolCall(toolName, args, session, clientWs);
+    },
+
+    // onDone
+    () => {
+      gptDone = true;
+
+      // Flush welcome-buffer if stream ended while still buffering
+      if (!welcomeDecided && welcomeBuffer) {
+        welcomeDecided = true;
+        const trimmed = welcomeBuffer.trimStart();
+        const match = trimmed.match(WELCOME_PREFIX_RE);
+        let flushChunk;
+        if (match) {
+          console.warn("[Pipeline] Stripped re-greeting prefix (flush):", match[0]);
+          const leadWs = welcomeBuffer.length - trimmed.length;
+          flushChunk = welcomeBuffer.substring(leadWs + match[0].length);
+        } else {
+          flushChunk = welcomeBuffer;
+        }
+        welcomeBuffer = "";
+        if (flushChunk) {
+          fullText += flushChunk;
+          if (!repeating && flushChunk.trim()) textStream.push(flushChunk);
+        }
+      }
+
+      textStream.finish();
+
+      // Clean corrupted text from transcript
+      if (repeating) {
+        const bracketIdx = fullText.lastIndexOf('[');
+        if (bracketIdx > 0) {
+          fullText = fullText.substring(0, bracketIdx).trim();
+          console.warn("[Pipeline] Trimmed tool leak at bracket — kept:", fullText.substring(0, 80));
+        } else {
+          // Trim at bare/partial tool name fragment
+          const partialMatch = fullText.match(/\b(navigate_|trigger_|update_)/);
+          if (partialMatch && partialMatch.index > 0) {
+            fullText = fullText.substring(0, partialMatch.index).trim();
+            console.warn("[Pipeline] Trimmed partial tool leak — kept:", fullText.substring(0, 80));
+          } else if (partialMatch || /\b(navigate_to_room|trigger_conversion|update_user_profile|update_conversation_state)\b/.test(fullText)) {
+            console.warn("[Pipeline] Clearing tool call leak from transcript");
+            fullText = "";
+          } else {
+            // Repetition — keep text before repeat starts
+            const prefix = fullText.substring(0, Math.min(40, fullText.length));
+            const repeatIdx = fullText.indexOf(prefix, 40);
+            if (repeatIdx > 0) {
+              fullText = fullText.substring(0, repeatIdx).trim();
+              console.warn("[Pipeline] Trimmed full-response repeat — kept:", fullText.substring(0, 80));
+            } else {
+              // Fallback: keep first sentence
+              const dotIdx2 = fullText.indexOf('.');
+              if (dotIdx2 > 0) fullText = fullText.substring(0, dotIdx2 + 1).trim();
+            }
+          }
+        }
+      }
+
+      // Short text that didn't reach threshold — start TTS now
+      // Skip if another TTS stream is already active from a previous call in this turn
+      if (!ttsStarted && !session.ttsActive && fullText.trim()) {
+        ttsStarted = true;
+        startTTS(textStream, session, clientWs, t0, tSttDone, tGptFirst, undefined, "gpt-done-short");
+      }
+
+      if (fullText.trim()) {
+        send({ type: "transcript", role: "assistant", text: fullText });
+        if (session.conversationId) {
+          logMessage(session.tenantId, session.conversationId, "assistant", fullText).catch(() => {});
+        }
+      }
+    },
+    gptOptions
+  );
+
+  return { text: fullText, hadToolCalls, ttsStarted };
+}
+
+const TTS_COOLDOWN_MS = 1500; // Post-TTS cooldown to prevent echo pickup
+const UNCLEAR_AUDIO_THRESHOLD = 3; // Consecutive unclear events before showing popup
+
+/**
+ * Increment the unclear-audio counter and send popup signal if threshold hit.
+ * Lightweight: no new async work, no prompt/model impact.
+ */
+function noteUnclearAudio(session, clientWs, reason) {
+  session.unclearAudioCount = (session.unclearAudioCount || 0) + 1;
+  console.log(`[Pipeline] Unclear audio (${reason}) — count=${session.unclearAudioCount}`);
+  if (session.unclearAudioCount >= UNCLEAR_AUDIO_THRESHOLD && !session.unclearPopupSent) {
+    session.unclearPopupSent = true;
+    try {
+      if (clientWs.readyState === 1) {
+        clientWs.send(JSON.stringify({ type: "unclear_audio", reason }));
+      }
+    } catch (e) {}
+  }
+}
+
+/**
+ * Process a single voice turn: STT → LLM → TTS
+ * If GPT returns tools but no text, makes a follow-up GPT call to get the spoken response.
+ */
+async function processTurn(session, pcm16Buffer, clientWs) {
+  // isProcessing is now managed by the caller (index.js) for synchronous guard
+  if (session.ttsEndedAt && (Date.now() - session.ttsEndedAt) < TTS_COOLDOWN_MS) {
+    console.log(`[Pipeline] Skipping — cooldown (${Date.now() - session.ttsEndedAt}ms)`);
+    return;
+  }
+
+  console.log(`[Pipeline] Turn #${session.turnCount + 1} started — cancelTTS=${!!session.cancelTTS}`);
+  session.lastActivityAt = Date.now();
+
+  const send = (data) => {
+    try { if (clientWs.readyState === 1) clientWs.send(JSON.stringify(data)); } catch (e) {}
+  };
+
+  try {
+    const t0 = Date.now();
+
+    if (session.cancelTTS) { session.cancelTTS(); session.cancelTTS = null; }
+
+    // Pre-check: reject short audio silently (echo fragments)
+    if (pcm16Buffer.length < 24000) {
+      console.log(`[Pipeline] Audio too short (${pcm16Buffer.length} bytes) — dropping`);
+      // Count as "unclear" only if there was a meaningful attempt to speak
+      // (not tiny echo fragments)
+      if (pcm16Buffer.length >= 8000) noteUnclearAudio(session, clientWs, "short_audio");
+      return;
+    }
+
+    // STT — validate BEFORE sending "thinking" to client
+    // Sending "thinking" too early causes the client to clear its playback buffer,
+    // cutting off the last words of the previous response for noise/echo turns.
+    let transcript;
+    let sttConfidence = 1.0;
+    try {
+      const sttResult = await transcribeAudio(pcm16Buffer, session.language);
+      transcript = sttResult.text;
+      sttConfidence = sttResult.confidence ?? 1.0;
+    } catch (sttErr) {
+      console.log(`[Pipeline] STT error: ${sttErr.message}`);
+      noteUnclearAudio(session, clientWs, "stt_error");
+      return;
+    }
+    const tSttDone = Date.now();
+    console.log(`[Pipeline] STT: "${transcript}" (${tSttDone - t0}ms, conf=${sttConfidence.toFixed(2)})`);
+
+    const { filtered, reason, text: cleanTranscript } = filterNoise(transcript, session.lastTranscription, sttConfidence);
+    if (filtered) {
+      console.log(`[Pipeline] Filtered (${reason}): "${transcript}" conf=${sttConfidence.toFixed(2)}`);
+      // User-voice-related filter reasons count as "unclear audio";
+      // ambient/TV/copyright/duplicate reasons don't
+      const USER_UNCLEAR_REASONS = new Set(["empty", "low_confidence", "too_short", "hallucination"]);
+      if (USER_UNCLEAR_REASONS.has(reason)) {
+        noteUnclearAudio(session, clientWs, reason);
+      }
+      return;
+    }
+
+    // Echo detection: check if transcription matches the last assistant response
+    // (mic picks up TTS output and Deepgram transcribes it)
+    const lastAssistantMsg = session.conversationHistory
+      .filter(h => h.role === "assistant" && !h.content.startsWith("["))
+      .slice(-1)[0];
+    if (lastAssistantMsg) {
+      const assistantWords = lastAssistantMsg.content.toLowerCase().split(/\s+/).slice(0, 15).join(" ");
+      const userWords = cleanTranscript.toLowerCase().split(/\s+/).slice(0, 15).join(" ");
+      // If ≥60% of the first 15 words overlap, it's likely echo
+      const aSet = new Set(assistantWords.split(" "));
+      const uWords = userWords.split(" ");
+      const overlap = uWords.filter(w => aSet.has(w)).length;
+      if (uWords.length >= 3 && overlap / uWords.length > 0.6) {
+        console.log(`[Pipeline] Echo detected (${overlap}/${uWords.length} overlap): "${cleanTranscript.substring(0, 80)}"`);
+        return;
+      }
+    }
+
+    // Valid user turn — reset unclear-audio counter
+    if (session.unclearAudioCount > 0) {
+      session.unclearAudioCount = 0;
+    }
+
+    // Only send "thinking" AFTER we've confirmed this is a real user message.
+    // This prevents false turns (noise/echo) from clearing the client's playback buffer.
+    send({ type: "status", value: "thinking" });
+
+    session.lastTranscription = cleanTranscript;
+    session.turnCount++;
+    send({ type: "transcript", role: "user", text: cleanTranscript });
+    if (session.conversationId) {
+      logMessage(session.tenantId, session.conversationId, "user", cleanTranscript).catch(() => {});
+    }
+
+    // First GPT call
+    let result = await runGPTAndTTS(session, cleanTranscript, clientWs, t0, tSttDone);
+
+    // If GPT returned only tool calls without text, make a follow-up call.
+    // GPT needs to produce the actual spoken response after executing tools.
+    if (result.hadToolCalls && !result.text.trim()) {
+      if (session.ttsActive) {
+        console.log("[Pipeline] Skipping follow-up — TTS already active");
+        return;
+      }
+      console.log("[Pipeline] Tool-only response — follow-up GPT call for spoken reply");
+      result = await runGPTAndTTS(
+        session,
+        "[Tools executed. Now respond to the visitor naturally based on what you just learned/did. Do NOT call any tools again.]",
+        clientWs, t0, tSttDone,
+        { maxTokens: 150 }
+      );
+    }
+
+    // If still no text after follow-up, go idle
+    if (!result.text.trim() && !result.ttsStarted) {
+      send({ type: "status", value: "idle" });
+    }
+
+  } catch (err) {
+    console.error("[Pipeline] Turn error:", err.message || err);
+    send({ type: "error", message: err.message || "pipeline_error" });
+    send({ type: "status", value: "idle" });
+  }
+}
+
+/**
+ * Generate the initial greeting.
+ * Promise resolves only after TTS playback completes.
+ */
+async function generateGreeting(session, clientWs) {
+  session.isProcessing = true;
+  console.log("[Pipeline] Greeting started");
+
+  const send = (data) => {
+    try { if (clientWs.readyState === 1) clientWs.send(JSON.stringify(data)); } catch (e) {}
+  };
+
+  return new Promise(async (resolveGreeting) => {
+    function finish() {
+      session.cancelTTS = null;
+      session.ttsEndedAt = Date.now();
+      // Auto-transition to qualifying so GPT stops generating greetings
+      transitionState(session, "qualifying");
+      send({ type: "status", value: "idle" });
+      resolveGreeting();
+    }
+
+    try {
+      send({ type: "status", value: "speaking" });
+      let fullText = "";
+      let gptDone = false;
+      let ttsStarted = false;
+      const t0 = Date.now();
+      const textStream = wrapStreamForTTS(createTextStream([], () => gptDone), session.language);
+
+      await streamGPT(
+        session,
+        "[The visitor just arrived. Greet them the way a receptionist would greet someone walking through the door — calm, warm, not energetic. One short sentence of welcome, then ask what brings them here. Do NOT mention any specific rooms, facilities or spaces. Do NOT say 'tour'. Do NOT use any tools.]",
+
+        (chunk) => {
+          fullText += chunk;
+          if (!chunk.trim()) return; // Skip whitespace-only chunks
+          textStream.push(chunk);
+          if (!ttsStarted && fullText.trim().split(/\s+/).length >= 4) {
+            ttsStarted = true;
+            startTTS(textStream, session, clientWs, t0, t0, Date.now(), finish, "greeting-stream");
+          }
+        },
+
+        (toolName, args) => handleToolCall(toolName, args, session, clientWs),
+
+        () => {
+          gptDone = true;
+          textStream.finish();
+          if (!ttsStarted && fullText.trim()) {
+            ttsStarted = true;
+            startTTS(textStream, session, clientWs, t0, t0, Date.now(), finish, "greeting-done-short");
+          }
+          if (!fullText.trim() && !ttsStarted) finish();
+          if (fullText.trim()) {
+            send({ type: "transcript", role: "assistant", text: fullText });
+            if (session.conversationId) {
+              logMessage(session.tenantId, session.conversationId, "assistant", fullText).catch(() => {});
+            }
+          }
+        }
+      );
+    } catch (err) {
+      console.error("[Pipeline] Greeting error:", err.message);
+      send({ type: "status", value: "idle" });
+      resolveGreeting();
+    }
   });
 }
 
-
-module.exports = { handleTestSession };
+module.exports = { processTurn, generateGreeting };

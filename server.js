@@ -1,6 +1,5 @@
 const express = require('express');
 const http = require('http');
-const WebSocket = require('ws');
 const path = require('path');
 const fs = require('fs');
 const { Pool } = require('pg');
@@ -507,31 +506,29 @@ app.get('/dashboard', (req, res) => res.sendFile(path.join(__dirname, 'public', 
 app.get('/dashboard/*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'dashboard.html')));
 
 /* ══════════════════════════════════════════
-   WEBSOCKET — Test sandbox voice pipeline
+   WEBSOCKET — Voice pipeline (1:1 with October AI production)
+   The voiceServer module holds the full production session loop
+   (createSession, generateGreeting, processTurn, silence timer,
+   20-minute farewell). server.js only handles auth + upgrade routing.
    ══════════════════════════════════════════ */
-const wss = new WebSocket.Server({ noServer: true });
-const { handleTestSession } = require('./voice/pipeline');
+const { createVoiceWSS } = require('./voice/voiceServer');
+const voiceWss = createVoiceWSS();
 
 server.on('upgrade', (request, socket, head) => {
   const url = new URL(request.url, 'http://localhost');
-  if (url.pathname === '/ws/test') {
+  if (url.pathname === '/ws/test' || url.pathname === '/ws/voice') {
     const token = url.searchParams.get('token');
     if (token !== ADMIN_SECRET) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      wss.emit('connection', ws, request);
+    voiceWss.handleUpgrade(request, socket, head, (ws) => {
+      voiceWss.emit('connection', ws, request);
     });
   } else {
     socket.destroy();
   }
-});
-
-wss.on('connection', (ws, req) => {
-  console.log('Sandbox test session connected');
-  handleTestSession(ws);
 });
 
 /* ══════════════════════════════════════════

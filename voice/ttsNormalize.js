@@ -1,176 +1,303 @@
 /**
- * TTS Normalize — Currency/number normalization for TTS input
- * Pipeline version: 2.0
+ * voice/ttsNormalize.js — Currency/number normalization for TTS input
  *
- * Ported from October AI production (ESM → CommonJS).
- * Cartesia mispronounces numbers adjacent to currency codes.
- * This rewrites "USD 500" → "500 US dollars" etc. before TTS.
+ * Ported 1:1 from production (platform/voice/ttsNormalize.js).
  *
- * Also provides wrapStreamForTTS() which buffers streaming text
- * at word boundaries to catch currency+number pairs.
+ * Cartesia (and most neural TTS) mispronounces numbers when adjacent to
+ * currency codes, reading "USD 500" as "you-es-dee five zero zero" instead
+ * of "five hundred US dollars". This module rewrites currency+number
+ * patterns into natural spoken form before the text reaches TTS.
+ *
+ * Because GPT streams in small chunks, we wrap the downstream text stream
+ * with a lightweight buffering layer that holds back a single "dangling"
+ * currency/number word until its pair arrives. All other text flows through
+ * without delay.
  */
 
-/* ── Currency name tables ── */
+// ──────────────────────────────────────────────────────────────────────────────
+// Language-aware currency names. Fall back to English for unknown languages.
+// ──────────────────────────────────────────────────────────────────────────────
 
-var CURRENCY_NAMES_EN = {
-  USD: 'US dollars', EUR: 'euros', GBP: 'British pounds',
-  DKK: 'Danish kroner', SEK: 'Swedish kronor', NOK: 'Norwegian kroner',
-  ISK: 'Icelandic krona', CHF: 'Swiss francs', JPY: 'yen',
-  CAD: 'Canadian dollars', AUD: 'Australian dollars', NZD: 'New Zealand dollars',
-  CNY: 'Chinese yuan', INR: 'Indian rupees', KRW: 'Korean won',
-  SGD: 'Singapore dollars', HKD: 'Hong Kong dollars', THB: 'Thai baht',
-  ZAR: 'South African rand', PLN: 'Polish zloty', CZK: 'Czech koruna',
-  HUF: 'Hungarian forint', TRY: 'Turkish lira', RUB: 'Russian rubles',
-  BRL: 'Brazilian reais', MXN: 'Mexican pesos', AED: 'UAE dirhams',
-  SAR: 'Saudi riyals'
+const CURRENCY_NAMES_EN = {
+  USD: "US dollars",
+  EUR: "euros",
+  GBP: "British pounds",
+  DKK: "Danish kroner",
+  SEK: "Swedish kronor",
+  NOK: "Norwegian kroner",
+  ISK: "Icelandic krona",
+  CHF: "Swiss francs",
+  JPY: "yen",
+  CAD: "Canadian dollars",
+  AUD: "Australian dollars",
+  NZD: "New Zealand dollars",
+  CNY: "Chinese yuan",
+  INR: "Indian rupees",
+  KRW: "Korean won",
+  SGD: "Singapore dollars",
+  HKD: "Hong Kong dollars",
+  THB: "Thai baht",
+  ZAR: "South African rand",
+  PLN: "Polish zloty",
+  CZK: "Czech koruna",
+  HUF: "Hungarian forint",
+  TRY: "Turkish lira",
+  RUB: "Russian rubles",
+  BRL: "Brazilian reais",
+  MXN: "Mexican pesos",
+  AED: "UAE dirhams",
+  SAR: "Saudi riyals",
 };
 
-var CURRENCY_NAMES_BY_LANG = {
+const CURRENCY_NAMES_BY_LANG = {
   en: CURRENCY_NAMES_EN,
-  da: { USD: 'amerikanske dollars', EUR: 'euro', GBP: 'britiske pund', DKK: 'kroner', SEK: 'svenske kroner', NOK: 'norske kroner', CHF: 'schweiziske franc' },
-  de: { USD: 'US-Dollar', EUR: 'Euro', GBP: 'britische Pfund', DKK: 'dänische Kronen', SEK: 'schwedische Kronen', CHF: 'Schweizer Franken' },
-  sv: { USD: 'amerikanska dollar', EUR: 'euro', GBP: 'brittiska pund', SEK: 'kronor', NOK: 'norska kronor' },
-  no: { USD: 'amerikanske dollar', EUR: 'euro', GBP: 'britiske pund', NOK: 'kroner', DKK: 'danske kroner' },
-  fr: { USD: 'dollars américains', EUR: 'euros', GBP: 'livres sterling', CHF: 'francs suisses' },
-  es: { USD: 'dólares estadounidenses', EUR: 'euros', GBP: 'libras esterlinas', MXN: 'pesos mexicanos' },
-  it: { USD: 'dollari americani', EUR: 'euro', GBP: 'sterline' },
-  nl: { USD: 'Amerikaanse dollars', EUR: 'euro', GBP: 'Britse ponden' },
-  pt: { USD: 'dólares americanos', EUR: 'euros', GBP: 'libras', BRL: 'reais' }
+  da: {
+    USD: "amerikanske dollars",
+    EUR: "euro",
+    GBP: "britiske pund",
+    DKK: "kroner",
+    SEK: "svenske kroner",
+    NOK: "norske kroner",
+    ISK: "islandske kroner",
+    CHF: "schweiziske franc",
+    JPY: "yen",
+    CAD: "canadiske dollars",
+    AUD: "australske dollars",
+    CNY: "kinesiske yuan",
+    INR: "indiske rupees",
+  },
+  de: {
+    USD: "US-Dollar",
+    EUR: "Euro",
+    GBP: "britische Pfund",
+    DKK: "dänische Kronen",
+    SEK: "schwedische Kronen",
+    NOK: "norwegische Kronen",
+    CHF: "Schweizer Franken",
+    JPY: "Yen",
+    CAD: "kanadische Dollar",
+    AUD: "australische Dollar",
+  },
+  sv: {
+    USD: "amerikanska dollar",
+    EUR: "euro",
+    GBP: "brittiska pund",
+    DKK: "danska kronor",
+    SEK: "kronor",
+    NOK: "norska kronor",
+    CHF: "schweiziska franc",
+    JPY: "yen",
+  },
+  no: {
+    USD: "amerikanske dollar",
+    EUR: "euro",
+    GBP: "britiske pund",
+    DKK: "danske kroner",
+    SEK: "svenske kroner",
+    NOK: "kroner",
+    CHF: "sveitsiske franc",
+    JPY: "yen",
+  },
+  fr: {
+    USD: "dollars américains",
+    EUR: "euros",
+    GBP: "livres sterling",
+    CHF: "francs suisses",
+    JPY: "yens",
+    CAD: "dollars canadiens",
+  },
+  es: {
+    USD: "dólares estadounidenses",
+    EUR: "euros",
+    GBP: "libras esterlinas",
+    CHF: "francos suizos",
+    JPY: "yenes",
+    MXN: "pesos mexicanos",
+  },
+  it: {
+    USD: "dollari americani",
+    EUR: "euro",
+    GBP: "sterline",
+    CHF: "franchi svizzeri",
+    JPY: "yen",
+  },
+  nl: {
+    USD: "Amerikaanse dollars",
+    EUR: "euro",
+    GBP: "Britse ponden",
+    CHF: "Zwitserse frank",
+    JPY: "yen",
+  },
+  pt: {
+    USD: "dólares americanos",
+    EUR: "euros",
+    GBP: "libras",
+    BRL: "reais",
+    CHF: "francos suíços",
+  },
 };
 
-var SYMBOL_NAMES_EN = { '$': 'dollars', '€': 'euros', '£': 'pounds', '¥': 'yen', '₹': 'rupees', '₩': 'won' };
-var SYMBOL_NAMES_BY_LANG = {
+const SYMBOL_NAMES_EN = {
+  "$": "dollars",
+  "€": "euros",
+  "£": "pounds",
+  "¥": "yen",
+  "₹": "rupees",
+  "₩": "won",
+};
+
+const SYMBOL_NAMES_BY_LANG = {
   en: SYMBOL_NAMES_EN,
-  da: { '$': 'dollars', '€': 'euro', '£': 'pund', '¥': 'yen' },
-  de: { '$': 'Dollar', '€': 'Euro', '£': 'Pfund', '¥': 'Yen' }
+  da: { "$": "dollars", "€": "euro", "£": "pund", "¥": "yen", "₹": "rupees" },
+  de: { "$": "Dollar", "€": "Euro", "£": "Pfund", "¥": "Yen", "₹": "Rupien" },
+  sv: { "$": "dollar", "€": "euro", "£": "pund", "¥": "yen" },
+  no: { "$": "dollar", "€": "euro", "£": "pund", "¥": "yen" },
+  fr: { "$": "dollars", "€": "euros", "£": "livres", "¥": "yens" },
+  es: { "$": "dólares", "€": "euros", "£": "libras", "¥": "yenes" },
+  it: { "$": "dollari", "€": "euro", "£": "sterline", "¥": "yen" },
+  nl: { "$": "dollar", "€": "euro", "£": "pond", "¥": "yen" },
+  pt: { "$": "dólares", "€": "euros", "£": "libras", "¥": "ienes" },
 };
 
-var ALL_CODES = Object.keys(CURRENCY_NAMES_EN);
-var CODES_ALTERNATION = ALL_CODES.join('|');
+const ALL_CODES = Object.keys(CURRENCY_NAMES_EN);
+const CODES_ALTERNATION = ALL_CODES.join("|");
 
 function getNames(language) {
-  var lang = (language || 'en').toLowerCase();
-  var codes = Object.assign({}, CURRENCY_NAMES_EN, CURRENCY_NAMES_BY_LANG[lang] || {});
-  var symbols = Object.assign({}, SYMBOL_NAMES_EN, SYMBOL_NAMES_BY_LANG[lang] || {});
-  return { codes: codes, symbols: symbols };
+  const lang = (language || "en").toLowerCase();
+  return {
+    codes: { ...CURRENCY_NAMES_EN, ...(CURRENCY_NAMES_BY_LANG[lang] || {}) },
+    symbols: { ...SYMBOL_NAMES_EN, ...(SYMBOL_NAMES_BY_LANG[lang] || {}) },
+  };
 }
 
-/**
- * Normalize currency patterns in text for TTS.
- * "$500" → "500 dollars", "USD 500" → "500 US dollars", etc.
- */
-function normalizeCurrencyText(text, language) {
-  if (!language) language = 'en';
-  if (!text || typeof text !== 'string') return text;
-  var names = getNames(language);
+// ──────────────────────────────────────────────────────────────────────────────
+// Pure text transformation. Handles:
+//   $500, €1,500, £19.99              → "500 dollars" etc.
+//   USD 500, EUR 1,500, DKK 2.000      → "500 US dollars" etc.
+//   500 USD, 1,500 EUR                 → "500 US dollars" etc.
+// Thousands separators (",") are removed inside numbers. "Room 500",
+// "chapter 12" etc. are left untouched because no currency token is near.
+// ──────────────────────────────────────────────────────────────────────────────
 
-  // Strip thousands separators
-  var out = text.replace(/(\d),(\d{3}\b)/g, '$1$2');
-  out = out.replace(/(\d),(\d{3}\b)/g, '$1$2');
+function normalizeCurrencyText(text, language = "en") {
+  if (!text || typeof text !== "string") return text;
+  const { codes, symbols } = getNames(language);
 
-  // 1) Symbol + number: "$500" → "500 dollars"
-  out = out.replace(/([$€£¥₹₩])\s*(\d+(?:\.\d+)?)/g, function (_m, sym, num) {
-    var name = names.symbols[sym];
-    return name ? num + ' ' + name : num + ' ' + sym;
+  // Strip thousands separators inside numbers ("1,500" → "1500")
+  let out = text.replace(/(\d),(\d{3}\b)/g, "$1$2");
+  out = out.replace(/(\d),(\d{3}\b)/g, "$1$2"); // second pass for 1,500,000
+
+  // 1) Symbol + number:  "$500"  → "500 dollars"
+  out = out.replace(/([$€£¥₹₩])\s*(\d+(?:\.\d+)?)/g, (_m, sym, num) => {
+    const name = symbols[sym];
+    return name ? `${num} ${name}` : `${num} ${sym}`;
   });
 
-  // 2) Code before number: "USD 500" → "500 US dollars"
-  var codeBeforeRe = new RegExp('\\b(' + CODES_ALTERNATION + ')\\s+(\\d+(?:\\.\\d+)?)', 'g');
-  out = out.replace(codeBeforeRe, function (_m, code, num) {
-    return num + ' ' + (names.codes[code.toUpperCase()] || code);
+  // 2) Code before number:  "USD 500"  → "500 US dollars"
+  const codeBeforeRe = new RegExp(`\\b(${CODES_ALTERNATION})\\s+(\\d+(?:\\.\\d+)?)`, "g");
+  out = out.replace(codeBeforeRe, (_m, code, num) => {
+    const upper = code.toUpperCase();
+    return `${num} ${codes[upper] || code}`;
   });
 
-  // 3) Number before code: "500 USD" → "500 US dollars"
-  var codeAfterRe = new RegExp('(\\d+(?:\\.\\d+)?)\\s+(' + CODES_ALTERNATION + ')\\b', 'g');
-  out = out.replace(codeAfterRe, function (_m, num, code) {
-    return num + ' ' + (names.codes[code.toUpperCase()] || code);
+  // 3) Number before code:  "500 USD"  → "500 US dollars"
+  const codeAfterRe = new RegExp(`(\\d+(?:\\.\\d+)?)\\s+(${CODES_ALTERNATION})\\b`, "g");
+  out = out.replace(codeAfterRe, (_m, num, code) => {
+    const upper = code.toUpperCase();
+    return `${num} ${codes[upper] || code}`;
   });
 
   return out;
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Streaming wrapper
+//
+// Wraps an inner text stream (with push/finish/asyncIterator) so that chunks
+// are buffered until we can safely commit them. A "dangling" last word
+// (standalone number or bare currency code) is held back until the next word
+// arrives, in case they form a currency pair. All other text flows immediately
+// at word boundaries.
+//
+// Worst case delay: one extra word. Fast path (no currency context): delay
+// identical to unwrapped stream.
+// ──────────────────────────────────────────────────────────────────────────────
 
-/* ═══════════════════════════════════════════════════════════════
- * Streaming wrapper — buffers at word boundaries to catch
- * currency+number pairs before they reach TTS.
- * ═══════════════════════════════════════════════════════════════ */
-
-var BARE_NUMBER_RE = /^\d+(?:\.\d+)?$/;
-var CODE_RE = new RegExp('^(' + CODES_ALTERNATION + ')$', 'i');
+const BARE_NUMBER_RE = /^\d+(?:\.\d+)?$/;
+const SYMBOL_NUMBER_RE = /^[$€£¥₹₩]\d+(?:\.\d+)?$/;
+const CODE_RE = new RegExp(`^(${CODES_ALTERNATION})$`, "i");
 
 function isBareNumber(s) { return BARE_NUMBER_RE.test(s); }
+function isSymbolNumber(s) { return SYMBOL_NUMBER_RE.test(s); }
 function isCurrencyCode(s) { return CODE_RE.test(s); }
 
-/**
- * Wrap an inner text stream with currency normalization + word-boundary buffering.
- *
- * @param {{ push: function, finish: function, [Symbol.asyncIterator]: function }} inner
- * @param {string} language
- */
-function wrapStreamForTTS(inner, language) {
-  if (!language) language = 'en';
-  var buffer = '';
+function wrapStreamForTTS(inner, language = "en") {
+  let buffer = "";
 
   function flush(final) {
     if (!buffer) return;
 
     if (final) {
-      var text = normalizeCurrencyText(buffer, language);
+      const text = normalizeCurrencyText(buffer, language);
       if (text) inner.push(text);
-      buffer = '';
+      buffer = "";
       return;
     }
 
-    var lastSpace = buffer.lastIndexOf(' ');
-    if (lastSpace <= 0) return;
+    const lastSpace = buffer.lastIndexOf(" ");
+    if (lastSpace <= 0) return; // no word boundary yet — keep buffering
 
-    var committed = buffer.substring(0, lastSpace);
-    var lastWordStart = committed.lastIndexOf(' ') + 1;
-    var lastWord = committed.substring(lastWordStart).replace(/[.,!?;:)\]]+$/, '');
-    var secondLastEnd = lastWordStart > 0 ? lastWordStart - 1 : -1;
-    var secondLastStart = secondLastEnd > 0 ? committed.lastIndexOf(' ', secondLastEnd - 1) + 1 : 0;
-    var secondLast = secondLastEnd > 0
-      ? committed.substring(secondLastStart, secondLastEnd).replace(/[.,!?;:)\]]+$/, '')
-      : '';
+    // Determine last completed word and the one before it
+    const committed = buffer.substring(0, lastSpace);
+    const lastWordStart = committed.lastIndexOf(" ") + 1;
+    const lastWord = committed.substring(lastWordStart).replace(/[.,!?;:)\]]+$/, "");
+    const secondLastEnd = lastWordStart > 0 ? lastWordStart - 1 : -1;
+    const secondLastStart = secondLastEnd > 0 ? committed.lastIndexOf(" ", secondLastEnd - 1) + 1 : 0;
+    const secondLast = secondLastEnd > 0
+      ? committed.substring(secondLastStart, secondLastEnd).replace(/[.,!?;:)\]]+$/, "")
+      : "";
 
-    var lastBare = isBareNumber(lastWord);
-    var lastCode = isCurrencyCode(lastWord);
-    var secondBare = isBareNumber(secondLast);
-    var secondCode = isCurrencyCode(secondLast);
+    const lastBare = isBareNumber(lastWord);
+    const lastCode = isCurrencyCode(lastWord);
+    const secondBare = isBareNumber(secondLast);
+    const secondCode = isCurrencyCode(secondLast);
 
-    var dangling = (lastBare && !secondCode) || (lastCode && !secondBare);
+    // Dangling if last word COULD pair with a following word:
+    //   - bare number without a preceding code (might be followed by code)
+    //   - bare code without a preceding number (might be followed by number)
+    // Symbol-prefixed numbers ($500) are complete — don't hold back.
+    const dangling = (lastBare && !secondCode) || (lastCode && !secondBare);
 
-    var splitAt;
+    let splitAt;
     if (dangling) {
       splitAt = lastWordStart;
-      if (splitAt <= 0) return;
+      if (splitAt <= 0) return; // nothing to flush yet
     } else {
-      splitAt = lastSpace + 1;
+      splitAt = lastSpace + 1; // include the space
     }
 
-    var toFlush = buffer.substring(0, splitAt);
+    const toFlush = buffer.substring(0, splitAt);
     buffer = buffer.substring(splitAt);
 
     if (toFlush) {
-      var normalized = normalizeCurrencyText(toFlush, language);
-      if (normalized) inner.push(normalized);
+      const text = normalizeCurrencyText(toFlush, language);
+      if (text) inner.push(text);
     }
   }
 
   return {
-    push: function (chunk) {
+    push(chunk) {
       if (!chunk) return;
       buffer += chunk;
       flush(false);
     },
-    finish: function () {
+    finish() {
       flush(true);
       inner.finish();
     },
-    /* Delegate async iteration to inner stream */
-    [Symbol.asyncIterator]: function () {
+    [Symbol.asyncIterator]() {
       return inner[Symbol.asyncIterator]();
-    }
+    },
   };
 }
 

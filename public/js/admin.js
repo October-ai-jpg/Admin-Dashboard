@@ -1348,9 +1348,9 @@ function applyTenantData(t) {
   // Language
   var langEl = document.getElementById('sbLanguage');
   if (langEl && t.language) langEl.value = t.language;
-  // Conversion URL
+  // Conversion URL (production COALESCEs conversion_url with legacy booking_url)
   var urlEl = document.getElementById('sbConversionUrl');
-  if (urlEl && t.booking_url) urlEl.value = t.booking_url;
+  if (urlEl && (t.conversion_url || t.booking_url)) urlEl.value = t.conversion_url || t.booking_url;
   // Property data → manual data tab
   if (t.property_data) {
     var dataStr = typeof t.property_data === 'string' ? t.property_data : JSON.stringify(t.property_data, null, 2);
