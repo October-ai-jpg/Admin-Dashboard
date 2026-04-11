@@ -497,5 +497,249 @@ module.exports = function(pool) {
     }
   });
 
+  /* ═══════════════════════════════════════
+     TENANT RESET — preview (dry-run counts)
+     ═══════════════════════════════════════
+     GET /api/monitoring/tenants/:id/reset-preview
+     Returns the exact counts that would be affected by a reset
+     without mutating any data. Safe to call from the UI. */
+  router.get('/tenants/:id/reset-preview', async (req, res) => {
+    if (!pool) return res.status(503).json({ error: 'Database not configured' });
+    const tenantId = req.params.id;
+    if (!tenantId) return res.status(400).json({ error: 'tenant id required' });
+
+    try {
+      // 1. Tenant info (for confirmation + UI display)
+      const tenant = await query(`
+        SELECT t.id, t.name, t.agent_name, t.user_id, t.minutes_used_this_month,
+               COALESCE(t.minutes_quota, 0) as minutes_quota,
+               u.name as customer_name, u.email as customer_email
+        FROM tenants t
+        LEFT JOIN users u ON u.id = t.user_id
+        WHERE t.id = $1
+      `, [tenantId]);
+      if (tenant.rows.length === 0) return res.status(404).json({ error: 'Tenant not found' });
+
+      // 2. Conversation count
+      const convoCount = await query(
+        'SELECT COUNT(*)::int AS c FROM conversations WHERE tenant_id = $1',
+        [tenantId]
+      );
+
+      // 3. Message count (join through conversations)
+      const msgCount = await query(`
+        SELECT COUNT(*)::int AS c
+        FROM conversation_messages
+        WHERE conversation_id IN (SELECT id FROM conversations WHERE tenant_id = $1)
+      `, [tenantId]);
+
+      // 4. voice_usage count (may not exist on every db — guard with try)
+      let voiceUsageCount = 0;
+      try {
+        const vu = await pool.query(
+          'SELECT COUNT(*)::int AS c FROM voice_usage WHERE tenant_id = $1',
+          [tenantId]
+        );
+        voiceUsageCount = parseInt(vu.rows[0]?.c || 0);
+      } catch (e) {
+        // Table may not exist — leave at 0
+      }
+
+      // 5. monthly_usage row for this user + current month
+      let monthlyUsage = null;
+      const userId = tenant.rows[0].user_id;
+      if (userId) {
+        try {
+          const mu = await pool.query(
+            `SELECT total_seconds, total_sessions, total_cost_cents
+             FROM monthly_usage
+             WHERE user_id = $1 AND month = to_char(NOW(), 'YYYY-MM')`,
+            [userId]
+          );
+          if (mu.rows.length > 0) monthlyUsage = mu.rows[0];
+        } catch (e) {
+          // Table may not exist
+        }
+      }
+
+      res.json({
+        tenant: tenant.rows[0],
+        counts: {
+          conversations: parseInt(convoCount.rows[0]?.c || 0),
+          messages: parseInt(msgCount.rows[0]?.c || 0),
+          voiceUsageSessions: voiceUsageCount,
+          minutesUsedThisMonth: parseInt(tenant.rows[0].minutes_used_this_month || 0),
+          monthlyUsage: monthlyUsage
+        }
+      });
+    } catch (e) {
+      console.error('[RESET-PREVIEW] Error:', e.message);
+      res.status(500).json({ error: 'Preview failed: ' + e.message });
+    }
+  });
+
+  /* ═══════════════════════════════════════
+     TENANT RESET — destructive reset in a transaction
+     ═══════════════════════════════════════
+     POST /api/monitoring/tenants/:id/reset-usage
+     Body:
+       confirmToken (string, required): must match tenant.id — prevents blind POSTs
+       scope (object, optional): {
+         deleteConversations: bool (default true),
+         deleteVoiceUsage:    bool (default true),
+         resetTenantMinutes:  bool (default true),
+         resetMonthlyUsage:   bool (default true)
+       }
+     Uses a single pg client with BEGIN/COMMIT. Rolls back on any error. */
+  router.post('/tenants/:id/reset-usage', async (req, res) => {
+    if (!pool) return res.status(503).json({ error: 'Database not configured' });
+    const tenantId = req.params.id;
+    if (!tenantId) return res.status(400).json({ error: 'tenant id required' });
+
+    const body = req.body || {};
+    const confirmToken = body.confirmToken;
+    if (!confirmToken || String(confirmToken) !== String(tenantId)) {
+      return res.status(400).json({
+        error: 'confirmToken must equal the tenant id to authorize a destructive reset'
+      });
+    }
+
+    const scope = {
+      deleteConversations: body.scope?.deleteConversations !== false,
+      deleteVoiceUsage:    body.scope?.deleteVoiceUsage    !== false,
+      resetTenantMinutes:  body.scope?.resetTenantMinutes  !== false,
+      resetMonthlyUsage:   body.scope?.resetMonthlyUsage   !== false,
+    };
+
+    const client = await pool.connect();
+    const deleted = {
+      messages: 0,
+      conversations: 0,
+      voiceUsageSessions: 0,
+      tenantMinutesReset: false,
+      monthlyUsageReset: false
+    };
+
+    try {
+      await client.query('BEGIN');
+
+      // Lookup tenant + user_id inside the transaction for a consistent snapshot
+      const tenantRes = await client.query(
+        'SELECT id, name, agent_name, user_id, minutes_used_this_month FROM tenants WHERE id = $1',
+        [tenantId]
+      );
+      if (tenantRes.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Tenant not found' });
+      }
+      const tenant = tenantRes.rows[0];
+      const userId = tenant.user_id;
+
+      // 1. Delete conversation_messages (FK cascade target)
+      if (scope.deleteConversations) {
+        const msgDel = await client.query(`
+          DELETE FROM conversation_messages
+          WHERE conversation_id IN (SELECT id FROM conversations WHERE tenant_id = $1)
+        `, [tenantId]);
+        deleted.messages = msgDel.rowCount || 0;
+
+        // 2. Delete conversations
+        const convoDel = await client.query(
+          'DELETE FROM conversations WHERE tenant_id = $1',
+          [tenantId]
+        );
+        deleted.conversations = convoDel.rowCount || 0;
+      }
+
+      // 3. Delete voice_usage sessions (if table exists)
+      if (scope.deleteVoiceUsage) {
+        try {
+          const vuDel = await client.query(
+            'DELETE FROM voice_usage WHERE tenant_id = $1',
+            [tenantId]
+          );
+          deleted.voiceUsageSessions = vuDel.rowCount || 0;
+        } catch (e) {
+          // voice_usage may not exist — log and continue inside the transaction
+          console.warn('[RESET] voice_usage delete skipped:', e.message);
+        }
+      }
+
+      // 4. Reset per-tenant monthly minute counter
+      if (scope.resetTenantMinutes) {
+        await client.query(`
+          UPDATE tenants
+             SET minutes_used_this_month = 0, updated_at = NOW()
+           WHERE id = $1
+        `, [tenantId]);
+        deleted.tenantMinutesReset = true;
+      }
+
+      // 5. Reset user-level monthly_usage for current month (if table exists and userId known)
+      if (scope.resetMonthlyUsage && userId) {
+        try {
+          const muRes = await client.query(`
+            UPDATE monthly_usage
+               SET total_seconds = 0, total_sessions = 0, total_cost_cents = 0
+             WHERE user_id = $1
+               AND month = to_char(NOW(), 'YYYY-MM')
+          `, [userId]);
+          deleted.monthlyUsageReset = (muRes.rowCount || 0) > 0;
+        } catch (e) {
+          console.warn('[RESET] monthly_usage update skipped:', e.message);
+        }
+      }
+
+      // 6. Verify post-state (still inside the tx so the SELECT sees the deletes)
+      const verifyConvos = await client.query(
+        'SELECT COUNT(*)::int AS c FROM conversations WHERE tenant_id = $1',
+        [tenantId]
+      );
+      const verifyMinutes = await client.query(
+        'SELECT minutes_used_this_month FROM tenants WHERE id = $1',
+        [tenantId]
+      );
+      const conversationsLeft = parseInt(verifyConvos.rows[0]?.c || 0);
+      const minutesLeft = parseInt(verifyMinutes.rows[0]?.minutes_used_this_month || 0);
+
+      // Safety: if we were asked to delete conversations and/or reset minutes,
+      // but verification doesn't confirm, roll back.
+      const convoFail = scope.deleteConversations && conversationsLeft > 0;
+      const minutesFail = scope.resetTenantMinutes && minutesLeft > 0;
+      if (convoFail || minutesFail) {
+        await client.query('ROLLBACK');
+        return res.status(500).json({
+          error: 'Verification failed — rolled back',
+          conversationsLeft,
+          minutesLeft
+        });
+      }
+
+      await client.query('COMMIT');
+
+      console.log('[RESET]', {
+        tenantId,
+        tenantName: tenant.agent_name || tenant.name,
+        userId,
+        scope,
+        deleted
+      });
+
+      res.json({
+        ok: true,
+        tenant: { id: tenant.id, name: tenant.name, agent_name: tenant.agent_name },
+        scope,
+        deleted,
+        verification: { conversationsLeft, minutesLeft }
+      });
+    } catch (e) {
+      try { await client.query('ROLLBACK'); } catch (rbErr) {}
+      console.error('[RESET] Error — rolled back:', e.message);
+      res.status(500).json({ error: 'Reset failed (rolled back): ' + e.message });
+    } finally {
+      client.release();
+    }
+  });
+
   return router;
 };

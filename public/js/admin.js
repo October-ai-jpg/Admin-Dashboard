@@ -310,7 +310,8 @@ function loadAgents() {
 function showAgentDetail(id) {
   api('/api/monitoring/agents/' + id).then(function(data) {
     var a = data.agent;
-    var html = '<div class="detail-title">' + esc(a.agent_name || a.name || 'Agent') + '</div>'
+    var agentLabel = a.agent_name || a.name || 'Agent';
+    var html = '<div class="detail-title">' + esc(agentLabel) + '</div>'
       + '<div class="detail-subtitle">' + esc(a.customer_name) + ' &middot; ' + esc(a.customer_email) + '</div>'
       + '<div class="detail-section"><h4>Details</h4>'
       + detailRow('Vertical', a.vertical || '-')
@@ -329,8 +330,146 @@ function showAgentDetail(id) {
     });
     html += '</div>';
 
+    // Danger zone: reset this tenant's usage / history
+    html += '<div class="detail-section danger-zone">'
+      + '<h4>Danger Zone</h4>'
+      + '<p class="danger-note">Permanently delete all conversations, messages, voice usage sessions, '
+      + 'and reset the minute counter for this tenant. Cannot be undone.</p>'
+      + '<button class="danger-btn" onclick="openResetModal(\'' + esc(a.id) + '\', \'' + esc(agentLabel).replace(/'/g, "\\'") + '\')">Reset tenant usage…</button>'
+      + '</div>';
+
     document.getElementById('agentDetailContent').innerHTML = html;
     document.getElementById('agentDetail').classList.add('open');
+  });
+}
+
+/* ═══════════════════════════════════════════════
+   TENANT RESET — destructive reset flow
+   ═══════════════════════════════════════════════
+   Two-step confirm:
+   1. openResetModal(id, label) fetches dry-run counts and shows them
+   2. confirmResetUsage(id) fires the destructive POST after admin types the
+      tenant id into the confirmation field */
+function openResetModal(tenantId, tenantLabel) {
+  // Build modal shell if it doesn't exist yet (survives page re-renders)
+  var modal = document.getElementById('resetModal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'resetModal';
+    modal.className = 'reset-modal';
+    modal.innerHTML =
+        '<div class="reset-modal-backdrop" onclick="closeResetModal()"></div>'
+      + '<div class="reset-modal-card">'
+      + '  <button class="reset-modal-close" onclick="closeResetModal()">&times;</button>'
+      + '  <h2 class="reset-modal-title">Reset tenant usage</h2>'
+      + '  <p class="reset-modal-sub" id="resetModalSub"></p>'
+      + '  <div id="resetModalBody" class="reset-modal-body">Loading preview…</div>'
+      + '  <div class="reset-modal-actions">'
+      + '    <button class="btn-secondary" onclick="closeResetModal()">Cancel</button>'
+      + '    <button class="danger-btn" id="resetConfirmBtn" disabled>Reset tenant</button>'
+      + '  </div>'
+      + '</div>';
+    document.body.appendChild(modal);
+  }
+
+  modal.classList.add('open');
+  modal.dataset.tenantId = tenantId;
+  modal.dataset.tenantLabel = tenantLabel || '';
+  document.getElementById('resetModalSub').textContent = tenantLabel ? ('Agent: ' + tenantLabel) : ('Tenant id: ' + tenantId);
+  var body = document.getElementById('resetModalBody');
+  body.innerHTML = 'Loading preview…';
+  document.getElementById('resetConfirmBtn').disabled = true;
+
+  api('/api/monitoring/tenants/' + encodeURIComponent(tenantId) + '/reset-preview').then(function(res) {
+    if (res && res.error) {
+      body.innerHTML = '<div class="reset-error">Preview failed: ' + esc(res.error) + '</div>';
+      return;
+    }
+    var c = res.counts || {};
+    var t = res.tenant || {};
+    var rows = ''
+      + '<div class="reset-info-grid">'
+      + '<div><div class="reset-label">Customer</div><div class="reset-val">' + esc(t.customer_name || '-') + '</div></div>'
+      + '<div><div class="reset-label">Email</div><div class="reset-val">' + esc(t.customer_email || '-') + '</div></div>'
+      + '<div><div class="reset-label">Tenant id</div><div class="reset-val mono">' + esc(t.id || tenantId) + '</div></div>'
+      + '<div><div class="reset-label">Quota</div><div class="reset-val">' + (t.minutes_quota || 0) + ' min/mo</div></div>'
+      + '</div>'
+      + '<div class="reset-counts">'
+      + '<div class="reset-count-row"><span>Conversations to delete</span><strong>' + (c.conversations || 0) + '</strong></div>'
+      + '<div class="reset-count-row"><span>Messages to delete</span><strong>' + (c.messages || 0) + '</strong></div>'
+      + '<div class="reset-count-row"><span>voice_usage sessions to delete</span><strong>' + (c.voiceUsageSessions || 0) + '</strong></div>'
+      + '<div class="reset-count-row"><span>minutes_used_this_month (will become 0)</span><strong>' + (c.minutesUsedThisMonth || 0) + '</strong></div>'
+      + '</div>'
+      + '<div class="reset-scope">'
+      + '<label><input type="checkbox" id="scopeDeleteConvos" checked> Delete conversations + messages</label>'
+      + '<label><input type="checkbox" id="scopeDeleteVoiceUsage" checked> Delete voice_usage sessions</label>'
+      + '<label><input type="checkbox" id="scopeResetMinutes" checked> Reset tenant minutes_used_this_month</label>'
+      + '<label><input type="checkbox" id="scopeResetMonthly" checked> Reset user-level monthly_usage (this month)</label>'
+      + '</div>'
+      + '<div class="reset-confirm-row">'
+      + '<label class="reset-confirm-label">To confirm, paste the tenant id <code>' + esc(tenantId) + '</code> below:</label>'
+      + '<input id="resetConfirmInput" class="reset-confirm-input mono" placeholder="tenant id" oninput="onResetConfirmInput()">'
+      + '</div>';
+    body.innerHTML = rows;
+  }).catch(function(err) {
+    body.innerHTML = '<div class="reset-error">Preview failed: ' + esc(err?.message || String(err)) + '</div>';
+  });
+}
+
+function onResetConfirmInput() {
+  var modal = document.getElementById('resetModal');
+  if (!modal) return;
+  var tenantId = modal.dataset.tenantId;
+  var input = document.getElementById('resetConfirmInput');
+  var btn = document.getElementById('resetConfirmBtn');
+  if (!input || !btn) return;
+  btn.disabled = input.value.trim() !== tenantId;
+  btn.onclick = function() { confirmResetUsage(tenantId); };
+}
+
+function closeResetModal() {
+  var modal = document.getElementById('resetModal');
+  if (modal) modal.classList.remove('open');
+}
+
+function confirmResetUsage(tenantId) {
+  var btn = document.getElementById('resetConfirmBtn');
+  var body = document.getElementById('resetModalBody');
+  if (btn) { btn.disabled = true; btn.textContent = 'Resetting…'; }
+
+  var scope = {
+    deleteConversations: document.getElementById('scopeDeleteConvos')?.checked !== false,
+    deleteVoiceUsage:    document.getElementById('scopeDeleteVoiceUsage')?.checked !== false,
+    resetTenantMinutes:  document.getElementById('scopeResetMinutes')?.checked !== false,
+    resetMonthlyUsage:   document.getElementById('scopeResetMonthly')?.checked !== false,
+  };
+
+  api('/api/monitoring/tenants/' + encodeURIComponent(tenantId) + '/reset-usage', {
+    method: 'POST',
+    body: JSON.stringify({ confirmToken: tenantId, scope: scope })
+  }).then(function(res) {
+    if (res && res.error) {
+      if (body) body.innerHTML = '<div class="reset-error">Reset failed: ' + esc(res.error) + '</div>';
+      if (btn) { btn.disabled = false; btn.textContent = 'Reset tenant'; }
+      return;
+    }
+    var d = res.deleted || {};
+    var summary = ''
+      + '<div class="reset-success">'
+      + '<div class="reset-success-icon">✓</div>'
+      + '<h3>Reset complete</h3>'
+      + '<div class="reset-count-row"><span>Messages deleted</span><strong>' + (d.messages || 0) + '</strong></div>'
+      + '<div class="reset-count-row"><span>Conversations deleted</span><strong>' + (d.conversations || 0) + '</strong></div>'
+      + '<div class="reset-count-row"><span>voice_usage sessions deleted</span><strong>' + (d.voiceUsageSessions || 0) + '</strong></div>'
+      + '<div class="reset-count-row"><span>Tenant minutes reset</span><strong>' + (d.tenantMinutesReset ? 'yes' : 'no') + '</strong></div>'
+      + '<div class="reset-count-row"><span>Monthly usage reset</span><strong>' + (d.monthlyUsageReset ? 'yes' : 'no') + '</strong></div>'
+      + '</div>';
+    if (body) body.innerHTML = summary;
+    if (btn) { btn.textContent = 'Close'; btn.disabled = false; btn.onclick = function() { closeResetModal(); showAgentDetail(tenantId); }; }
+    if (typeof showToast === 'function') showToast('Tenant usage reset', 'success');
+  }).catch(function(err) {
+    if (body) body.innerHTML = '<div class="reset-error">Reset failed: ' + esc(err?.message || String(err)) + '</div>';
+    if (btn) { btn.disabled = false; btn.textContent = 'Reset tenant'; }
   });
 }
 
