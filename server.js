@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { Pool } = require('pg');
 const multer = require('multer');
-const pdfParse = require('pdf-parse');
+const { PDFParse } = require('pdf-parse'); // v2.x API — class, not default function
 
 /* ── Production-identical services ── */
 const { mergePropertyData } = require('./services/dataMerger');
@@ -260,10 +260,16 @@ app.post('/admin/extract-file', requireAuth, upload.single('file'), async (req, 
     let pages = 0;
 
     if (ext === '.pdf' || mimetype === 'application/pdf') {
-      const data = await pdfParse(buffer);
-      rawText = data.text || '';
-      pages = data.numpages || 0;
-      console.log('[EXTRACT] PDF pages:', pages, 'chars:', rawText.length);
+      // pdf-parse v2.x: instantiate class, call getText()
+      const parser = new PDFParse({ data: new Uint8Array(buffer) });
+      try {
+        const result = await parser.getText();
+        rawText = result.text || '';
+        pages = result.total || (result.pages && result.pages.length) || 0;
+        console.log('[EXTRACT] PDF pages:', pages, 'chars:', rawText.length);
+      } finally {
+        try { await parser.destroy(); } catch (e) {}
+      }
     } else if (['.txt', '.csv', '.json', '.md', '.xml', '.html'].includes(ext)) {
       rawText = buffer.toString('utf-8');
     } else if (ext === '.docx') {
