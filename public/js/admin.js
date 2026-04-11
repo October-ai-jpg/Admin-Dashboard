@@ -567,6 +567,11 @@ var sandboxScrapedData = '';
 var sandboxCompiledContext = '';
 var sandboxActiveDataTab = 'manual';
 
+/* ── Floor plan image (data URL, for set_view_mode overlay) ── */
+var sandboxFloorplanImage = '';
+var FLOORPLAN_STORAGE_KEY = 'sandbox_floorplan_image';
+try { sandboxFloorplanImage = localStorage.getItem(FLOORPLAN_STORAGE_KEY) || ''; } catch (e) {}
+
 /* ── VAD Parameters (matches production) ── */
 var VAD_SPEECH_THRESHOLD = 0.015;
 var VAD_SILENCE_MS = 1000;
@@ -802,6 +807,17 @@ function loadSandbox() {
     + '<button class="btn btn-outline btn-sm" onclick="loadTour()">Apply</button></div>'
     + '</div>'
 
+    // Floor plan image (shown as overlay when agent calls set_view_mode:floorplan)
+    + '<div class="form-group">'
+    + '<label class="form-label">Floor Plan Image <span class="sb-tooltip" data-tip="PNG or JPG of the floor plan. Shown as overlay when the agent triggers set_view_mode:floorplan. Persists across page reloads.">?</span></label>'
+    + '<input type="file" id="sbFloorplanInput" accept="image/png,image/jpeg,image/webp" style="display:none" onchange="uploadFloorplanImage(this)">'
+    + '<div style="display:flex;gap:8px;align-items:center">'
+    + '<button class="btn btn-outline btn-sm" onclick="document.getElementById(\'sbFloorplanInput\').click()" id="sbFloorplanBtn" style="flex:1">Upload floor plan</button>'
+    + '<button class="btn btn-outline btn-sm" onclick="clearFloorplanImage()" id="sbFloorplanClearBtn" style="display:none">Clear</button>'
+    + '</div>'
+    + '<div id="sbFloorplanPreview" class="sb-floorplan-preview" style="display:none;margin-top:8px"></div>'
+    + '</div>'
+
     // Load from Tenant
     + '<div class="form-group">'
     + '<label class="form-label">Load from Tenant <span class="sb-tooltip" data-tip="Load an existing customer\'s full configuration — Matterport tour, property data, room mappings, vertical, agent name, and language.">?</span></label>'
@@ -984,6 +1000,12 @@ function loadSandbox() {
     // Fade overlay for navigation
     + '<div class="sb-fade" id="sbFade"></div>'
 
+    // Floor plan overlay (shown when agent triggers set_view_mode:floorplan)
+    + '<div class="sb-floorplan-overlay" id="sbFloorplanOverlay">'
+    + '<img id="sbFloorplanImg" alt="Floor plan">'
+    + '<button class="sb-floorplan-close" onclick="hideFloorplanOverlay()">\u2715 Close</button>'
+    + '</div>'
+
     // Admin toggle button
     + '<button class="sb-admin-toggle" id="sbAdminToggle" onclick="toggleAdminPanel()">\u2699 Admin</button>'
 
@@ -1060,6 +1082,7 @@ function loadSandbox() {
   renderRoomCards();
   updateWordCount();
   populateDemoChips();
+  updateFloorplanPreview();
 }
 
 /* ── API Key Banner ── */
@@ -2440,44 +2463,113 @@ function handleNavigateEvent(msg) {
   }
 }
 
-/* ── View Mode (floorplan/dollhouse/inside) ── */
+/* ── View Mode (floorplan/dollhouse/inside) ──
+ * Matterport URL params (fp=1, dh=1) only toggle BUTTON visibility — they do NOT
+ * switch the actual view mode. Real programmatic control requires the Matterport SDK
+ * (commercial license). So instead:
+ *   - floorplan → show an image overlay (admin-uploaded floor plan PNG/JPG)
+ *   - inside     → hide the overlay
+ *   - dollhouse  → no-op (would require SDK)
+ */
 function handleViewModeEvent(msg) {
-  var iframe = document.querySelector('#sbTourContainer iframe');
-  if (!iframe) {
-    console.warn('[ViewMode] ✗ no iframe in #sbTourContainer — load a tour first');
-    addTranscriptMsg('system', '⚠ Cannot switch view: load a tour first');
-    return;
-  }
-
-  var modelId = (document.getElementById('sbModelId').value || '').trim();
-  if (!modelId) {
-    console.warn('[ViewMode] ✗ sbModelId input is empty');
-    addTranscriptMsg('system', '⚠ Cannot switch view: no model ID');
-    return;
-  }
-
   var mode = msg.mode;
-  var base = 'https://my.matterport.com/show/?m=' + encodeURIComponent(modelId) + '&play=1&qs=1';
-  if (mode === 'floorplan') base += '&f=1&fp=1';
-  else if (mode === 'dollhouse') base += '&dh=1';
+  console.log('[ViewMode] → ' + mode);
 
-  console.log('[ViewMode] → ' + mode + ' (model=' + modelId + ') url=' + base);
-  addTranscriptMsg('system', 'Switching to ' + mode + ' view…');
+  if (mode === 'floorplan') {
+    if (!sandboxFloorplanImage) {
+      console.warn('[ViewMode] ✗ no floor plan image uploaded');
+      addTranscriptMsg('system', '⚠ No floor plan image uploaded — upload one in the config panel');
+      return;
+    }
+    showFloorplanOverlay();
+    addTranscriptMsg('system', 'Showing floor plan…');
+    return;
+  }
 
-  var fadeEl = document.getElementById('sbFade');
-  if (fadeEl) {
-    fadeEl.classList.add('active');
-    setTimeout(function() {
-      iframe.src = base;
-      iframe.addEventListener('load', function onLoad() {
-        iframe.removeEventListener('load', onLoad);
-        console.log('[ViewMode] ✓ iframe reloaded in ' + mode + ' mode');
-        setTimeout(function() { fadeEl.classList.remove('active'); }, 400);
-      }, { once: true });
-      setTimeout(function() { fadeEl.classList.remove('active'); }, 4000);
-    }, 350);
+  if (mode === 'inside') {
+    hideFloorplanOverlay();
+    return;
+  }
+
+  if (mode === 'dollhouse') {
+    // Not supported without Matterport SDK — log and ignore
+    console.warn('[ViewMode] dollhouse requires Matterport SDK — ignoring');
+    return;
+  }
+}
+
+function showFloorplanOverlay() {
+  var overlay = document.getElementById('sbFloorplanOverlay');
+  var img = document.getElementById('sbFloorplanImg');
+  if (!overlay || !img || !sandboxFloorplanImage) return;
+  img.src = sandboxFloorplanImage;
+  overlay.classList.add('active');
+  console.log('[ViewMode] ✓ floor plan overlay shown');
+}
+
+function hideFloorplanOverlay() {
+  var overlay = document.getElementById('sbFloorplanOverlay');
+  if (!overlay) return;
+  overlay.classList.remove('active');
+  console.log('[ViewMode] ✓ floor plan overlay hidden');
+}
+
+/* ── Floor plan image upload ── */
+function uploadFloorplanImage(input) {
+  var file = input.files && input.files[0];
+  if (!file) return;
+  if (!/^image\/(png|jpeg|webp)$/.test(file.type)) {
+    showToast('Only PNG, JPG, or WEBP images are allowed', 'error');
+    input.value = '';
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    showToast('Image must be under 5 MB', 'error');
+    input.value = '';
+    return;
+  }
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    sandboxFloorplanImage = e.target.result || '';
+    try { localStorage.setItem(FLOORPLAN_STORAGE_KEY, sandboxFloorplanImage); } catch (err) {
+      console.warn('[Floorplan] localStorage write failed (too large?):', err);
+      showToast('Image too large to persist — will be cleared on reload', 'error');
+    }
+    updateFloorplanPreview();
+    showToast('Floor plan uploaded', 'success');
+    plog('FLOORPLAN_UPLOAD', '', file.name, Math.round(file.size / 1024) + ' KB');
+    input.value = '';
+  };
+  reader.onerror = function() {
+    showToast('Could not read image', 'error');
+    input.value = '';
+  };
+  reader.readAsDataURL(file);
+}
+
+function clearFloorplanImage() {
+  sandboxFloorplanImage = '';
+  try { localStorage.removeItem(FLOORPLAN_STORAGE_KEY); } catch (e) {}
+  updateFloorplanPreview();
+  hideFloorplanOverlay();
+  showToast('Floor plan cleared', 'success');
+}
+
+function updateFloorplanPreview() {
+  var preview = document.getElementById('sbFloorplanPreview');
+  var clearBtn = document.getElementById('sbFloorplanClearBtn');
+  var uploadBtn = document.getElementById('sbFloorplanBtn');
+  if (!preview) return;
+  if (sandboxFloorplanImage) {
+    preview.innerHTML = '<img src="' + sandboxFloorplanImage + '" alt="Floor plan preview">';
+    preview.style.display = 'block';
+    if (clearBtn) clearBtn.style.display = 'inline-block';
+    if (uploadBtn) uploadBtn.textContent = 'Replace floor plan';
   } else {
-    iframe.src = base;
+    preview.innerHTML = '';
+    preview.style.display = 'none';
+    if (clearBtn) clearBtn.style.display = 'none';
+    if (uploadBtn) uploadBtn.textContent = 'Upload floor plan';
   }
 }
 
