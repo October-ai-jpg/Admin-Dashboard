@@ -66,6 +66,7 @@ function loadPage(page) {
     case 'health': loadHealth(); break;
     case 'default-system': loadDefaultSystem(); break;
     case 'sandbox': loadSandbox(); break;
+    case 'sdk-sandbox': loadSdkSandbox(); break;
     case 'prompts': loadPrompts(); break;
     case 'configurations': loadConfigurations(); break;
     case 'test-history': loadTestHistory(); break;
@@ -544,6 +545,21 @@ var debugLog = [];
 var wsReconnectAttempts = 0;
 var cachedTenants = null;
 
+/* ── SDK Sandbox mode flag + SDK instance state ── */
+var sdkSandboxActive = false;
+var sdkInstance = null;           // Matterport SDK instance (from MP_SDK.connect)
+var sdkConnected = false;         // true once phase === PLAYING
+var sdkConnecting = false;        // guard against parallel connects
+var sdkCameraSub = null;          // camera pose subscription handle
+var sdkSweepCurrentSub = null;    // current sweep subscription handle
+var sdkModeCurrentSub = null;     // current mode subscription handle
+var sdkSweepDataSub = null;       // sweep collection subscription handle
+var sdkSweepsList = [];           // array of sweep objects from Sweep.data
+var sdkCurrentSweepSid = '';
+var sdkCurrentModeName = '';
+var sdkEventLogLines = [];        // most-recent events for the console
+var SDK_INTERFACE_VERSION = '3.10';
+
 /* ── Voice state (matches production embed.js) ── */
 var sbAudioContext = null;
 var sbMicStream = null;
@@ -788,13 +804,34 @@ function dsCard(label, value) {
 
 /* ── (applyDefaultSystem removed — production uses dynamic prompt generation via agentPersona.js) ── */
 
-function loadSandbox() {
-  var c = document.getElementById('page-sandbox');
+function loadSandbox(options) {
+  options = options || {};
+  var sdkMode = !!options.sdkMode;
+  sdkSandboxActive = sdkMode;
+
+  // Clear the OTHER sandbox container so we never have duplicate IDs in the DOM
+  var otherId = sdkMode ? 'page-sandbox' : 'page-sdk-sandbox';
+  var other = document.getElementById(otherId);
+  if (other) other.innerHTML = '';
+
+  // Tear down any existing SDK instance when leaving SDK mode
+  if (!sdkMode && (sdkInstance || sdkConnected)) {
+    try { sdkDisconnectInstance(); } catch (e) {}
+  }
+
+  var containerId = sdkMode ? 'page-sdk-sandbox' : 'page-sandbox';
+  var c = document.getElementById(containerId);
+  if (!c) return;
+
+  var heading = sdkMode ? 'SDK Sandbox' : 'Sandbox';
+  var subheading = sdkMode
+    ? 'Like the Sandbox, but drives the tour via the Matterport Showcase SDK. Requires a private SDK application key.'
+    : 'Test voice agents with the production pipeline. Matches October AI 1:1.';
 
   var html = '<div id="sbKeyBanner"></div>'
     + '<div class="page-label">AGENT BUILDER</div>'
-    + '<h1 class="page-heading">Sandbox</h1>'
-    + '<p class="page-sub">Test voice agents with the production pipeline. Matches October AI 1:1.</p>'
+    + '<h1 class="page-heading">' + heading + '</h1>'
+    + '<p class="page-sub">' + subheading + '</p>'
     + '<div class="sandbox-layout">'
 
     // ═══ ZONE 1: CONFIG PANEL (collapsible) ═══
@@ -806,6 +843,19 @@ function loadSandbox() {
     + '<div style="display:flex;gap:8px"><input class="form-input" id="sbModelId" placeholder="e.g. NCPe9NFNKew" style="flex:1">'
     + '<button class="btn btn-outline btn-sm" onclick="loadTour()">Apply</button></div>'
     + '</div>'
+
+    // SDK Application Key (only in SDK mode)
+    + (sdkMode ? (
+        '<div class="form-group">'
+        + '<label class="form-label">SDK Application Key <span class="sb-tooltip" data-tip="Your Matterport SDK application key. Required for the SDK to connect to the showcase. Treated as a session-only value and stored in browser localStorage for convenience.">?</span></label>'
+        + '<input class="form-input" id="sdkAppKey" placeholder="Paste your private Matterport SDK key" autocomplete="off">'
+        + '<div style="display:flex;gap:8px;margin-top:6px">'
+        + '<button class="btn btn-outline btn-sm" onclick="sdkSaveAppKey()" style="flex:1">Save key</button>'
+        + '<button class="btn btn-outline btn-sm" onclick="sdkClearAppKey()">Clear</button>'
+        + '</div>'
+        + '<div id="sdkKeyStatus" style="font-size:11px;color:var(--muted);margin-top:6px">No key saved.</div>'
+        + '</div>'
+      ) : '')
 
     // Floor plan image (shown as overlay when agent calls set_view_mode:floorplan)
     + '<div class="form-group">'
@@ -952,6 +1002,69 @@ function loadSandbox() {
     + '<input class="form-input sb-demo-input" id="sbDemoQ5" placeholder="(optional)">'
     + '</div>'
 
+    // ─── SDK CONTROLS (only in SDK mode) ───
+    + (sdkMode ? (
+        '<div class="sb-section-header" style="margin-top:20px">SDK Controls</div>'
+        + '<div class="form-group" style="margin-top:0">'
+        + '<p style="font-size:11px;color:var(--muted);margin-bottom:8px">Connect the Matterport Showcase SDK to the tour iframe, then test individual SDK methods.</p>'
+
+        // Connection status + connect/disconnect
+        + '<div class="sdk-status-row">'
+        + '<div class="sdk-status-pill" id="sdkStatusPill"><span class="sdk-status-dot"></span><span id="sdkStatusText">Disconnected</span></div>'
+        + '<button class="btn btn-dark btn-sm" id="sdkConnectBtn" onclick="sdkConnectSdk()">Connect SDK</button>'
+        + '<button class="btn btn-outline btn-sm" id="sdkDisconnectBtn" onclick="sdkDisconnectInstance()" style="display:none">Disconnect</button>'
+        + '</div>'
+
+        // Mode switcher
+        + '<div class="sdk-controls-group">'
+        + '<label class="sdk-controls-label">View Mode</label>'
+        + '<div class="sdk-button-row">'
+        + '<button class="btn btn-outline btn-sm sdk-btn" onclick="sdkTestSetMode(\'inside\')">Inside</button>'
+        + '<button class="btn btn-outline btn-sm sdk-btn" onclick="sdkTestSetMode(\'floorplan\')">Floor plan</button>'
+        + '<button class="btn btn-outline btn-sm sdk-btn" onclick="sdkTestSetMode(\'dollhouse\')">Dollhouse</button>'
+        + '</div>'
+        + '<div style="font-size:11px;color:var(--muted);margin-top:4px">Current: <span id="sdkCurrentMode">—</span></div>'
+        + '</div>'
+
+        // Sweep navigation
+        + '<div class="sdk-controls-group">'
+        + '<label class="sdk-controls-label">Move To Sweep</label>'
+        + '<div style="display:flex;gap:8px">'
+        + '<select class="form-select sdk-btn" id="sdkSweepSelect" style="flex:1"><option value="">— Select sweep —</option></select>'
+        + '<button class="btn btn-outline btn-sm sdk-btn" onclick="sdkTestMoveToSelectedSweep()">Go</button>'
+        + '</div>'
+        + '<div style="font-size:11px;color:var(--muted);margin-top:4px">Current: <span id="sdkCurrentSweep">—</span></div>'
+        + '</div>'
+
+        // Floor switcher
+        + '<div class="sdk-controls-group">'
+        + '<label class="sdk-controls-label">Move To Floor</label>'
+        + '<div style="display:flex;gap:8px">'
+        + '<select class="form-select sdk-btn" id="sdkFloorSelect" style="flex:1"><option value="">— Select floor —</option></select>'
+        + '<button class="btn btn-outline btn-sm sdk-btn" onclick="sdkTestMoveToSelectedFloor()">Go</button>'
+        + '</div>'
+        + '</div>'
+
+        // Info / debugging buttons
+        + '<div class="sdk-controls-group">'
+        + '<label class="sdk-controls-label">Inspect</label>'
+        + '<div class="sdk-button-row" style="flex-wrap:wrap">'
+        + '<button class="btn btn-outline btn-sm sdk-btn" onclick="sdkTestGetCameraPose()">Camera pose</button>'
+        + '<button class="btn btn-outline btn-sm sdk-btn" onclick="sdkTestGetModelData()">Model info</button>'
+        + '<button class="btn btn-outline btn-sm sdk-btn" onclick="sdkTestRefreshSweeps()">Refresh sweeps</button>'
+        + '</div>'
+        + '</div>'
+
+        // Event console
+        + '<div class="sdk-controls-group">'
+        + '<label class="sdk-controls-label">SDK Event Console</label>'
+        + '<div class="sdk-event-log" id="sdkEventLog"><div style="color:var(--muted);font-size:11px">No events yet. Connect the SDK to begin.</div></div>'
+        + '<button class="btn btn-outline btn-sm" onclick="sdkClearEventLog()" style="width:100%;margin-top:6px">Clear log</button>'
+        + '</div>'
+
+        + '</div>' // end form-group
+      ) : '')
+
     // Action buttons
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">'
     + '<button class="btn btn-dark" onclick="saveAndStartSession()" style="flex:1">Save &amp; Start Session</button>'
@@ -1083,6 +1196,18 @@ function loadSandbox() {
   updateWordCount();
   populateDemoChips();
   updateFloorplanPreview();
+
+  // SDK-only init
+  if (sdkMode) {
+    sdkInitKeyField();
+    sdkRenderEventLog();
+    sdkRefreshStatusUI();
+  }
+}
+
+/* Thin entry point for the new sidebar page */
+function loadSdkSandbox() {
+  loadSandbox({ sdkMode: true });
 }
 
 /* ── API Key Banner ── */
@@ -1135,6 +1260,11 @@ function loadTour() {
   }
   document.getElementById('sbModelId').value = modelId;
 
+  // In SDK mode we must tear down any prior SDK instance before swapping the iframe
+  if (sdkSandboxActive) {
+    try { sdkDisconnectInstance(); } catch (e) {}
+  }
+
   // Clear existing content except overlays
   var container = document.getElementById('sbTourContainer');
   var existingIframe = container.querySelector('iframe');
@@ -1143,13 +1273,39 @@ function loadTour() {
   if (existingIframe) existingIframe.remove();
 
   var iframe = document.createElement('iframe');
-  iframe.src = 'https://my.matterport.com/show/?m=' + encodeURIComponent(modelId) + '&play=1&qs=1';
-  iframe.allow = 'microphone; autoplay';
+
+  // In SDK mode we append the application key AND set xr-spatial-tracking perm
+  if (sdkSandboxActive) {
+    var appKey = sdkGetAppKey();
+    if (!appKey) {
+      showToast('Paste your SDK Application Key first', 'error');
+      sdkLogEvent('error', 'No SDK application key — cannot load tour in SDK mode');
+      return;
+    }
+    iframe.src = 'https://my.matterport.com/show/?m=' + encodeURIComponent(modelId)
+      + '&applicationKey=' + encodeURIComponent(appKey)
+      + '&play=1&qs=1';
+    iframe.allow = 'microphone; autoplay; xr-spatial-tracking; fullscreen';
+  } else {
+    iframe.src = 'https://my.matterport.com/show/?m=' + encodeURIComponent(modelId) + '&play=1&qs=1';
+    iframe.allow = 'microphone; autoplay';
+  }
+
   iframe.allowFullscreen = true;
+  iframe.id = 'sbTourIframe';
   iframe.style.cssText = 'width:100%;height:100%;border:none;display:block';
   // Insert iframe as first child (behind overlays)
   container.insertBefore(iframe, container.firstChild);
   showToast('Tour loaded', 'success');
+
+  // In SDK mode, kick off SDK connect as soon as the iframe has loaded
+  if (sdkSandboxActive) {
+    iframe.addEventListener('load', function onLoad() {
+      iframe.removeEventListener('load', onLoad);
+      sdkLogEvent('info', 'Tour iframe loaded — connecting SDK...');
+      sdkConnectSdk();
+    }, { once: true });
+  }
 }
 
 /* ── (resetPrompt removed — production generates prompts dynamically via agentPersona.js) ── */
@@ -2441,6 +2597,26 @@ function handleNavigateEvent(msg) {
   }
   addTranscriptMsg('system', 'Navigating to: ' + (msg.roomName || msg.sweepId));
 
+  // ─── SDK mode: use sdk.Sweep.moveTo() ───
+  if (sdkSandboxActive && sdkInstance && sdkConnected) {
+    sdkLogEvent('navigate', 'Sweep.moveTo(' + msg.sweepId + ') from voice agent');
+    try {
+      sdkInstance.Sweep.moveTo(msg.sweepId, {
+        transition: sdkInstance.Sweep.Transition.FLY,
+        transitionTime: 2000
+      }).then(function(sid) {
+        sdkLogEvent('navigate', 'Sweep.moveTo completed → ' + sid);
+      }).catch(function(err) {
+        sdkLogEvent('error', 'Sweep.moveTo failed: ' + (err && err.message || err));
+        addTranscriptMsg('error', 'SDK navigation failed: ' + (err && err.message || err));
+      });
+    } catch (e) {
+      sdkLogEvent('error', 'Sweep.moveTo threw: ' + e.message);
+    }
+    return;
+  }
+
+  // ─── Non-SDK (legacy) mode: reload iframe src with &ss=... ───
   var iframe = document.querySelector('#sbTourContainer iframe');
   if (!iframe) return;
 
@@ -2475,6 +2651,33 @@ function handleViewModeEvent(msg) {
   var mode = msg.mode;
   console.log('[ViewMode] → ' + mode);
 
+  // ─── SDK mode: use real sdk.Mode.moveTo() for all three modes ───
+  if (sdkSandboxActive && sdkInstance && sdkConnected) {
+    var target = null;
+    try {
+      if (mode === 'inside')    target = sdkInstance.Mode.Mode.INSIDE;
+      if (mode === 'floorplan') target = sdkInstance.Mode.Mode.FLOORPLAN;
+      if (mode === 'dollhouse') target = sdkInstance.Mode.Mode.DOLLHOUSE;
+    } catch (e) {}
+    if (!target) {
+      sdkLogEvent('error', 'Unknown view mode: ' + mode);
+      return;
+    }
+    sdkLogEvent('viewmode', 'Mode.moveTo(' + mode + ') from voice agent');
+    addTranscriptMsg('system', 'Switching view: ' + mode);
+    try {
+      sdkInstance.Mode.moveTo(target).then(function(result) {
+        sdkLogEvent('viewmode', 'Mode.moveTo completed → ' + mode);
+      }).catch(function(err) {
+        sdkLogEvent('error', 'Mode.moveTo failed: ' + (err && err.message || err));
+      });
+    } catch (e) {
+      sdkLogEvent('error', 'Mode.moveTo threw: ' + e.message);
+    }
+    return;
+  }
+
+  // ─── Non-SDK (legacy) mode: floorplan = image overlay, inside = hide, dollhouse = no-op ───
   if (mode === 'floorplan') {
     if (!sandboxFloorplanImage) {
       console.warn('[ViewMode] ✗ no floor plan image uploaded');
@@ -2571,6 +2774,427 @@ function updateFloorplanPreview() {
     if (clearBtn) clearBtn.style.display = 'none';
     if (uploadBtn) uploadBtn.textContent = 'Upload floor plan';
   }
+}
+
+/* ═══════════════════════════════════════════════════
+   MATTERPORT SDK — wrapper + test functions
+   (only active when sdkSandboxActive === true)
+   ═══════════════════════════════════════════════════ */
+
+var SDK_APP_KEY_STORAGE = 'sdk_sandbox_app_key';
+
+/* ── App key persistence (localStorage) ── */
+function sdkGetAppKey() {
+  var el = document.getElementById('sdkAppKey');
+  if (el && el.value.trim()) return el.value.trim();
+  try { return localStorage.getItem(SDK_APP_KEY_STORAGE) || ''; } catch (e) { return ''; }
+}
+
+function sdkSaveAppKey() {
+  var el = document.getElementById('sdkAppKey');
+  var key = el ? el.value.trim() : '';
+  if (!key) { showToast('Enter an SDK application key first', 'error'); return; }
+  try { localStorage.setItem(SDK_APP_KEY_STORAGE, key); } catch (e) {}
+  sdkUpdateKeyStatus();
+  showToast('SDK key saved locally', 'success');
+  sdkLogEvent('info', 'SDK application key saved to localStorage');
+}
+
+function sdkClearAppKey() {
+  var el = document.getElementById('sdkAppKey');
+  if (el) el.value = '';
+  try { localStorage.removeItem(SDK_APP_KEY_STORAGE); } catch (e) {}
+  sdkUpdateKeyStatus();
+  showToast('SDK key cleared', 'success');
+}
+
+function sdkInitKeyField() {
+  var el = document.getElementById('sdkAppKey');
+  if (!el) return;
+  try {
+    var saved = localStorage.getItem(SDK_APP_KEY_STORAGE) || '';
+    if (saved) el.value = saved;
+  } catch (e) {}
+  sdkUpdateKeyStatus();
+}
+
+function sdkUpdateKeyStatus() {
+  var status = document.getElementById('sdkKeyStatus');
+  if (!status) return;
+  var key = sdkGetAppKey();
+  if (key) {
+    status.textContent = '✓ Key loaded (' + key.slice(0, 4) + '…' + key.slice(-4) + ', ' + key.length + ' chars)';
+    status.style.color = 'var(--green, #2a7f3a)';
+  } else {
+    status.textContent = 'No key saved.';
+    status.style.color = 'var(--muted)';
+  }
+}
+
+/* ── SDK connection lifecycle ── */
+function sdkConnectSdk() {
+  if (!sdkSandboxActive) { showToast('Not in SDK Sandbox', 'error'); return; }
+  if (sdkConnecting) { sdkLogEvent('warn', 'Already connecting — ignoring'); return; }
+  if (sdkConnected) { sdkLogEvent('warn', 'Already connected'); return; }
+
+  var appKey = sdkGetAppKey();
+  if (!appKey) {
+    showToast('Paste your SDK Application Key first', 'error');
+    sdkLogEvent('error', 'sdkConnectSdk: no app key');
+    return;
+  }
+
+  if (typeof window.MP_SDK === 'undefined' || !window.MP_SDK.connect) {
+    showToast('Matterport SDK script not loaded', 'error');
+    sdkLogEvent('error', 'window.MP_SDK is undefined — check dashboard.html script tag');
+    return;
+  }
+
+  var iframe = document.getElementById('sbTourIframe') || document.querySelector('#sbTourContainer iframe');
+  if (!iframe) {
+    showToast('Load a Matterport tour first', 'error');
+    sdkLogEvent('error', 'sdkConnectSdk: no iframe in #sbTourContainer');
+    return;
+  }
+
+  sdkConnecting = true;
+  sdkRefreshStatusUI('Connecting…');
+  sdkLogEvent('info', 'MP_SDK.connect(iframe, key, ' + SDK_INTERFACE_VERSION + ')');
+
+  try {
+    var connectResult = window.MP_SDK.connect(iframe, appKey, SDK_INTERFACE_VERSION);
+    // MP_SDK.connect returns a Promise<MpSdk>
+    Promise.resolve(connectResult).then(function(sdk) {
+      sdkInstance = sdk;
+      sdkLogEvent('info', 'SDK handshake OK — waiting for App.Phase.PLAYING…');
+      // Wait until the showcase reaches PLAYING before using any APIs
+      return sdk.App.state.waitUntil(function(state) {
+        return state && state.phase === sdk.App.Phase.PLAYING;
+      }).then(function() {
+        return sdk;
+      });
+    }).then(function(sdk) {
+      sdkConnected = true;
+      sdkConnecting = false;
+      sdkLogEvent('info', '✓ SDK connected, phase = PLAYING');
+      sdkRefreshStatusUI('Connected');
+      showToast('SDK connected', 'success');
+      // Wire up subscriptions + populate dropdowns
+      sdkAttachSubscriptions(sdk);
+      sdkPopulateSweepDropdown();
+      sdkPopulateFloorDropdown();
+    }).catch(function(err) {
+      sdkConnecting = false;
+      sdkConnected = false;
+      sdkInstance = null;
+      var msg = (err && err.message) || String(err || 'unknown error');
+      sdkLogEvent('error', 'SDK connect failed: ' + msg);
+      sdkRefreshStatusUI('Disconnected');
+      showToast('SDK connect failed: ' + msg, 'error');
+    });
+  } catch (e) {
+    sdkConnecting = false;
+    sdkConnected = false;
+    sdkInstance = null;
+    sdkLogEvent('error', 'SDK connect threw: ' + e.message);
+    sdkRefreshStatusUI('Disconnected');
+    showToast('SDK connect error: ' + e.message, 'error');
+  }
+}
+
+function sdkDisconnectInstance() {
+  // Cancel all subscriptions
+  try { if (sdkCameraSub && sdkCameraSub.cancel) sdkCameraSub.cancel(); } catch (e) {}
+  try { if (sdkSweepCurrentSub && sdkSweepCurrentSub.cancel) sdkSweepCurrentSub.cancel(); } catch (e) {}
+  try { if (sdkModeCurrentSub && sdkModeCurrentSub.cancel) sdkModeCurrentSub.cancel(); } catch (e) {}
+  try { if (sdkSweepDataSub && sdkSweepDataSub.cancel) sdkSweepDataSub.cancel(); } catch (e) {}
+  sdkCameraSub = null;
+  sdkSweepCurrentSub = null;
+  sdkModeCurrentSub = null;
+  sdkSweepDataSub = null;
+
+  sdkInstance = null;
+  sdkConnected = false;
+  sdkConnecting = false;
+  sdkSweepsList = [];
+  sdkCurrentSweepSid = '';
+  sdkCurrentModeName = '';
+
+  sdkRefreshStatusUI('Disconnected');
+
+  // Reset dropdowns
+  var sweepSel = document.getElementById('sdkSweepSelect');
+  if (sweepSel) sweepSel.innerHTML = '<option value="">— Select sweep —</option>';
+  var floorSel = document.getElementById('sdkFloorSelect');
+  if (floorSel) floorSel.innerHTML = '<option value="">— Select floor —</option>';
+  var modeEl = document.getElementById('sdkCurrentMode');
+  if (modeEl) modeEl.textContent = '—';
+  var sweepEl = document.getElementById('sdkCurrentSweep');
+  if (sweepEl) sweepEl.textContent = '—';
+
+  sdkLogEvent('info', 'SDK disconnected');
+}
+
+function sdkRefreshStatusUI(stateText) {
+  var text = stateText;
+  if (!text) {
+    text = sdkConnected ? 'Connected' : (sdkConnecting ? 'Connecting…' : 'Disconnected');
+  }
+  var pill = document.getElementById('sdkStatusPill');
+  var txt = document.getElementById('sdkStatusText');
+  var connectBtn = document.getElementById('sdkConnectBtn');
+  var disconnectBtn = document.getElementById('sdkDisconnectBtn');
+  if (txt) txt.textContent = text;
+  if (pill) {
+    pill.classList.remove('connected', 'connecting', 'disconnected');
+    if (sdkConnected) pill.classList.add('connected');
+    else if (sdkConnecting) pill.classList.add('connecting');
+    else pill.classList.add('disconnected');
+  }
+  if (connectBtn) connectBtn.style.display = sdkConnected ? 'none' : '';
+  if (disconnectBtn) disconnectBtn.style.display = sdkConnected ? '' : 'none';
+  // Enable/disable test buttons based on connection
+  document.querySelectorAll('.sdk-btn').forEach(function(b) { b.disabled = !sdkConnected; });
+}
+
+/* ── SDK subscriptions (camera, sweep, mode, sweep collection) ── */
+function sdkAttachSubscriptions(sdk) {
+  try {
+    sdkCameraSub = sdk.Camera.pose.subscribe(function(pose) {
+      // Too spammy for the log — we just cache; exposed via the "Camera pose" button
+      window.__sdkLastPose = pose;
+    });
+  } catch (e) { sdkLogEvent('error', 'Camera.pose.subscribe failed: ' + e.message); }
+
+  try {
+    sdkSweepCurrentSub = sdk.Sweep.current.subscribe(function(sweep) {
+      sdkCurrentSweepSid = (sweep && sweep.sid) || '';
+      var el = document.getElementById('sdkCurrentSweep');
+      if (el) el.textContent = sdkCurrentSweepSid || '—';
+      if (sdkCurrentSweepSid) sdkLogEvent('sweep', 'current → ' + sdkCurrentSweepSid);
+    });
+  } catch (e) { sdkLogEvent('error', 'Sweep.current.subscribe failed: ' + e.message); }
+
+  try {
+    sdkModeCurrentSub = sdk.Mode.current.subscribe(function(mode) {
+      sdkCurrentModeName = mode || '';
+      var el = document.getElementById('sdkCurrentMode');
+      if (el) el.textContent = sdkCurrentModeName || '—';
+      if (sdkCurrentModeName) sdkLogEvent('mode', 'current → ' + sdkCurrentModeName);
+    });
+  } catch (e) { sdkLogEvent('error', 'Mode.current.subscribe failed: ' + e.message); }
+
+  try {
+    sdkSweepDataSub = sdk.Sweep.data.subscribe({
+      onCollectionUpdated: function(collection) {
+        // collection is an object keyed by sid
+        var list = [];
+        Object.keys(collection).forEach(function(sid) {
+          var sw = collection[sid];
+          list.push({
+            sid: sid,
+            label: (sw && sw.label) || sid.slice(0, 8),
+            floor: sw && sw.floorInfo ? sw.floorInfo.sequence : null
+          });
+        });
+        sdkSweepsList = list;
+        sdkPopulateSweepDropdown();
+      }
+    });
+  } catch (e) { sdkLogEvent('error', 'Sweep.data.subscribe failed: ' + e.message); }
+}
+
+/* ── Dropdown population ── */
+function sdkPopulateSweepDropdown() {
+  var sel = document.getElementById('sdkSweepSelect');
+  if (!sel) return;
+  if (!sdkSweepsList || sdkSweepsList.length === 0) {
+    sel.innerHTML = '<option value="">— No sweeps loaded —</option>';
+    return;
+  }
+  // Sort by floor then label
+  var sorted = sdkSweepsList.slice().sort(function(a, b) {
+    if (a.floor !== b.floor) return (a.floor || 0) - (b.floor || 0);
+    return String(a.label).localeCompare(String(b.label));
+  });
+  var opts = '<option value="">— Select sweep —</option>';
+  sorted.forEach(function(s) {
+    var floorTxt = (s.floor !== null && s.floor !== undefined) ? ('F' + s.floor + ' · ') : '';
+    opts += '<option value="' + esc(s.sid) + '">' + floorTxt + esc(s.label) + ' (' + s.sid.slice(0, 8) + ')</option>';
+  });
+  sel.innerHTML = opts;
+  sdkLogEvent('info', 'Sweep dropdown populated: ' + sdkSweepsList.length + ' sweeps');
+}
+
+function sdkPopulateFloorDropdown() {
+  var sel = document.getElementById('sdkFloorSelect');
+  if (!sel || !sdkInstance || !sdkConnected) return;
+  try {
+    sdkInstance.Floor.getData().then(function(floors) {
+      if (!floors || !floors.length) {
+        sel.innerHTML = '<option value="">— No floors —</option>';
+        return;
+      }
+      var opts = '<option value="">— Select floor —</option>';
+      floors.forEach(function(f) {
+        var label = f.name || ('Floor ' + f.sequence);
+        opts += '<option value="' + f.sequence + '">' + esc(label) + '</option>';
+      });
+      sel.innerHTML = opts;
+      sdkLogEvent('info', 'Floor dropdown populated: ' + floors.length + ' floors');
+    }).catch(function(err) {
+      sdkLogEvent('error', 'Floor.getData failed: ' + (err && err.message || err));
+    });
+  } catch (e) {
+    sdkLogEvent('error', 'Floor.getData threw: ' + e.message);
+  }
+}
+
+/* ── SDK test functions (wired to buttons in the SDK Controls panel) ── */
+function sdkRequireConnected() {
+  if (!sdkInstance || !sdkConnected) {
+    showToast('Connect the SDK first', 'error');
+    return false;
+  }
+  return true;
+}
+
+function sdkTestSetMode(mode) {
+  if (!sdkRequireConnected()) return;
+  var target = null;
+  try {
+    if (mode === 'inside')    target = sdkInstance.Mode.Mode.INSIDE;
+    if (mode === 'floorplan') target = sdkInstance.Mode.Mode.FLOORPLAN;
+    if (mode === 'dollhouse') target = sdkInstance.Mode.Mode.DOLLHOUSE;
+  } catch (e) {}
+  if (!target) { sdkLogEvent('error', 'Unknown mode: ' + mode); return; }
+  sdkLogEvent('call', 'Mode.moveTo(' + mode + ')');
+  sdkInstance.Mode.moveTo(target).then(function() {
+    sdkLogEvent('ok', 'Mode.moveTo → ' + mode + ' completed');
+  }).catch(function(err) {
+    sdkLogEvent('error', 'Mode.moveTo failed: ' + (err && err.message || err));
+  });
+}
+
+function sdkTestMoveToSelectedSweep() {
+  if (!sdkRequireConnected()) return;
+  var sel = document.getElementById('sdkSweepSelect');
+  var sid = sel ? sel.value : '';
+  if (!sid) { showToast('Pick a sweep first', 'error'); return; }
+  sdkLogEvent('call', 'Sweep.moveTo(' + sid.slice(0, 8) + '…)');
+  try {
+    sdkInstance.Sweep.moveTo(sid, {
+      transition: sdkInstance.Sweep.Transition.FLY,
+      transitionTime: 2000
+    }).then(function(newSid) {
+      sdkLogEvent('ok', 'Sweep.moveTo → ' + newSid);
+    }).catch(function(err) {
+      sdkLogEvent('error', 'Sweep.moveTo failed: ' + (err && err.message || err));
+    });
+  } catch (e) {
+    sdkLogEvent('error', 'Sweep.moveTo threw: ' + e.message);
+  }
+}
+
+function sdkTestMoveToSelectedFloor() {
+  if (!sdkRequireConnected()) return;
+  var sel = document.getElementById('sdkFloorSelect');
+  var val = sel ? sel.value : '';
+  if (val === '') { showToast('Pick a floor first', 'error'); return; }
+  var idx = parseInt(val, 10);
+  sdkLogEvent('call', 'Floor.moveTo(' + idx + ')');
+  try {
+    sdkInstance.Floor.moveTo(idx).then(function(i) {
+      sdkLogEvent('ok', 'Floor.moveTo → ' + i);
+    }).catch(function(err) {
+      sdkLogEvent('error', 'Floor.moveTo failed: ' + (err && err.message || err));
+    });
+  } catch (e) {
+    sdkLogEvent('error', 'Floor.moveTo threw: ' + e.message);
+  }
+}
+
+function sdkTestGetCameraPose() {
+  if (!sdkRequireConnected()) return;
+  sdkLogEvent('call', 'Camera.getPose()');
+  try {
+    sdkInstance.Camera.getPose().then(function(pose) {
+      var p = pose && pose.position;
+      var r = pose && pose.rotation;
+      var summary = '{ pos: [' + (p ? p.x.toFixed(2) + ',' + p.y.toFixed(2) + ',' + p.z.toFixed(2) : '?')
+        + '], rot: [' + (r ? r.x.toFixed(1) + ',' + r.y.toFixed(1) : '?') + '], mode: ' + (pose && pose.mode || '?') + ' }';
+      sdkLogEvent('ok', 'Camera.getPose → ' + summary);
+    }).catch(function(err) {
+      sdkLogEvent('error', 'Camera.getPose failed: ' + (err && err.message || err));
+    });
+  } catch (e) {
+    sdkLogEvent('error', 'Camera.getPose threw: ' + e.message);
+  }
+}
+
+function sdkTestGetModelData() {
+  if (!sdkRequireConnected()) return;
+  sdkLogEvent('call', 'Model.getData()');
+  try {
+    sdkInstance.Model.getData().then(function(data) {
+      var sid = data && data.sid;
+      var name = data && data.name;
+      var sweepCount = data && data.sweeps ? data.sweeps.length : 0;
+      sdkLogEvent('ok', 'Model.getData → sid=' + (sid || '?') + ', name=' + (name || '?') + ', sweeps=' + sweepCount);
+    }).catch(function(err) {
+      sdkLogEvent('error', 'Model.getData failed: ' + (err && err.message || err));
+    });
+  } catch (e) {
+    sdkLogEvent('error', 'Model.getData threw: ' + e.message);
+  }
+}
+
+function sdkTestRefreshSweeps() {
+  if (!sdkRequireConnected()) return;
+  sdkLogEvent('call', 'Refresh sweep dropdown');
+  sdkPopulateSweepDropdown();
+  sdkPopulateFloorDropdown();
+}
+
+/* ── SDK Event Log ── */
+function sdkLogEvent(type, msg) {
+  var line = {
+    t: new Date().toLocaleTimeString(),
+    type: type || 'info',
+    msg: String(msg || '')
+  };
+  sdkEventLogLines.push(line);
+  if (sdkEventLogLines.length > 200) sdkEventLogLines.shift();
+  sdkRenderEventLog();
+  // Mirror to browser console for convenience
+  var prefix = '[SDK:' + line.type + ']';
+  if (type === 'error') console.error(prefix, msg);
+  else if (type === 'warn') console.warn(prefix, msg);
+  else console.log(prefix, msg);
+}
+
+function sdkRenderEventLog() {
+  var el = document.getElementById('sdkEventLog');
+  if (!el) return;
+  if (!sdkEventLogLines.length) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:11px">No events yet. Connect the SDK to begin.</div>';
+    return;
+  }
+  var html = '';
+  for (var i = sdkEventLogLines.length - 1; i >= 0; i--) {
+    var line = sdkEventLogLines[i];
+    html += '<div class="sdk-event-line sdk-ev-' + esc(line.type) + '">'
+      + '<span class="sdk-event-time">' + esc(line.t) + '</span>'
+      + '<span class="sdk-event-type">' + esc(line.type) + '</span>'
+      + '<span class="sdk-event-msg">' + esc(line.msg) + '</span>'
+      + '</div>';
+  }
+  el.innerHTML = html;
+}
+
+function sdkClearEventLog() {
+  sdkEventLogLines = [];
+  sdkRenderEventLog();
 }
 
 /* ═══════════════════════════════════════════════
