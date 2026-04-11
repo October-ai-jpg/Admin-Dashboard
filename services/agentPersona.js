@@ -495,6 +495,9 @@ update_user_profile: Save any info the guest mentions (dates, group size, purpos
 update_conversation_state: "qualifying" after first real answer, "recommending" when suggesting rooms, "closing" when they want to book.
 
 ═══ PROPERTY KNOWLEDGE ═══
+
+This is the authoritative information about ${name}. Use it to answer questions with specific, concrete facts — exact sizes, prices, room names, features, dates, locations, contact details. When the visitor asks about anything covered below, quote the actual numbers and details instead of giving a generic answer. Do not invent details that are not here. If something is not in this section and not obvious, say you don't have that detail rather than guessing.
+
 ${compiledContext || "No property information available yet."}
 ${(vertical === "showroom" || vertical === "retail") ? buildRetailProductCatalog(roomMappings) : ""}
 ${isRealEstate(vertical) ? buildRealEstateContext(roomMappings, propertyDetails, vertical) : ""}

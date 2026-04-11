@@ -159,6 +159,79 @@ const SYMBOL_NAMES_BY_LANG = {
   pt: { "$": "dólares", "€": "euros", "£": "libras", "¥": "ienes" },
 };
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Measurement unit names per language (floor plans / real estate / property)
+// ──────────────────────────────────────────────────────────────────────────────
+
+const UNIT_M2_BY_LANG = {
+  en: "square meters",
+  da: "kvadratmeter",
+  de: "Quadratmeter",
+  sv: "kvadratmeter",
+  no: "kvadratmeter",
+  fr: "mètres carrés",
+  es: "metros cuadrados",
+  it: "metri quadrati",
+  nl: "vierkante meter",
+  pt: "metros quadrados",
+};
+
+const UNIT_M3_BY_LANG = {
+  en: "cubic meters",
+  da: "kubikmeter",
+  de: "Kubikmeter",
+  sv: "kubikmeter",
+  no: "kubikmeter",
+  fr: "mètres cubes",
+  es: "metros cúbicos",
+  it: "metri cubi",
+  nl: "kubieke meter",
+  pt: "metros cúbicos",
+};
+
+const UNIT_KM2_BY_LANG = {
+  en: "square kilometers",
+  da: "kvadratkilometer",
+  de: "Quadratkilometer",
+  sv: "kvadratkilometer",
+  no: "kvadratkilometer",
+  fr: "kilomètres carrés",
+  es: "kilómetros cuadrados",
+  it: "chilometri quadrati",
+  nl: "vierkante kilometer",
+  pt: "quilômetros quadrados",
+};
+
+const UNIT_CELSIUS_BY_LANG = {
+  en: "degrees Celsius",
+  da: "grader celsius",
+  de: "Grad Celsius",
+  sv: "grader Celsius",
+  no: "grader celsius",
+  fr: "degrés Celsius",
+  es: "grados Celsius",
+  it: "gradi Celsius",
+  nl: "graden Celsius",
+  pt: "graus Celsius",
+};
+
+const UNIT_FAHRENHEIT_BY_LANG = {
+  en: "degrees Fahrenheit",
+  da: "grader fahrenheit",
+  de: "Grad Fahrenheit",
+  sv: "grader Fahrenheit",
+  no: "grader fahrenheit",
+  fr: "degrés Fahrenheit",
+  es: "grados Fahrenheit",
+  it: "gradi Fahrenheit",
+  nl: "graden Fahrenheit",
+  pt: "graus Fahrenheit",
+};
+
+// Languages that use "." as thousand separator (and "," as decimal).
+// English uses the opposite convention.
+const EU_DOT_THOUSANDS_LANGS = new Set(["da", "de", "sv", "no", "es", "it", "nl", "pt", "fr"]);
+
 const ALL_CODES = Object.keys(CURRENCY_NAMES_EN);
 const CODES_ALTERNATION = ALL_CODES.join("|");
 
@@ -170,22 +243,52 @@ function getNames(language) {
   };
 }
 
+function getUnitNames(language) {
+  const lang = (language || "en").toLowerCase();
+  return {
+    m2: UNIT_M2_BY_LANG[lang] || UNIT_M2_BY_LANG.en,
+    m3: UNIT_M3_BY_LANG[lang] || UNIT_M3_BY_LANG.en,
+    km2: UNIT_KM2_BY_LANG[lang] || UNIT_KM2_BY_LANG.en,
+    celsius: UNIT_CELSIUS_BY_LANG[lang] || UNIT_CELSIUS_BY_LANG.en,
+    fahrenheit: UNIT_FAHRENHEIT_BY_LANG[lang] || UNIT_FAHRENHEIT_BY_LANG.en,
+  };
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Pure text transformation. Handles:
 //   $500, €1,500, £19.99              → "500 dollars" etc.
 //   USD 500, EUR 1,500, DKK 2.000      → "500 US dollars" etc.
 //   500 USD, 1,500 EUR                 → "500 US dollars" etc.
-// Thousands separators (",") are removed inside numbers. "Room 500",
-// "chapter 12" etc. are left untouched because no currency token is near.
+//   2.500.000 DKK (EU languages)       → "2500000 Danish kroner"
+//   150 m², 25 m³, 30°C                → "150 square meters" etc.
+// English thousands separators (",") are always stripped. European dot
+// thousands separators are stripped only for EU languages (or for clearly
+// unambiguous multi-dot patterns like "2.500.000"). "Room 500", "chapter 12"
+// etc. are left untouched because no currency/unit token is near.
 // ──────────────────────────────────────────────────────────────────────────────
 
 function normalizeCurrencyText(text, language = "en") {
   if (!text || typeof text !== "string") return text;
   const { codes, symbols } = getNames(language);
+  const units = getUnitNames(language);
+  const lang = (language || "en").toLowerCase();
+  const isEULang = EU_DOT_THOUSANDS_LANGS.has(lang);
 
-  // Strip thousands separators inside numbers ("1,500" → "1500")
+  // Strip English thousands separators ("1,500" → "1500")
   let out = text.replace(/(\d),(\d{3}\b)/g, "$1$2");
   out = out.replace(/(\d),(\d{3}\b)/g, "$1$2"); // second pass for 1,500,000
+
+  // Strip European dot-thousands (multi-dot is always safe — no language uses
+  // multiple decimals, so "2.500.000" can only mean 2 500 000).
+  out = out.replace(/(?<!\d)(\d{1,3})((?:\.\d{3}){2,})(?!\d)/g, (_m, head, rest) =>
+    head + rest.replace(/\./g, "")
+  );
+
+  // Single-dot European thousands ("2.500") — only strip for EU languages,
+  // because in English "2.500" is a decimal (2.5).
+  if (isEULang) {
+    out = out.replace(/(?<!\d)(\d{1,3})\.(\d{3})(?!\d)/g, "$1$2");
+  }
 
   // 1) Symbol + number:  "$500"  → "500 dollars"
   out = out.replace(/([$€£¥₹₩])\s*(\d+(?:\.\d+)?)/g, (_m, sym, num) => {
@@ -207,6 +310,27 @@ function normalizeCurrencyText(text, language = "en") {
     return `${num} ${codes[upper] || code}`;
   });
 
+  // 4) Measurement units (m², m³, km², °C, °F, kvm, m2, m3, km2)
+  // Superscript forms first — they are always area/volume.
+  out = out.replace(/(\d+(?:[.,]\d+)?)\s*m²/g, (_m, num) => `${num} ${units.m2}`);
+  out = out.replace(/(\d+(?:[.,]\d+)?)\s*m³/g, (_m, num) => `${num} ${units.m3}`);
+  out = out.replace(/(\d+(?:[.,]\d+)?)\s*km²/g, (_m, num) => `${num} ${units.km2}`);
+
+  // ASCII forms: "m2", "m3", "km2" — only when followed by non-alphanumeric
+  // (so we don't match "m2000" or "km24").
+  out = out.replace(/(\d+(?:[.,]\d+)?)\s*km2(?![a-zA-Z0-9])/g, (_m, num) => `${num} ${units.km2}`);
+  out = out.replace(/(\d+(?:[.,]\d+)?)\s*m2(?![a-zA-Z0-9])/g, (_m, num) => `${num} ${units.m2}`);
+  out = out.replace(/(\d+(?:[.,]\d+)?)\s*m3(?![a-zA-Z0-9])/g, (_m, num) => `${num} ${units.m3}`);
+
+  // Danish floor-plan abbreviation "kvm" = kvadratmeter (only Danish uses it)
+  if (lang === "da") {
+    out = out.replace(/(\d+(?:[.,]\d+)?)\s*kvm\b/gi, (_m, num) => `${num} kvadratmeter`);
+  }
+
+  // Temperature: "30°C", "86 °F"
+  out = out.replace(/(-?\d+(?:[.,]\d+)?)\s*°\s*C\b/g, (_m, num) => `${num} ${units.celsius}`);
+  out = out.replace(/(-?\d+(?:[.,]\d+)?)\s*°\s*F\b/g, (_m, num) => `${num} ${units.fahrenheit}`);
+
   return out;
 }
 
@@ -224,10 +348,12 @@ function normalizeCurrencyText(text, language = "en") {
 // ──────────────────────────────────────────────────────────────────────────────
 
 const BARE_NUMBER_RE = /^\d+(?:\.\d+)?$/;
+// European thousand-separator numbers: "2.500", "2.500.000", "1.250,50"
+const EU_NUMBER_RE = /^\d{1,3}(?:\.\d{3})+(?:,\d+)?$/;
 const SYMBOL_NUMBER_RE = /^[$€£¥₹₩]\d+(?:\.\d+)?$/;
 const CODE_RE = new RegExp(`^(${CODES_ALTERNATION})$`, "i");
 
-function isBareNumber(s) { return BARE_NUMBER_RE.test(s); }
+function isBareNumber(s) { return BARE_NUMBER_RE.test(s) || EU_NUMBER_RE.test(s); }
 function isSymbolNumber(s) { return SYMBOL_NUMBER_RE.test(s); }
 function isCurrencyCode(s) { return CODE_RE.test(s); }
 
