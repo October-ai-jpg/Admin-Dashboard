@@ -54,11 +54,12 @@ function handleToolCall(toolName, args, session, clientWs) {
       if (!roomId || !session.places[roomId]) break;
       const label = typeof session.places[roomId] === "object"
         ? session.places[roomId].label : session.places[roomId];
+      const sweepId = (session.roomMappings[roomId] && session.roomMappings[roomId].sweepId) || roomId;
       if (!session.recommendedRooms.includes(roomId)) session.recommendedRooms.push(roomId);
       session.lastRecommendedRoom = roomId;
       session.navigatedRooms.push(roomId);
       session.toolsUsed.navigate_to_room = (session.toolsUsed.navigate_to_room || 0) + 1;
-      send({ type: "navigate", roomId, label });
+      send({ type: "navigate", roomId, label, sweepId });
       console.log(`[Pipeline] navigate_to_room: ${roomId} (${label})`);
       if (session.conversationId) {
         logConversion(session.tenantId, session.conversationId, "navigation", { roomId, reason: args.reason }).catch(() => {});
@@ -104,6 +105,7 @@ function handleToolCall(toolName, args, session, clientWs) {
           session.userProfile[field] = value;
         }
         console.log(`[Pipeline] update_user_profile: ${field} = ${value}`);
+        send({ type: "profile_update", field, value });
         // Persist contact info on conversation row
         if (session.conversationId && ["name", "email", "phone"].includes(field) && value) {
           var col = field === "name" ? "guest_name" : field === "email" ? "guest_email" : "guest_phone";
@@ -116,6 +118,7 @@ function handleToolCall(toolName, args, session, clientWs) {
       if (args.new_state) {
         const ok = transitionState(session, args.new_state);
         console.log(`[Pipeline] state → ${session.state} (${ok ? "ok" : "rejected"}) — ${args.reason}`);
+        send({ type: "state_update", new_state: args.new_state, reason: args.reason || "" });
       }
       break;
     }
