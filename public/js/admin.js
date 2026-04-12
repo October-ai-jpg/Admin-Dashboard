@@ -284,14 +284,16 @@ function loadAgents() {
       + filterBtn('All', '', 'agents') + filterBtn('Hotel', 'hotel', 'agents') + filterBtn('Education', 'education', 'agents') + filterBtn('Real Estate', 'real_estate_sale', 'agents')
       + '</div>'
       + '<table class="data-table"><thead><tr>'
-      + '<th>Agent Name</th><th>Customer</th><th>Vertical</th><th>Conversations</th><th>Conversions</th><th>Rate</th><th>Minutes</th>'
+      + '<th>Agent Name</th><th>Customer</th><th>Token</th><th>Vertical</th><th>Conversations</th><th>Conversions</th><th>Rate</th><th>Minutes</th>'
       + '</tr></thead><tbody>';
 
     data.agents.forEach(function(a) {
       var rate = parseInt(a.conversations) > 0 ? Math.round((parseInt(a.conversions) / parseInt(a.conversations)) * 100) : 0;
+      var shortToken = a.client_token ? a.client_token.substring(0, 8) + '…' : '-';
       html += '<tr onclick="showAgentDetail(\'' + a.id + '\')">'
         + '<td>' + esc(a.agent_name || a.name || 'Agent') + '</td>'
         + '<td>' + esc(a.customer_name || '-') + '</td>'
+        + '<td style="font-family:monospace;font-size:12px;color:#888" title="' + esc(a.client_token || '') + '">' + esc(shortToken) + '</td>'
         + '<td>' + esc(a.vertical || '-') + '</td>'
         + '<td>' + (a.conversations || 0) + '</td>'
         + '<td>' + (a.conversions || 0) + '</td>'
@@ -314,6 +316,8 @@ function showAgentDetail(id) {
     var html = '<div class="detail-title">' + esc(agentLabel) + '</div>'
       + '<div class="detail-subtitle">' + esc(a.customer_name) + ' &middot; ' + esc(a.customer_email) + '</div>'
       + '<div class="detail-section"><h4>Details</h4>'
+      + detailRow('Tenant ID', '<span style="font-family:monospace;font-size:12px;user-select:all">' + esc(a.id) + '</span>')
+      + detailRow('Client Token', '<span style="font-family:monospace;font-size:12px;user-select:all">' + esc(a.client_token || '-') + '</span>')
       + detailRow('Vertical', a.vertical || '-')
       + detailRow('Minutes Used', a.minutes_used_this_month || 0)
       + detailRow('Created', fmtDate(a.created_at))

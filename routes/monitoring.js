@@ -197,7 +197,7 @@ module.exports = function(pool) {
     let paramIdx = 1;
 
     if (search) {
-      where += ` AND (t.agent_name ILIKE $${paramIdx} OR t.name ILIKE $${paramIdx})`;
+      where += ` AND (t.agent_name ILIKE $${paramIdx} OR t.name ILIKE $${paramIdx} OR t.client_token ILIKE $${paramIdx} OR u.name ILIKE $${paramIdx})`;
       params.push('%' + search + '%');
       paramIdx++;
     }
@@ -211,6 +211,7 @@ module.exports = function(pool) {
       const countResult = await query(`
         SELECT COUNT(*) as count FROM tenants t
         LEFT JOIN clients cl ON cl.id = t.client_id
+        LEFT JOIN users u ON u.id = t.user_id
         ${where}
       `, params);
       const total = parseInt(countResult.rows[0]?.count || 0);
@@ -218,10 +219,11 @@ module.exports = function(pool) {
       const result = await query(`
         SELECT t.id, t.name, t.agent_name, t.minutes_used_this_month,
                t.created_at, t.user_id, t.active,
+               t.client_token,
                cl.vertical,
                u.name as customer_name, u.email as customer_email,
                COUNT(DISTINCT c.id) as conversations,
-               SUM(CASE WHEN c.had_booking_click = true OR c.conversion_stage = 'converted' THEN 1 ELSE 0 END) as conversions
+               COUNT(DISTINCT CASE WHEN c.had_booking_click = true THEN c.id END) as conversions
         FROM tenants t
         LEFT JOIN clients cl ON cl.id = t.client_id
         LEFT JOIN users u ON u.id = t.user_id
