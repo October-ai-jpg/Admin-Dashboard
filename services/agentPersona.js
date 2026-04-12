@@ -494,6 +494,15 @@ ${turnCount < 8 ? `Before turn 8: NEVER call trigger_conversion unless the visit
 update_user_profile: Save any info the guest mentions (dates, group size, purpose, preferences, name, budget). Runs silently in the background.
 update_conversation_state: "qualifying" after first real answer, "recommending" when suggesting rooms, "closing" when they want to book.
 
+═══ 3D TOUR CONTROLS ═══
+
+You have direct control over the 3D tour viewer. Use these tools naturally during conversation — describe what you are doing as you do it.
+set_view_mode: Switch between inside (walk-through), floorplan (top-down), and dollhouse (3D overview). Use to show layout or property overview.
+move_to_floor: Switch floors in multi-story properties. Say which floor you are going to and why.
+play_highlight_reel: Start/stop the guided tour walkthrough. "start" plays it, "stop" pauses, "next"/"previous" skip between highlights. Use when the visitor wants a quick overview of the whole space.
+zoom_camera: Zoom in to highlight details (materials, fixtures, views) or out to show more of a room. "reset" returns to normal. Combine with speech: "Notice the marble countertop" + zoom in.
+rotate_camera: Look up/down/left/right to point out features. "Look up — the ceiling height here is really something" + rotate up. Use sparingly and purposefully.
+
 ═══ PROPERTY KNOWLEDGE ═══
 
 This is the authoritative information about ${name}. Use it to answer questions with specific, concrete facts — exact sizes, prices, room names, features, dates, locations, contact details. When the visitor asks about anything covered below, quote the actual numbers and details instead of giving a generic answer. Do not invent details that are not here. If something is not in this section and not obvious, say you don't have that detail rather than guessing.
@@ -585,25 +594,87 @@ function buildTools(session) {
     }
   });
 
-  // Real estate: view mode switching tool
-  const isRE = session.vertical === "real_estate_sale" || session.vertical === "real_estate_development";
-  if (isRE) {
-    tools.push({
-      type: "function",
-      function: {
-        name: "set_view_mode",
-        description: "Switch the 3D tour view. Use 'inside' for walk-through, 'floorplan' for top-down floor plan, 'dollhouse' for 3D dollhouse overview. Call when visitor asks to see layout, overview, or wants to explore freely.",
-        parameters: {
-          type: "object",
-          properties: {
-            mode: { type: "string", enum: ["inside", "floorplan", "dollhouse"], description: "View mode" },
-            reason: { type: "string", description: "Why switching view" }
-          },
-          required: ["mode"]
-        }
+  // View mode switching (all verticals — useful for any 3D tour)
+  tools.push({
+    type: "function",
+    function: {
+      name: "set_view_mode",
+      description: "Switch the 3D tour view. Use 'inside' for walk-through, 'floorplan' for top-down floor plan, 'dollhouse' for 3D dollhouse overview. Call when visitor asks to see layout, overview, or wants to explore freely.",
+      parameters: {
+        type: "object",
+        properties: {
+          mode: { type: "string", enum: ["inside", "floorplan", "dollhouse"], description: "View mode" },
+          reason: { type: "string", description: "Why switching view" }
+        },
+        required: ["mode"]
       }
-    });
-  }
+    }
+  });
+
+  // Floor switching (multi-story properties)
+  tools.push({
+    type: "function",
+    function: {
+      name: "move_to_floor",
+      description: "Switch to a different floor in a multi-story property. Floor 0 is ground floor, 1 is first floor, etc. Call when the visitor wants to see another level or when recommending spaces on different floors.",
+      parameters: {
+        type: "object",
+        properties: {
+          floor: { type: "number", description: "Floor number (0 = ground, 1 = first floor, 2 = second, etc.)" },
+          reason: { type: "string", description: "Why switching floors" }
+        },
+        required: ["floor"]
+      }
+    }
+  });
+
+  // Highlight reel / guided tour
+  tools.push({
+    type: "function",
+    function: {
+      name: "play_highlight_reel",
+      description: "Control the guided tour (highlight reel) of the property. 'start' begins the automated walkthrough, 'stop' ends it, 'next'/'previous' skip between highlights. Use when the visitor asks for a quick overview or full tour of the space.",
+      parameters: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["start", "stop", "next", "previous"], description: "Tour control action" }
+        },
+        required: ["action"]
+      }
+    }
+  });
+
+  // Camera zoom
+  tools.push({
+    type: "function",
+    function: {
+      name: "zoom_camera",
+      description: "Zoom the camera in or out. Use 'in' to highlight a detail up close, 'out' to show more of the space, 'reset' to return to normal view. Call when pointing out specific features like materials, fixtures, or finishes.",
+      parameters: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["in", "out", "reset"], description: "Zoom action" }
+        },
+        required: ["action"]
+      }
+    }
+  });
+
+  // Camera rotation
+  tools.push({
+    type: "function",
+    function: {
+      name: "rotate_camera",
+      description: "Rotate the camera to look in a direction. Use when pointing out features: 'up' for ceilings or skylights, 'down' for flooring, 'left'/'right' to show views or adjacent features. Combines naturally with speech: say what to look at, then rotate.",
+      parameters: {
+        type: "object",
+        properties: {
+          direction: { type: "string", enum: ["up", "down", "left", "right"], description: "Direction to look" }
+        },
+        required: ["direction"]
+      }
+    }
+  });
 
   return tools;
 }

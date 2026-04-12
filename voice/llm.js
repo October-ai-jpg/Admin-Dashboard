@@ -64,9 +64,9 @@ function buildMessages(session) {
  *
  * Once a leak is confirmed, 'poisoned' flag suppresses all remaining text.
  */
-const TOOL_NAME_PATTERN = /\b(navigate_to_room|trigger_conversion|update_user_profile|update_conversation_state|set_view_mode)\b/;
-const TOOL_PARTIAL_PATTERN = /\b(navigate_|trigger_|update_|set_view)/;
-const TOOL_BRACKET_PATTERN = /\[\s*(navigate|trigger|update|set_view|functions)/;
+const TOOL_NAME_PATTERN = /\b(navigate_to_room|trigger_conversion|update_user_profile|update_conversation_state|set_view_mode|move_to_floor|play_highlight_reel|zoom_camera|rotate_camera)\b/;
+const TOOL_PARTIAL_PATTERN = /\b(navigate_|trigger_|update_|set_view|move_to_|play_high|zoom_cam|rotate_cam)/;
+const TOOL_BRACKET_PATTERN = /\[\s*(navigate|trigger|update|set_view|move_to|play_high|zoom|rotate|functions)/;
 
 function createLeakSuppressor() {
   let poisoned = false;

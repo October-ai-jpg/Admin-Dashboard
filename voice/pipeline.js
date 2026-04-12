@@ -130,6 +130,38 @@ function handleToolCall(toolName, args, session, clientWs) {
       console.log(`[Pipeline] set_view_mode: ${mode} — ${args.reason || ""}`);
       break;
     }
+    case "move_to_floor": {
+      const floor = parseInt(args.floor);
+      if (isNaN(floor)) break;
+      session.toolsUsed.move_to_floor = (session.toolsUsed.move_to_floor || 0) + 1;
+      send({ type: "move_to_floor", floor });
+      console.log(`[Pipeline] move_to_floor: ${floor} — ${args.reason || ""}`);
+      break;
+    }
+    case "play_highlight_reel": {
+      const action = args.action;
+      if (!["start", "stop", "next", "previous"].includes(action)) break;
+      session.toolsUsed.play_highlight_reel = (session.toolsUsed.play_highlight_reel || 0) + 1;
+      send({ type: "highlight_reel", action });
+      console.log(`[Pipeline] play_highlight_reel: ${action}`);
+      break;
+    }
+    case "zoom_camera": {
+      const zoomAction = args.action;
+      if (!["in", "out", "reset"].includes(zoomAction)) break;
+      session.toolsUsed.zoom_camera = (session.toolsUsed.zoom_camera || 0) + 1;
+      send({ type: "zoom_camera", action: zoomAction });
+      console.log(`[Pipeline] zoom_camera: ${zoomAction}`);
+      break;
+    }
+    case "rotate_camera": {
+      const direction = args.direction;
+      if (!["up", "down", "left", "right"].includes(direction)) break;
+      session.toolsUsed.rotate_camera = (session.toolsUsed.rotate_camera || 0) + 1;
+      send({ type: "rotate_camera", direction });
+      console.log(`[Pipeline] rotate_camera: ${direction}`);
+      break;
+    }
     default:
       console.warn("[Pipeline] Unknown tool:", toolName);
   }
@@ -262,9 +294,9 @@ async function runGPTAndTTS(session, userMessage, clientWs, t0, tSttDone, gptOpt
       fullText += chunk;
 
       // Safety-net tool leak detection (primary suppression is in llm.js buffer)
-      const TOOL_LEAK_BRACKET = /\[\s*(navigate|trigger|update|functions)/;
-      const TOOL_LEAK_BARE = /\b(navigate_to_room|trigger_conversion|update_user_profile|update_conversation_state)\b/;
-      const TOOL_LEAK_PARTIAL = /\b(navigate_|trigger_|update_)/;
+      const TOOL_LEAK_BRACKET = /\[\s*(navigate|trigger|update|set_view|move_to|play_high|zoom|rotate|functions)/;
+      const TOOL_LEAK_BARE = /\b(navigate_to_room|trigger_conversion|update_user_profile|update_conversation_state|set_view_mode|move_to_floor|play_highlight_reel|zoom_camera|rotate_camera)\b/;
+      const TOOL_LEAK_PARTIAL = /\b(navigate_|trigger_|update_|move_to_f|play_high|zoom_cam|rotate_cam)/;
       if (!repeating && (TOOL_LEAK_BRACKET.test(fullText) || TOOL_LEAK_BARE.test(fullText) || TOOL_LEAK_PARTIAL.test(fullText))) {
         console.warn("[Pipeline] Tool call leak detected (safety-net):", fullText.substring(0, 100));
         repeating = true;

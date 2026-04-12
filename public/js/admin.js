@@ -2707,6 +2707,22 @@ function connectWebSocket(url) {
       addTranscriptMsg('system', 'State: ' + msg.new_state + ' (' + (msg.reason || '') + ')');
     }
 
+    if (msg.type === 'move_to_floor') {
+      handleMoveToFloor(msg);
+    }
+
+    if (msg.type === 'highlight_reel') {
+      handleHighlightReel(msg);
+    }
+
+    if (msg.type === 'zoom_camera') {
+      handleZoomCamera(msg);
+    }
+
+    if (msg.type === 'rotate_camera') {
+      handleRotateCamera(msg);
+    }
+
     if (msg.type === 'error') {
       showToast(msg.message, 'error');
       addTranscriptMsg('error', msg.message);
@@ -2858,6 +2874,128 @@ function hideFloorplanOverlay() {
   if (!overlay) return;
   overlay.classList.remove('active');
   console.log('[ViewMode] ✓ floor plan overlay hidden');
+}
+
+/* ── Floor switching (SDK tool) ── */
+function handleMoveToFloor(msg) {
+  if (!sdkSandboxActive || !sdkInstance || !sdkConnected) {
+    addTranscriptMsg('system', '⚠ Floor switching requires SDK connection');
+    return;
+  }
+  var floor = msg.floor;
+  addTranscriptMsg('system', 'Switching to floor ' + floor);
+  sdkLogEvent('floor', 'Floor.moveTo(' + floor + ') from voice agent');
+  try {
+    sdkInstance.Floor.moveTo(floor).then(function(idx) {
+      sdkLogEvent('floor', 'Floor.moveTo completed → floor ' + idx);
+    }).catch(function(err) {
+      sdkLogEvent('error', 'Floor.moveTo failed: ' + (err && err.message || err));
+      addTranscriptMsg('error', 'Floor switch failed: ' + (err && err.message || err));
+    });
+  } catch (e) {
+    sdkLogEvent('error', 'Floor.moveTo threw: ' + e.message);
+  }
+}
+
+/* ── Highlight reel / guided tour (SDK tool) ── */
+function handleHighlightReel(msg) {
+  if (!sdkSandboxActive || !sdkInstance || !sdkConnected) {
+    addTranscriptMsg('system', '⚠ Highlight reel requires SDK connection');
+    return;
+  }
+  var action = msg.action;
+  sdkLogEvent('tour', 'Tour.' + action + '() from voice agent');
+  var labels = { start: 'Starting guided tour…', stop: 'Stopping tour', next: 'Next highlight', previous: 'Previous highlight' };
+  addTranscriptMsg('system', labels[action] || ('Tour: ' + action));
+  try {
+    if (action === 'start') {
+      sdkInstance.Tour.start().then(function() {
+        sdkLogEvent('tour', 'Tour.start completed');
+      }).catch(function(err) {
+        sdkLogEvent('error', 'Tour.start failed: ' + (err && err.message || err));
+      });
+    } else if (action === 'stop') {
+      sdkInstance.Tour.stop().then(function() {
+        sdkLogEvent('tour', 'Tour.stop completed');
+      }).catch(function(err) {
+        sdkLogEvent('error', 'Tour.stop failed: ' + (err && err.message || err));
+      });
+    } else if (action === 'next') {
+      sdkInstance.Tour.next().then(function() {
+        sdkLogEvent('tour', 'Tour.next completed');
+      }).catch(function(err) {
+        sdkLogEvent('error', 'Tour.next failed: ' + (err && err.message || err));
+      });
+    } else if (action === 'previous') {
+      sdkInstance.Tour.prev().then(function() {
+        sdkLogEvent('tour', 'Tour.prev completed');
+      }).catch(function(err) {
+        sdkLogEvent('error', 'Tour.prev failed: ' + (err && err.message || err));
+      });
+    }
+  } catch (e) {
+    sdkLogEvent('error', 'Tour.' + action + ' threw: ' + e.message);
+  }
+}
+
+/* ── Camera zoom (SDK tool) ── */
+function handleZoomCamera(msg) {
+  if (!sdkSandboxActive || !sdkInstance || !sdkConnected) {
+    addTranscriptMsg('system', '⚠ Zoom requires SDK connection');
+    return;
+  }
+  var action = msg.action;
+  sdkLogEvent('camera', 'Camera.zoom ' + action + ' from voice agent');
+  addTranscriptMsg('system', 'Zoom: ' + action);
+  try {
+    if (action === 'in') {
+      sdkInstance.Camera.zoomBy(0.5).then(function(level) {
+        sdkLogEvent('camera', 'zoomBy(0.5) → level=' + level);
+      }).catch(function(err) {
+        sdkLogEvent('error', 'Camera.zoomBy failed: ' + (err && err.message || err));
+      });
+    } else if (action === 'out') {
+      sdkInstance.Camera.zoomBy(-0.5).then(function(level) {
+        sdkLogEvent('camera', 'zoomBy(-0.5) → level=' + level);
+      }).catch(function(err) {
+        sdkLogEvent('error', 'Camera.zoomBy failed: ' + (err && err.message || err));
+      });
+    } else if (action === 'reset') {
+      sdkInstance.Camera.zoomReset().then(function() {
+        sdkLogEvent('camera', 'zoomReset completed');
+      }).catch(function(err) {
+        sdkLogEvent('error', 'Camera.zoomReset failed: ' + (err && err.message || err));
+      });
+    }
+  } catch (e) {
+    sdkLogEvent('error', 'Camera.zoom threw: ' + e.message);
+  }
+}
+
+/* ── Camera rotation (SDK tool) ── */
+function handleRotateCamera(msg) {
+  if (!sdkSandboxActive || !sdkInstance || !sdkConnected) {
+    addTranscriptMsg('system', '⚠ Camera rotation requires SDK connection');
+    return;
+  }
+  var direction = msg.direction;
+  var h = 0, v = 0;
+  if (direction === 'left')  h = -45;
+  if (direction === 'right') h = 45;
+  if (direction === 'up')    v = 30;
+  if (direction === 'down')  v = -30;
+
+  sdkLogEvent('camera', 'Camera.rotate(' + h + ', ' + v + ') from voice agent — ' + direction);
+  addTranscriptMsg('system', 'Looking ' + direction + '…');
+  try {
+    sdkInstance.Camera.rotate(h, v).then(function() {
+      sdkLogEvent('camera', 'Camera.rotate completed');
+    }).catch(function(err) {
+      sdkLogEvent('error', 'Camera.rotate failed: ' + (err && err.message || err));
+    });
+  } catch (e) {
+    sdkLogEvent('error', 'Camera.rotate threw: ' + e.message);
+  }
 }
 
 /* ── Floor plan image upload ── */
