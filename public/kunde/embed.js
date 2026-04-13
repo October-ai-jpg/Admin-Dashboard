@@ -1475,6 +1475,10 @@
       if (config.agentIcon) {
         agentIconEl.innerHTML = '<img src="' + config.agentIcon + '" alt="Agent"><div class="oct-waves"><div class="oct-wave"></div><div class="oct-wave"></div><div class="oct-wave"></div></div>';
       }
+      // Set Matterport iframe src immediately after config is loaded
+      if (!isVoiceOnly && iframe && config.modelId) {
+        iframe.src = "https://my.matterport.com/show/?m=" + config.modelId + "&play=1";
+      }
     } catch (e) { setState("Connection error"); return; }
 
     // Check activation state — if already activated or plan active, skip trial
@@ -1577,10 +1581,6 @@
       });
       // Fallback: dismiss after 12 seconds max
       setTimeout(dismissLoading, 12000);
-    }
-
-    if (!isVoiceOnly && iframe) {
-      iframe.src = "https://my.matterport.com/show/?m=" + config.modelId + "&play=1";
     }
 
     await initMicrophone();

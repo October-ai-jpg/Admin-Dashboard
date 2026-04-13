@@ -46,6 +46,11 @@ function saveJSON(file, data) {
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+/* Serve embed.js from root so SERVER derivation in embed.js works correctly */
+app.get('/embed.js', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'kunde', 'embed.js'));
+});
+
 /* Auth middleware — check ADMIN_SECRET */
 function requireAuth(req, res, next) {
   const token = req.headers['x-admin-token'] || req.query.token;
@@ -579,14 +584,14 @@ app.post('/client/demo/update', express.json(), (req, res) => {
     if (DEMO_DATA.tenants.length > 0) DEMO_DATA.tenants[0].name = body.agentName || 'Demo Agent';
   }
   if (body.propertyName !== undefined) DEMO_DATA.propertyName = body.propertyName;
-  if (body.language) DEMO_DATA.language = body.language;
-  if (body.brandColor) DEMO_DATA.brandColor = body.brandColor;
-  if (body.bookingUrl) DEMO_DATA.bookingUrl = body.bookingUrl;
-  if (body.demoQuestions) DEMO_DATA.demoQuestions = body.demoQuestions;
-  if (body.vertical) DEMO_DATA.vertical = body.vertical;
+  if (body.language !== undefined) DEMO_DATA.language = body.language;
+  if (body.brandColor !== undefined) DEMO_DATA.brandColor = body.brandColor;
+  if (body.bookingUrl !== undefined) DEMO_DATA.bookingUrl = body.bookingUrl;
+  if (body.demoQuestions !== undefined) DEMO_DATA.demoQuestions = body.demoQuestions;
+  if (body.vertical !== undefined) DEMO_DATA.vertical = body.vertical;
   if (body.property_data !== undefined) DEMO_DATA.property_data = body.property_data;
-  if (body.website) DEMO_DATA.website = body.website;
-  if (body.matterportUrl) DEMO_DATA.matterportUrl = body.matterportUrl;
+  if (body.website !== undefined) DEMO_DATA.website = body.website;
+  if (body.matterportUrl !== undefined) DEMO_DATA.matterportUrl = body.matterportUrl;
   if (body.floorplanImage !== undefined) DEMO_DATA.floorplanImage = body.floorplanImage;
   res.json({ ok: true });
 });

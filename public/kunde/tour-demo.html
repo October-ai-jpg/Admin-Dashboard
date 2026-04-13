@@ -16,7 +16,7 @@
     var match = window.location.pathname.match(/^\/tour\/([a-zA-Z0-9_-]+)/);
     if (match) {
       var script = document.createElement("script");
-      script.src = "/kunde/embed.js";
+      script.src = "/embed.js?v=" + Date.now();
       script.setAttribute("data-tenant", match[1]);
       script.setAttribute("data-container", "october-ai");
       document.body.appendChild(script);
