@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Build — October AI</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/client-pages.css">
+<style>
+/* Help tooltips */
+.help-tip{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;border:1px solid var(--border);color:var(--muted);font-size:11px;font-weight:600;font-family:var(--sans);cursor:help;position:relative;vertical-align:middle;margin-left:8px;transition:border-color 0.2s,color 0.2s}
+.help-tip:hover{border-color:var(--black);color:var(--black)}
+.help-tip .help-bubble{display:none;position:absolute;left:50%;transform:translateX(-50%);top:calc(100% + 10px);background:var(--black);color:var(--white);font-size:13px;font-weight:400;line-height:1.6;padding:14px 18px;border-radius:10px;width:300px;z-index:100;pointer-events:none;text-align:left}
+.help-tip .help-bubble::before{content:'';position:absolute;top:-6px;left:50%;transform:translateX(-50%);border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:6px solid var(--black)}
+.help-tip:hover .help-bubble{display:block}
+/* Space mapper upgrade */
+.space-item{display:flex;align-items:center;gap:12px;padding:16px 0;border-bottom:1px dashed var(--border);cursor:pointer;transition:background 0.15s}
+.space-item:hover{background:rgba(0,0,0,0.015);margin:0 -16px;padding:16px}
+.space-sweep{font-size:12px;color:var(--muted);font-family:monospace;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+.mapper-cta{text-align:center;margin:32px 0 0;padding:24px;border:1px dashed var(--border);border-radius:12px;background:var(--cream)}
+.mapper-cta p{font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6}
+.sweep-extract-info{font-size:12px;color:var(--success);margin-top:6px;display:none}
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header class="header">
+  <a href="/" class="header-logo"><img src="/images/logo-leaf.svg" alt="">October AI</a>
+  <div class="agent-switcher" id="agentSwitcher"></div>
+</header>
+
+<!-- NAV -->
+<nav class="sub-nav">
+  <div class="nav-item">
+    <a class="nav-trigger" id="navAgent">Your agents <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/agent">All agents</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger active" id="navBuild">Build <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/build#vertical">Choose vertical</a>
+      <a data-href="{BASE}/build#spaces">Map your spaces</a>
+      <a data-href="{BASE}/build#data">Add your data</a>
+      <a data-href="{BASE}/build#conversion">Conversion URL</a>
+      <a data-href="{BASE}/build#embed">Embed code</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger" id="navGuide" onclick="showWizard();return false;" href="#">Guide <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a href="#" onclick="showWizard();return false;">Run setup wizard</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger" id="navAnalytics">Analytics <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/analytics">Overview</a>
+      <a data-href="{BASE}/analytics/conversations">Conversations</a>
+      <a data-href="{BASE}/analytics/leads">Leads</a>
+      <a data-href="{BASE}/analytics/report">Download report</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger" id="navKnowledge">Knowledge <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/knowledge">Your data</a>
+      <a data-href="{BASE}/knowledge#sync">Sync from website</a>
+      <a data-href="{BASE}/knowledge#upload">Upload files</a>
+      <a data-href="{BASE}/knowledge#manual">Add manually</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger" id="navSettings">Settings <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/settings">Agent settings</a>
+      <a data-href="{BASE}/settings#usage">Usage &amp; minutes</a>
+      <a data-href="{BASE}/settings#buy">Buy minutes</a>
+      <a data-href="{BASE}/settings#billing">Billing</a>
+    </div>
+  </div>
+</nav>
+
+<!-- WIZARD OVERLAY -->
+<div class="wizard-overlay hidden" id="wizardOverlay">
+  <div class="wizard-card">
+    <div class="wizard-progress">
+      <div class="wizard-dot active" id="wizDot0"></div>
+      <div class="wizard-dot" id="wizDot1"></div>
+      <div class="wizard-dot" id="wizDot2"></div>
+      <div class="wizard-dot" id="wizDot3"></div>
+      <div class="wizard-dot" id="wizDot4"></div>
+    </div>
+    <div class="wizard-steps">
+      <div class="wizard-step active" id="wizStep0">
+        <h2>What kind of space is this?</h2>
+        <div class="wiz-body">Choose the category that best describes your business. This helps your agent use the right language.</div>
+        <div class="vertical-grid" id="wizVerticalGrid">
+          <div class="vertical-card" data-v="hotel" onclick="wizSelectVertical('hotel',this)">Hotel &amp; Hospitality</div>
+          <div class="vertical-card" data-v="real_estate_sale" onclick="wizSelectVertical('real_estate_sale',this)">Real Estate</div>
+          <div class="vertical-card" data-v="retail" onclick="wizSelectVertical('retail',this)">Retail Showroom</div>
+          <div class="vertical-card" data-v="education" onclick="wizSelectVertical('education',this)">Education &amp; Campus</div>
+          <div class="vertical-card" data-v="other" onclick="wizSelectVertical('other',this)">Other</div>
+        </div>
+      </div>
+      <div class="wizard-step" id="wizStep1">
+        <h2>Add your data</h2>
+        <div class="wiz-body">Your agent needs to know your business. Add as much information as possible.</div>
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="url" id="wizScrapeUrl" placeholder="https://yourbusiness.com" style="flex:1;padding:10px 14px;background:var(--cream);border:1px solid var(--border);border-radius:10px;font-size:13px;outline:none;font-family:var(--sans)">
+            <button class="btn btn-sm" onclick="wizScrape()">Sync from website</button>
+          </div>
+          <div id="wizScrapeStatus" style="display:none;font-size:12px;color:var(--muted);text-align:center"></div>
+          <div style="text-align:center;margin:8px 0">
+            <div class="dropzone" id="wizDropzone" onclick="document.getElementById('wizFileInput').click()" style="padding:20px">
+              <div class="drop-title">Upload a file</div>
+              <div class="drop-sub">PDF, DOCX, TXT</div>
+              <input type="file" id="wizFileInput" accept=".pdf,.docx,.txt">
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="wizard-step" id="wizStep2">
+        <h2>Map your spaces</h2>
+        <div class="wiz-body">Connect your Matterport spaces to your agent so it can navigate visitors.</div>
+        <div style="text-align:center;margin-bottom:16px">
+          <button class="btn" onclick="openSpaceMapper()">Open Space Mapper</button>
+        </div>
+      </div>
+      <div class="wizard-step" id="wizStep3">
+        <h2>Set your conversion URL</h2>
+        <div class="wiz-body">Where should your agent send visitors when they're ready to take action?</div>
+        <div class="field-group">
+          <input type="url" id="wizConversionUrl" placeholder="https://your-booking-page.com" style="text-align:center">
+        </div>
+      </div>
+      <div class="wizard-step" id="wizStep4">
+        <h2>You're ready</h2>
+        <div class="wiz-body">Your agent is configured and active. Start exploring your dashboard or open your agent to see it in action.</div>
+        <div style="text-align:center;display:flex;flex-direction:column;gap:12px;align-items:center">
+          <button class="btn" onclick="openAgent()">Open your agent</button>
+          <a data-href="{BASE}/agent" class="btn-outline">Go to dashboard</a>
+        </div>
+      </div>
+    </div>
+    <div class="wizard-footer">
+      <button class="wiz-skip" onclick="wizSkip()">Skip</button>
+      <button class="btn" id="wizNextBtn" onclick="wizNext()">Continue</button>
+    </div>
+  </div>
+</div>
+
+<!-- LOADING -->
+<div class="loading-state" id="loadingState">Loading<span class="spinner" style="margin-left:8px"></span></div>
+
+<!-- CONTENT -->
+<div class="page-content" id="pageContent" style="display:none">
+
+  <!-- HERO -->
+  <div style="text-align:center;margin-bottom:60px">
+    <div class="hero-label">Build</div>
+    <h1 class="hero-heading">Configure your agent.</h1>
+    <p class="hero-sub">Set up your vertical, map spaces, add knowledge, and set your conversion URL.</p>
+  </div>
+
+  <!-- VERTICAL -->
+  <div id="vertical">
+    <div class="section-label">VERTICAL
+      <span class="help-tip">?<span class="help-bubble">Your vertical tells the agent what industry you're in. It adjusts the language, behavior, and conversation style to match your business type — e.g. "rooms" for hotels, "listings" for real estate.</span></span>
+    </div>
+    <h2 class="section-heading">What kind of space is this?</h2>
+    <p class="section-sub">This helps your agent use the right language and behavior for your business type.</p>
+
+    <div class="vertical-grid" id="verticalGrid">
+      <div class="vertical-card" data-v="hotel" onclick="selectVertical('hotel',this)">Hotel &amp; Hospitality</div>
+      <div class="vertical-card" data-v="real_estate_sale" onclick="selectVertical('real_estate_sale',this)">Real Estate</div>
+      <div class="vertical-card" data-v="retail" onclick="selectVertical('retail',this)">Retail Showroom</div>
+      <div class="vertical-card" data-v="education" onclick="selectVertical('education',this)">Education &amp; Campus</div>
+      <div class="vertical-card" data-v="other" onclick="selectVertical('other',this)">Other</div>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- SPACES -->
+  <div id="spaces">
+    <div class="section-label">SPACE MAPPINGS
+      <span class="help-tip">?<span class="help-bubble">Space mappings connect rooms in your Matterport tour to your agent. Each space needs a name and a Sweep ID. The agent uses these to physically navigate visitors to the right location inside the tour while talking to them.</span></span>
+    </div>
+    <h2 class="section-heading">Map your spaces.</h2>
+    <p class="section-sub">Connect your Matterport spaces so your agent can navigate visitors through your tour.</p>
+
+    <ul class="space-list" id="spaceList"><li class="empty-state">No spaces configured</li></ul>
+    <div id="spaceEditPanel" style="display:none"></div>
+
+    <!-- Add space form -->
+    <div style="margin-top:24px;text-align:center">
+      <button class="btn-outline" onclick="toggleAddSpace()">+ Add space</button>
+    </div>
+    <div id="addSpaceForm" style="display:none;margin-top:16px">
+      <div class="space-edit-panel">
+        <div class="field-group">
+          <label>Space name</label>
+          <input type="text" id="newSpaceName" placeholder="e.g. Lobby, Restaurant, Suite 401">
+        </div>
+        <div class="field-group">
+          <label>Matterport Sweep ID or URL</label>
+          <input type="text" id="newSweepId" placeholder="Paste a Matterport URL or enter a Sweep ID" oninput="extractSweepFromInput(this)">
+          <div class="sweep-extract-info" id="sweepExtractInfo"></div>
+          <button class="sweep-help-toggle" onclick="document.getElementById('sweepHelpBody').classList.toggle('open')">How to find your Sweep ID</button>
+          <div class="sweep-help-body" id="sweepHelpBody">
+            <div class="sweep-help-inner">
+              <ol>
+                <li>Open your Matterport tour in a browser</li>
+                <li>Navigate to the room you want to map</li>
+                <li>Copy the URL from the address bar</li>
+                <li>Paste it here — we'll extract the Sweep ID automatically</li>
+              </ol>
+              <p style="margin-top:12px;font-size:12px;color:var(--muted)">The Sweep ID is the <code>ss=</code> parameter in the Matterport URL, e.g. <code>?m=...&amp;ss=<strong>abc123</strong></code></p>
+            </div>
+          </div>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-sm" onclick="doAddSpace()">Add space</button>
+          <button class="btn-outline btn-sm" onclick="toggleAddSpace()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Full mapper CTA -->
+    <div class="mapper-cta">
+      <p>For advanced mapping with Matterport tour preview, use the full Space Mapper tool.</p>
+      <button class="btn-outline" onclick="openSpaceMapper()">Open Space Mapper</button>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- DATA -->
+  <div id="data">
+    <div class="section-label">YOUR AGENT'S DATA
+      <span class="help-tip">?<span class="help-bubble">This is the knowledge your agent uses to answer questions. Add your pricing, FAQ, descriptions, policies, opening hours — anything a visitor might ask about. The more data you provide, the better the agent performs.</span></span>
+    </div>
+    <h2 class="section-heading">Teach your agent.</h2>
+    <p class="section-sub">The more your agent knows about your business, the better conversations it will have.</p>
+
+    <div class="data-status-bar">
+      <div class="data-progress-bar"><div class="data-progress-fill" id="progressFill" style="width:0%"></div></div>
+      <div class="data-status-text">Your agent knows <strong id="wordCount">0</strong> words</div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('sync',this)">Sync from website</button>
+      <button class="tab" onclick="switchTab('upload',this)">Upload file</button>
+      <button class="tab" onclick="switchTab('manual',this)">Add manually</button>
+    </div>
+
+    <div class="tab-pane active" id="pane-sync">
+      <div style="text-align:center;padding:16px 0">
+        <p style="font-size:14px;color:var(--muted);margin-bottom:16px;max-width:400px;margin-left:auto;margin-right:auto">We scan your website, review sites, and booking platforms to build a complete knowledge base.</p>
+        <button class="btn" id="syncBtn" onclick="startScrape()">Start sync</button>
+        <div class="scrape-status" id="scrapeStatus"></div>
+      </div>
+    </div>
+    <div class="tab-pane" id="pane-upload">
+      <div class="dropzone" id="dataDropzone" onclick="document.getElementById('dataFileInput').click()">
+        <div class="drop-title">Drag a file here or click to browse</div>
+        <div class="drop-sub">PDF, Word, TXT, CSV &mdash; max 10 MB</div>
+        <input type="file" id="dataFileInput" accept=".pdf,.docx,.txt,.csv">
+      </div>
+      <div class="file-result" id="fileResult"></div>
+    </div>
+    <div class="tab-pane" id="pane-manual">
+      <textarea class="panel-textarea" id="manualTextarea" placeholder="Opening hours, prices, FAQ, facilities — anything your agent should know..."></textarea>
+      <div class="btn-row"><button class="btn btn-sm" onclick="addManualData()">Add</button></div>
+    </div>
+
+    <button class="data-viewer-toggle" id="dataViewerToggle" onclick="toggleDataViewer()">
+      <span class="toggle-chevron"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 6 15 12 9 18"></polyline></svg></span> See all your data
+    </button>
+    <div class="data-viewer" id="dataViewer">
+      <div class="data-viewer-inner">
+        <textarea class="panel-textarea" id="allDataTextarea" style="min-height:200px"></textarea>
+        <div class="btn-row"><button class="btn btn-sm" onclick="saveAllData()">Save</button></div>
+      </div>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- CONVERSION URL -->
+  <div id="conversion">
+    <div class="section-label">CONVERSION URL
+      <span class="help-tip">?<span class="help-bubble">This is the URL your agent opens when a visitor is ready to take action. It could be a booking page, a contact form, or a product checkout. The agent guides the conversation toward this goal and offers the link at the right moment.</span></span>
+    </div>
+    <h2 class="section-heading">Where should visitors go when they're ready to act?</h2>
+    <p class="section-sub">This is the URL your agent opens when a visitor wants to book, buy or apply.</p>
+
+    <div style="max-width:500px;margin:0 auto">
+      <div class="field-group">
+        <input type="url" id="conversionUrl" placeholder="https://your-booking-page.com" style="text-align:center">
+      </div>
+      <div style="text-align:center"><button class="btn" onclick="saveConversionUrl()">Save</button></div>
+      <p style="font-size:13px;color:var(--muted);text-align:center;margin-top:16px;line-height:1.7">It could be a booking page, a contact form or a product page.</p>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- EMBED CODE -->
+  <div id="embed">
+    <div class="section-label">EMBED ON YOUR WEBSITE
+      <span class="help-tip">?<span class="help-bubble">Copy this code snippet and paste it into your website's HTML, just before the closing &lt;/body&gt; tag. The agent will automatically appear on that page and start conversations with visitors inside your Matterport tour.</span></span>
+    </div>
+    <h2 class="section-heading">Add your agent to any website.</h2>
+    <p class="section-sub">Copy the code below and paste it into your website to activate the agent.</p>
+
+    <div class="embed-code-block">
+      <pre class="embed-code-area" id="embedCode">Loading...</pre>
+      <button class="embed-copy-btn" onclick="copyEmbedCode()">Copy</button>
+    </div>
+    <ul class="embed-bullets">
+      <li>Paste just before &lt;/body&gt; on your page</li>
+      <li>The agent starts automatically</li>
+      <li>Works on all websites and CMS platforms</li>
+    </ul>
+  </div>
+
+</div>
+
+<div class="footer">&copy; 2026 October AI &middot; hello@october-ai.com &middot; <a href="/legal" style="color:inherit;text-decoration:underline" target="_blank">Legal</a></div>
+<div class="toast" id="toast"></div>
+
+<script src="/client/js/client.js"></script>
+<script>
+(function() {
+  initCommon();
+
+  var wizStep = 0;
+  var wizSelectedVertical = null;
+
+  getClientData().then(function(data) {
+    if (!data) { document.getElementById('loadingState').innerHTML = '<div class="error-state"><h2>Could not load portal</h2><p>Invalid or expired token.</p></div>'; return; }
+
+    document.getElementById('loadingState').style.display = 'none';
+    document.getElementById('pageContent').style.display = 'block';
+    renderAgentSwitcher();
+
+    /* Set active vertical */
+    var v = data.vertical || '';
+    if (v) {
+      document.querySelectorAll('#verticalGrid .vertical-card').forEach(function(c) {
+        c.classList.toggle('active', c.getAttribute('data-v') === v);
+      });
+    }
+
+    /* Spaces */
+    renderSpaces(data.roomMappings || {});
+
+    /* Word count */
+    updateWordCount(data.property_data || '');
+    document.getElementById('allDataTextarea').value = data.property_data || '';
+    document.getElementById('conversionUrl').value = data.bookingUrl || '';
+
+    /* Wizard check */
+    var tid = data.tenantId || '';
+    var wizKey = 'october_build_wizard_' + tid;
+    if (tid && !localStorage.getItem(wizKey)) {
+      setTimeout(function() { showWizardOverlay(); }, 300);
+    }
+
+    /* Embed code */
+    fetchTenantId().then(function(tid) {
+      if (tid) document.getElementById('embedCode').textContent = generateEmbedCode(tid);
+    });
+
+    /* Setup dropzones */
+    setupDropzone('dataDropzone', 'dataFileInput', handleFileUpload);
+    setupDropzone('wizDropzone', 'wizFileInput', handleWizFile);
+
+    scrollToHash();
+  });
+
+  function updateWordCount(text) {
+    var words = countWords(text);
+    document.getElementById('wordCount').textContent = words.toLocaleString();
+    var pct = Math.min(Math.round((words / 2000) * 100), 100);
+    var fill = document.getElementById('progressFill');
+    fill.style.width = pct + '%';
+    if (pct < 25) fill.style.background = 'var(--danger)';
+    else if (pct < 60) fill.style.background = 'var(--warning)';
+    else fill.style.background = 'var(--success)';
+  }
+
+  /* ── Vertical ── */
+  window.selectVertical = async function(v, el) {
+    document.querySelectorAll('#verticalGrid .vertical-card').forEach(function(c) { c.classList.remove('active'); });
+    el.classList.add('active');
+    try {
+      await updateTenant({ vertical: v });
+      showToast('Vertical saved');
+    } catch(e) { showToast('Error saving', true); }
+  };
+
+  /* ── Sweep ID extraction ── */
+  function extractSweepId(input) {
+    if (!input) return null;
+    var match = input.match(/[?&]ss=([^&]+)/);
+    if (match) return match[1];
+    if (/^[a-zA-Z0-9_-]+$/.test(input) && input.length > 5 && input.length < 40) return input;
+    return null;
+  }
+
+  window.extractSweepFromInput = function(el) {
+    var info = document.getElementById('sweepExtractInfo');
+    var val = el.value.trim();
+    if (!val) { info.style.display = 'none'; return; }
+    if (val.indexOf('matterport.com') !== -1 || val.indexOf('ss=') !== -1) {
+      var sid = extractSweepId(val);
+      if (sid) {
+        info.textContent = 'Sweep ID extracted: ' + sid;
+        info.style.display = 'block';
+        info.style.color = 'var(--success)';
+      } else {
+        info.textContent = 'Could not find a Sweep ID in this URL. Make sure the URL contains ss=...';
+        info.style.display = 'block';
+        info.style.color = 'var(--danger)';
+      }
+    } else {
+      info.style.display = 'none';
+    }
+  };
+
+  /* ── Spaces ── */
+  var localRooms = {};
+  var editingKey = null;
+
+  function renderSpaces(mappings) {
+    localRooms = {};
+    Object.keys(mappings).forEach(function(key) {
+      var entry = mappings[key];
+      if (typeof entry === 'object') localRooms[key] = { label: entry.label || key, sweepId: entry.sweepId || '' };
+      else localRooms[key] = { label: entry || key, sweepId: '' };
+    });
+    renderSpaceList();
+  }
+
+  function renderSpaceList() {
+    var ul = document.getElementById('spaceList');
+    var keys = Object.keys(localRooms);
+    if (keys.length === 0) { ul.innerHTML = '<li class="empty-state">No spaces configured yet. Add a space or use the Space Mapper tool below.</li>'; return; }
+    ul.innerHTML = '';
+    keys.forEach(function(key) {
+      var room = localRooms[key];
+      var hasSweep = room.sweepId && room.sweepId.length > 3;
+      var li = document.createElement('li');
+      li.className = 'space-item';
+      li.onclick = function() { editSpace(key); };
+      li.innerHTML = '<span class="space-dot ' + (hasSweep ? 'connected' : 'missing') + '"></span>'
+        + '<span class="space-name">' + esc(room.label) + '</span>'
+        + '<span class="space-sweep">' + (hasSweep ? esc(room.sweepId) : '<span style="color:var(--danger)">No Sweep ID</span>') + '</span>';
+      ul.appendChild(li);
+    });
+  }
+
+  function editSpace(key) {
+    editingKey = key;
+    var room = localRooms[key];
+    var panel = document.getElementById('spaceEditPanel');
+    panel.style.display = 'block';
+    panel.innerHTML = '<div class="space-edit-panel">'
+      + '<div class="field-group"><label>Space name</label><input type="text" id="editSpaceName" value="' + esc(room.label) + '"></div>'
+      + '<div class="field-group"><label>Sweep ID or Matterport URL</label><input type="text" id="editSweepId" value="' + esc(room.sweepId) + '" oninput="extractSweepFromEdit(this)"><div class="sweep-extract-info" id="editSweepExtractInfo"></div></div>'
+      + '<div class="btn-row"><button class="btn btn-sm" onclick="saveSpaceEdit()">Save</button><button class="btn-danger btn-sm" style="padding:8px 20px;border-radius:980px;font-size:13px;cursor:pointer;border:none;font-family:var(--sans)" onclick="deleteSpaceEdit()">Delete</button><button class="btn-ghost" onclick="cancelSpaceEdit()">Cancel</button></div>'
+      + '</div>';
+    panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  window.extractSweepFromEdit = function(el) {
+    var info = document.getElementById('editSweepExtractInfo');
+    var val = el.value.trim();
+    if (!val) { info.style.display = 'none'; return; }
+    if (val.indexOf('matterport.com') !== -1 || val.indexOf('ss=') !== -1) {
+      var sid = extractSweepId(val);
+      if (sid) {
+        info.textContent = 'Sweep ID extracted: ' + sid;
+        info.style.display = 'block';
+        info.style.color = 'var(--success)';
+      } else {
+        info.textContent = 'Could not find Sweep ID in this URL';
+        info.style.display = 'block';
+        info.style.color = 'var(--danger)';
+      }
+    } else { info.style.display = 'none'; }
+  };
+
+  window.saveSpaceEdit = async function() {
+    var name = document.getElementById('editSpaceName').value.trim();
+    var rawSweep = document.getElementById('editSweepId').value.trim();
+    var sweepId = extractSweepId(rawSweep) || rawSweep;
+    if (!name) { showToast('Enter a name', true); return; }
+    try {
+      await updateSpace({ oldKey: editingKey, name: name, sweepId: sweepId });
+      localRooms[name] = { label: name, sweepId: sweepId };
+      if (name !== editingKey) delete localRooms[editingKey];
+      renderSpaceList();
+      document.getElementById('spaceEditPanel').style.display = 'none';
+      showToast('Space updated');
+    } catch(e) { showToast('Error updating space', true); }
+  };
+
+  window.deleteSpaceEdit = async function() {
+    if (!confirm('Delete this space?')) return;
+    try {
+      await deleteSpace({ name: editingKey });
+      delete localRooms[editingKey];
+      renderSpaceList();
+      document.getElementById('spaceEditPanel').style.display = 'none';
+      showToast('Space deleted');
+    } catch(e) { showToast('Error deleting space', true); }
+  };
+
+  window.cancelSpaceEdit = function() { document.getElementById('spaceEditPanel').style.display = 'none'; };
+  window.toggleAddSpace = function() { var f = document.getElementById('addSpaceForm'); f.style.display = f.style.display === 'none' ? 'block' : 'none'; };
+
+  window.doAddSpace = async function() {
+    var name = document.getElementById('newSpaceName').value.trim();
+    var rawSweep = document.getElementById('newSweepId').value.trim();
+    var sweepId = extractSweepId(rawSweep) || rawSweep;
+    if (!name) { showToast('Enter a name', true); return; }
+    try {
+      await addSpace({ name: name, sweepId: sweepId });
+      localRooms[name] = { label: name, sweepId: sweepId };
+      renderSpaceList();
+      document.getElementById('newSpaceName').value = '';
+      document.getElementById('newSweepId').value = '';
+      document.getElementById('addSpaceForm').style.display = 'none';
+      document.getElementById('sweepExtractInfo').style.display = 'none';
+      showToast('Space added');
+    } catch(e) { showToast('Error adding space', true); }
+  };
+
+  window.copyEmbedCode = function() {
+    var code = document.getElementById('embedCode').textContent;
+    copyText(code, document.querySelector('.embed-copy-btn'));
+  };
+
+  window.openSpaceMapper = function() {
+    var tid = CACHED_TENANT_ID || '';
+    window.open('/rooms?tenant=' + tid + '&from=client', '_blank');
+  };
+
+  /* ── Data ── */
+  async function handleFileUpload(file) {
+    if (!/\.(pdf|docx|txt|csv)$/i.test(file.name)) { showToast('Unsupported file type', true); return; }
+    if (file.size > 10 * 1024 * 1024) { showToast('File too large (max 10 MB)', true); return; }
+    var result = document.getElementById('fileResult');
+    result.className = 'file-result';
+    result.style.display = 'block';
+    result.innerHTML = '<span class="spinner"></span> Processing ' + esc(file.name) + '...';
+    try {
+      var d = await uploadFile(file);
+      if (d.ok) {
+        result.className = 'file-result success';
+        result.textContent = file.name + ' — ' + d.wordCount + ' words added';
+        var rr = await fetch(SERVER + '/client/' + TOKEN + '/data');
+        var rd = await rr.json();
+        updateWordCount(rd.property_data || '');
+        document.getElementById('allDataTextarea').value = rd.property_data || '';
+      } else {
+        result.className = 'file-result error';
+        result.textContent = 'Error: ' + (d.error || 'unknown');
+      }
+    } catch(e) { result.className = 'file-result error'; result.textContent = 'Network error'; }
+  }
+
+  async function handleWizFile(file) {
+    if (!/\.(pdf|docx|txt|csv)$/i.test(file.name)) { showToast('Unsupported file type', true); return; }
+    try {
+      var d = await uploadFile(file);
+      if (d.ok) showToast(d.wordCount + ' words added');
+      else showToast('Error: ' + (d.error || ''), true);
+    } catch(e) { showToast('Upload failed', true); }
+  }
+
+  window.startScrape = async function() {
+    var btn = document.getElementById('syncBtn');
+    btn.disabled = true;
+    btn.textContent = 'Syncing...';
+    var status = document.getElementById('scrapeStatus');
+    status.className = 'scrape-status visible';
+    status.textContent = 'Starting comprehensive data collection...';
+    try {
+      var d = await scrapeWebsite();
+      if (!d.ok) { showToast('Error: ' + (d.error || ''), true); btn.disabled = false; btn.textContent = 'Start sync'; status.className = 'scrape-status'; return; }
+      var attempts = 0;
+      var poll = setInterval(async function() {
+        attempts++;
+        if (attempts > 60) { clearInterval(poll); showToast('Sync timed out', true); btn.disabled = false; btn.textContent = 'Start sync'; return; }
+        var r = await fetch(SERVER + '/client/' + TOKEN + '/data');
+        var rd = await r.json();
+        if (rd.scrapeMessage) status.textContent = rd.scrapeMessage;
+        if (rd.scrapeStatus && rd.scrapeStatus !== 'scraping') {
+          clearInterval(poll);
+          if (rd.scrapeStatus === 'done' && rd.property_data) {
+            updateWordCount(rd.property_data);
+            document.getElementById('allDataTextarea').value = rd.property_data;
+            showToast('Sync complete!');
+          } else { showToast(rd.scrapeMessage || 'Sync failed', true); }
+          btn.disabled = false; btn.textContent = 'Start sync';
+          setTimeout(function() { status.className = 'scrape-status'; }, 5000);
+        }
+      }, 3000);
+    } catch(e) { showToast('Network error', true); btn.disabled = false; btn.textContent = 'Start sync'; }
+  };
+
+  window.addManualData = async function() {
+    var text = document.getElementById('manualTextarea').value.trim();
+    if (!text) { showToast('Enter some text first', true); return; }
+    try {
+      var d = await uploadText(text);
+      if (d.ok) {
+        showToast('Information added');
+        document.getElementById('manualTextarea').value = '';
+        var rr = await fetch(SERVER + '/client/' + TOKEN + '/data');
+        var rd = await rr.json();
+        updateWordCount(rd.property_data || '');
+        document.getElementById('allDataTextarea').value = rd.property_data || '';
+      } else showToast('Error: ' + (d.error || ''), true);
+    } catch(e) { showToast('Network error', true); }
+  };
+
+  window.saveAllData = async function() {
+    try {
+      var d = await updateTenant({ property_data: document.getElementById('allDataTextarea').value });
+      if (d.ok) { showToast('Knowledge updated'); updateWordCount(document.getElementById('allDataTextarea').value); }
+      else showToast('Error', true);
+    } catch(e) { showToast('Network error', true); }
+  };
+
+  window.toggleDataViewer = function() {
+    document.getElementById('dataViewerToggle').classList.toggle('open');
+    document.getElementById('dataViewer').classList.toggle('open');
+  };
+
+  window.saveConversionUrl = async function() {
+    try {
+      var d = await updateTenant({ bookingUrl: document.getElementById('conversionUrl').value });
+      if (d.ok) showToast('Conversion URL saved');
+      else showToast('Error', true);
+    } catch(e) { showToast('Network error', true); }
+  };
+
+  /* ── Wizard ── */
+  function showWizardOverlay() {
+    wizStep = 0;
+    wizSelectedVertical = null;
+    updateWizDots();
+    document.querySelectorAll('.wizard-step').forEach(function(s, i) { s.classList.toggle('active', i === 0); });
+    document.getElementById('wizNextBtn').textContent = 'Continue';
+    document.getElementById('wizardOverlay').classList.remove('hidden');
+    resolveLinks();
+  }
+  window.showWizard = showWizardOverlay;
+
+  function updateWizDots() {
+    for (var i = 0; i < 5; i++) {
+      var d = document.getElementById('wizDot' + i);
+      d.className = 'wizard-dot';
+      if (i === wizStep) d.classList.add('active');
+      else if (i < wizStep) d.classList.add('done');
+    }
+  }
+
+  window.wizSelectVertical = function(v, el) {
+    wizSelectedVertical = v;
+    document.querySelectorAll('#wizVerticalGrid .vertical-card').forEach(function(c) { c.classList.remove('active'); });
+    el.classList.add('active');
+  };
+
+  window.wizNext = async function() {
+    if (wizStep === 0 && wizSelectedVertical) {
+      await updateTenant({ vertical: wizSelectedVertical });
+      document.querySelectorAll('#verticalGrid .vertical-card').forEach(function(c) {
+        c.classList.toggle('active', c.getAttribute('data-v') === wizSelectedVertical);
+      });
+    }
+    if (wizStep === 3) {
+      var url = document.getElementById('wizConversionUrl').value.trim();
+      if (url) {
+        await updateTenant({ bookingUrl: url });
+        document.getElementById('conversionUrl').value = url;
+      }
+    }
+
+    wizStep++;
+    if (wizStep >= 5) { wizFinish(); return; }
+    document.querySelectorAll('.wizard-step').forEach(function(s, i) { s.classList.toggle('active', i === wizStep); });
+    updateWizDots();
+    document.getElementById('wizNextBtn').textContent = wizStep === 4 ? 'Finish' : 'Continue';
+  };
+
+  window.wizSkip = function() {
+    if (wizStep < 4) { window.wizNext(); } else { wizFinish(); }
+  };
+
+  window.wizScrape = async function() {
+    var status = document.getElementById('wizScrapeStatus');
+    status.style.display = 'block';
+    status.textContent = 'Syncing...';
+    try {
+      var d = await scrapeWebsite();
+      if (d.ok) {
+        status.textContent = 'Sync started — data will appear in your knowledge section.';
+        showToast('Sync started');
+      } else { status.textContent = 'Error: ' + (d.error || ''); }
+    } catch(e) { status.textContent = 'Network error'; }
+  };
+
+  function wizFinish() {
+    document.getElementById('wizardOverlay').classList.add('hidden');
+    var tid = CACHED_TENANT_ID || (CLIENT_DATA && CLIENT_DATA.tenantId) || '';
+    if (tid) localStorage.setItem('october_build_wizard_' + tid, 'done');
+  }
+})();
+</script>
+</body>
+</html>

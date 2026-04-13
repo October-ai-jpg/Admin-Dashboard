@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Your Agents — October AI</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/client-pages.css">
+<style>
+.agents-grid{display:grid;grid-template-columns:1fr;gap:24px;max-width:680px;margin:0 auto}
+.agent-card{background:var(--white);border:1px solid var(--border);border-radius:16px;padding:40px 32px;text-align:center;transition:box-shadow 0.2s}
+.agent-card:hover{box-shadow:0 4px 24px rgba(0,0,0,0.06)}
+.agent-card-name{font-family:var(--serif);font-size:28px;font-weight:400;margin-bottom:8px}
+.agent-card-stats{display:flex;justify-content:center;gap:32px;margin:20px 0 28px}
+.agent-card-stat-val{font-family:var(--serif);font-size:24px;font-weight:300}
+.agent-card-stat-label{font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);margin-top:2px}
+.agent-card-actions{display:flex;justify-content:center;gap:12px;flex-wrap:wrap}
+.agent-card-actions .btn{font-size:13px;padding:10px 24px}
+.agent-card-actions .btn-outline{font-size:13px;padding:10px 24px}
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header class="header">
+  <a href="/" class="header-logo"><img src="/images/logo-leaf.svg" alt="">October AI</a>
+  <div class="agent-switcher" id="agentSwitcher"></div>
+</header>
+
+<!-- NAV -->
+<nav class="sub-nav">
+  <div class="nav-item">
+    <a class="nav-trigger active" id="navAgent">Your agents <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/agent">All agents</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger" id="navBuild">Build <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/build#vertical">Choose vertical</a>
+      <a data-href="{BASE}/build#spaces">Map your spaces</a>
+      <a data-href="{BASE}/build#data">Add your data</a>
+      <a data-href="{BASE}/build#conversion">Conversion URL</a>
+      <a data-href="{BASE}/build#embed">Embed code</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger" id="navGuide" href="#" onclick="window.location.href=BASE+'/build';return false;">Guide <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/build" onclick="localStorage.removeItem('october_build_wizard_'+(typeof CACHED_TENANT_ID!=='undefined'?CACHED_TENANT_ID:''))">Run setup wizard</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger" id="navAnalytics">Analytics <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/analytics">Overview</a>
+      <a data-href="{BASE}/analytics/conversations">Conversations</a>
+      <a data-href="{BASE}/analytics/leads">Leads</a>
+      <a data-href="{BASE}/analytics/report">Download report</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger" id="navKnowledge">Knowledge <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/knowledge">Your data</a>
+      <a data-href="{BASE}/knowledge#sync">Sync from website</a>
+      <a data-href="{BASE}/knowledge#upload">Upload files</a>
+      <a data-href="{BASE}/knowledge#manual">Add manually</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger" id="navSettings">Settings <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/settings">Agent settings</a>
+      <a data-href="{BASE}/settings#usage">Usage &amp; minutes</a>
+      <a data-href="{BASE}/settings#buy">Buy minutes</a>
+      <a data-href="{BASE}/settings#billing">Billing</a>
+    </div>
+  </div>
+</nav>
+
+<!-- LOADING -->
+<div class="loading-state" id="loadingState">Loading<span class="spinner" style="margin-left:8px"></span></div>
+
+<!-- CONTENT -->
+<div class="page-content" id="pageContent" style="display:none">
+
+  <!-- HERO -->
+  <div style="text-align:center;margin-bottom:60px">
+    <div class="hero-label">OVERVIEW</div>
+    <h1 class="hero-heading">Your agents.</h1>
+    <p class="hero-sub">Manage your virtual employees and track their performance.</p>
+  </div>
+
+  <!-- AGENTS GRID -->
+  <div class="agents-grid" id="agentsGrid">
+    <!-- Populated by JS -->
+  </div>
+
+</div>
+
+<!-- FOOTER -->
+<div class="footer">&copy; 2026 October AI &middot; hello@october-ai.com &middot; <a href="/legal" style="color:inherit;text-decoration:underline" target="_blank">Legal</a></div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/client/js/client.js"></script>
+<script>
+(function() {
+  initCommon();
+
+  getClientData().then(function(data) {
+    if (!data) { document.getElementById('loadingState').innerHTML = '<div class="error-state"><h2>Could not load portal</h2><p>Invalid or expired token.</p></div>'; return; }
+
+    document.getElementById('loadingState').style.display = 'none';
+    document.getElementById('pageContent').style.display = 'block';
+
+    renderAgentSwitcher();
+    renderAgentsGrid(data);
+  });
+
+  function renderAgentsGrid(data) {
+    var grid = document.getElementById('agentsGrid');
+    var tenants = ALL_TENANTS.length > 0 ? ALL_TENANTS : [];
+    var a = data.analytics || {};
+
+    if (tenants.length === 0) {
+      grid.innerHTML = '<div style="text-align:center;padding:60px 0"><p style="font-size:16px;color:var(--muted)">No agents configured yet.</p><a href="' + BASE + '/build" class="btn" style="margin-top:24px">Build your first agent</a></div>';
+      return;
+    }
+
+    var html = '';
+    tenants.forEach(function(tenant, idx) {
+      var isActive = ACTIVE_TENANT && tenant.id === ACTIVE_TENANT.id;
+      var name = tenant.name || 'Agent ' + (idx + 1);
+      var convos = isActive ? (a.conversations30d || 0) : 0;
+      var conversions = isActive ? (a.bookings30d || 0) : 0;
+      var rate = isActive ? ((a.conversionRate || 0) + '%') : '0%';
+
+      html += '<div class="agent-card">'
+        + '<h2 class="agent-card-name">' + esc(name) + '</h2>'
+        + '<div style="display:flex;justify-content:center"><span class="status-badge active"><span class="status-dot"></span>Active</span></div>'
+        + '<div class="agent-card-stats">'
+        + '<div><div class="agent-card-stat-val">' + convos + '</div><div class="agent-card-stat-label">Conversations</div></div>'
+        + '<div><div class="agent-card-stat-val">' + conversions + '</div><div class="agent-card-stat-label">Conversions</div></div>'
+        + '<div><div class="agent-card-stat-val">' + rate + '</div><div class="agent-card-stat-label">Rate</div></div>'
+        + '</div>'
+        + '<div class="agent-card-actions">'
+        + '<button class="btn" onclick="openAgentById(\'' + tenant.id + '\')">Open agent</button>'
+        + '<a href="' + BASE + '/analytics" class="btn-outline">Analytics</a>'
+        + '<a href="' + BASE + '/build" class="btn-outline">Build</a>'
+        + '</div>'
+        + '</div>';
+    });
+
+    grid.innerHTML = html;
+  }
+
+  window.openAgentById = function(tid) {
+    window.open(SERVER + '/tour/' + tid, '_blank');
+  };
+})();
+</script>
+</body>
+</html>

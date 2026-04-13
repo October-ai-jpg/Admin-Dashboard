@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Conversations — October AI</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/client-pages.css">
+</head>
+<body>
+
+<!-- HEADER -->
+<header class="header">
+  <a href="/" class="header-logo"><img src="/images/logo-leaf.svg" alt="">October AI</a>
+  <div class="agent-switcher" id="agentSwitcher"></div>
+  <button class="header-right" onclick="window.location.href=BASE+'/build'">Show guide</button>
+</header>
+
+<!-- NAV -->
+<nav class="sub-nav">
+  <div class="nav-item">
+    <a class="nav-trigger" id="navAgent">Your agents <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/agent">All agents</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger" id="navBuild">Build <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/build#vertical">Choose vertical</a>
+      <a data-href="{BASE}/build#spaces">Map your spaces</a>
+      <a data-href="{BASE}/build#data">Add your data</a>
+      <a data-href="{BASE}/build#conversion">Conversion URL</a>
+      <a data-href="{BASE}/build#embed">Embed code</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger" id="navGuide" href="#" onclick="window.location.href=BASE+'/build';return false;">Guide <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/build" onclick="localStorage.removeItem('october_build_wizard_'+(typeof CACHED_TENANT_ID!=='undefined'?CACHED_TENANT_ID:''))">Run setup wizard</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger active" id="navAnalytics">Analytics <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/analytics">Overview</a>
+      <a data-href="{BASE}/analytics/conversations">Conversations</a>
+      <a data-href="{BASE}/analytics/leads">Leads</a>
+      <a data-href="{BASE}/analytics/report">Download report</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger" id="navKnowledge">Knowledge <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/knowledge">Your data</a>
+      <a data-href="{BASE}/knowledge#sync">Sync from website</a>
+      <a data-href="{BASE}/knowledge#upload">Upload files</a>
+      <a data-href="{BASE}/knowledge#manual">Add manually</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger" id="navSettings">Settings <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/settings">Agent settings</a>
+      <a data-href="{BASE}/settings#usage">Usage &amp; minutes</a>
+      <a data-href="{BASE}/settings#buy">Buy minutes</a>
+      <a data-href="{BASE}/settings#billing">Billing</a>
+    </div>
+  </div>
+</nav>
+
+<!-- LOADING -->
+<div class="loading-state" id="loadingState">Loading<span class="spinner" style="margin-left:8px"></span></div>
+
+<!-- CONTENT -->
+<div class="page-content" id="pageContent" style="display:none">
+
+  <!-- HERO -->
+  <div style="text-align:center;margin-bottom:40px">
+    <div class="hero-label">CONVERSATIONS</div>
+    <h1 class="hero-heading">All conversations.</h1>
+  </div>
+
+  <!-- FILTER -->
+  <div class="filter-bar">
+    <button class="filter-btn active" data-filter="all" onclick="setFilter('all',this)">All</button>
+    <button class="filter-btn" data-filter="booked" onclick="setFilter('booked',this)">Converted</button>
+    <button class="filter-btn" data-filter="not_booked" onclick="setFilter('not_booked',this)">Not converted</button>
+  </div>
+
+  <!-- TABLE -->
+  <table class="tbl">
+    <thead><tr><th>Date</th><th>Duration</th><th>Messages</th><th>Spaces shown</th><th style="text-align:right">Converted</th></tr></thead>
+    <tbody id="convTableBody"><tr><td colspan="5" class="empty-state">Loading...</td></tr></tbody>
+  </table>
+
+  <div style="display:flex;justify-content:center;gap:6px;margin-top:16px" id="convPagination"></div>
+
+  <hr class="divider">
+
+  <div style="text-align:center">
+    <button class="btn-outline" onclick="window.open(SERVER+'/client/'+TOKEN+'/leads/export','_blank')">Export all (CSV)</button>
+  </div>
+
+</div>
+
+<!-- CONVERSATION MODAL -->
+<div class="modal-overlay" id="convModal" onclick="if(event.target===this)this.classList.remove('open')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header"><h3 id="modalTitle">Conversation</h3><button class="modal-close" onclick="document.getElementById('convModal').classList.remove('open')">&times;</button></div>
+    <div class="modal-body" id="modalMessages"><div class="empty-state">Loading...</div></div>
+  </div>
+</div>
+
+<div class="footer">&copy; 2026 October AI &middot; hello@october-ai.com &middot; <a href="/legal" style="color:inherit;text-decoration:underline" target="_blank">Legal</a></div>
+<div class="toast" id="toast"></div>
+
+<script src="/client/js/client.js"></script>
+<script>
+(function() {
+  initCommon();
+
+  var currentFilter = 'all';
+  var currentPage = 1;
+
+  getClientData().then(function(data) {
+    if (!data) { document.getElementById('loadingState').innerHTML = '<div class="error-state"><h2>Could not load portal</h2><p>Invalid or expired token.</p></div>'; return; }
+    document.getElementById('loadingState').style.display = 'none';
+    document.getElementById('pageContent').style.display = 'block';
+    renderAgentSwitcher();
+    loadConversations();
+  });
+
+  async function loadConversations() {
+    try {
+      var url = SERVER + '/client/' + TOKEN + '/conversations?page=' + currentPage;
+      if (currentFilter !== 'all') url += '&filter=' + currentFilter;
+      var res = await fetch(url);
+      var data = await res.json();
+      renderConversations(data.conversations || [], data.total || 0, data.page || 1, data.limit || 20);
+    } catch(e) { console.error('Conv err:', e); }
+  }
+
+  function renderConversations(convos, total, page, limit) {
+    var tb = document.getElementById('convTableBody');
+    tb.innerHTML = '';
+    if (!convos.length) {
+      tb.innerHTML = '<tr><td colspan="5" class="empty-state">No conversations found</td></tr>';
+      document.getElementById('convPagination').innerHTML = '';
+      return;
+    }
+    convos.forEach(function(c) {
+      var tr = document.createElement('tr');
+      tr.className = 'clickable';
+      tr.onclick = function() { openConvModal(c.id, c.created_at); };
+      tr.innerHTML = '<td>' + new Date(c.created_at).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' }) + '</td>'
+        + '<td>' + formatDuration(c.duration_seconds || 0) + '</td>'
+        + '<td>' + (c.message_count || '-') + '</td>'
+        + '<td>' + (c.rooms_shown || '-') + '</td>'
+        + '<td style="text-align:right"><span class="badge ' + (c.had_booking_click ? 'badge-green' : 'badge-gray') + '">' + (c.had_booking_click ? 'Yes' : 'No') + '</span></td>';
+      tb.appendChild(tr);
+    });
+
+    var tp = Math.ceil(total / limit);
+    var pd = document.getElementById('convPagination');
+    pd.innerHTML = '';
+    if (tp > 1) {
+      for (var i = 1; i <= tp; i++) {
+        var btn = document.createElement('button');
+        btn.textContent = i;
+        btn.className = 'filter-btn' + (i === page ? ' active' : '');
+        btn.style.minWidth = '32px';
+        btn.onclick = (function(p) { return function() { currentPage = p; loadConversations(); }; })(i);
+        pd.appendChild(btn);
+      }
+    }
+  }
+
+  async function openConvModal(id, ca) {
+    document.getElementById('convModal').classList.add('open');
+    document.getElementById('modalTitle').textContent = 'Conversation — ' + new Date(ca).toLocaleDateString('en-US', { day: 'numeric', month: 'long', year: 'numeric' });
+    document.getElementById('modalMessages').innerHTML = '<div class="empty-state">Loading...<span class="spinner" style="margin-left:8px"></span></div>';
+    try {
+      var res = await fetch(SERVER + '/client/' + TOKEN + '/conversations/' + id + '/messages');
+      var msgs = await res.json();
+      renderMessages(msgs);
+    } catch(e) {
+      document.getElementById('modalMessages').innerHTML = '<div class="empty-state" style="color:var(--danger)">Could not load conversation</div>';
+    }
+  }
+
+  function renderMessages(msgs) {
+    var c = document.getElementById('modalMessages');
+    c.innerHTML = '';
+    if (!msgs || !msgs.length) { c.innerHTML = '<div class="empty-state">No messages</div>'; return; }
+    msgs.forEach(function(m) {
+      if (m.role === 'system') return;
+      var d = document.createElement('div');
+      d.className = 'msg-bubble ' + (m.role === 'user' ? 'msg-user' : 'msg-assistant');
+      d.textContent = m.content;
+      c.appendChild(d);
+      if (m.created_at) {
+        var t = document.createElement('div');
+        t.className = 'msg-time';
+        t.style.textAlign = m.role === 'user' ? 'right' : 'left';
+        t.textContent = new Date(m.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        c.appendChild(t);
+      }
+    });
+    c.scrollTop = c.scrollHeight;
+  }
+
+  window.setFilter = function(f, btn) {
+    currentFilter = f;
+    currentPage = 1;
+    document.querySelectorAll('.filter-btn[data-filter]').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    loadConversations();
+  };
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Leads — October AI</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/client-pages.css">
+</head>
+<body>
+
+<!-- HEADER -->
+<header class="header">
+  <a href="/" class="header-logo"><img src="/images/logo-leaf.svg" alt="">October AI</a>
+  <div class="agent-switcher" id="agentSwitcher"></div>
+  <button class="header-right" onclick="window.location.href=BASE+'/build'">Show guide</button>
+</header>
+
+<!-- NAV -->
+<nav class="sub-nav">
+  <div class="nav-item">
+    <a class="nav-trigger" id="navAgent">Your agents <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/agent">All agents</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger" id="navBuild">Build <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/build#vertical">Choose vertical</a>
+      <a data-href="{BASE}/build#spaces">Map your spaces</a>
+      <a data-href="{BASE}/build#data">Add your data</a>
+      <a data-href="{BASE}/build#conversion">Conversion URL</a>
+      <a data-href="{BASE}/build#embed">Embed code</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger" id="navGuide" href="#" onclick="window.location.href=BASE+'/build';return false;">Guide <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/build" onclick="localStorage.removeItem('october_build_wizard_'+(typeof CACHED_TENANT_ID!=='undefined'?CACHED_TENANT_ID:''))">Run setup wizard</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger active" id="navAnalytics">Analytics <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/analytics">Overview</a>
+      <a data-href="{BASE}/analytics/conversations">Conversations</a>
+      <a data-href="{BASE}/analytics/leads">Leads</a>
+      <a data-href="{BASE}/analytics/report">Download report</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger" id="navKnowledge">Knowledge <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/knowledge">Your data</a>
+      <a data-href="{BASE}/knowledge#sync">Sync from website</a>
+      <a data-href="{BASE}/knowledge#upload">Upload files</a>
+      <a data-href="{BASE}/knowledge#manual">Add manually</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger" id="navSettings">Settings <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/settings">Agent settings</a>
+      <a data-href="{BASE}/settings#usage">Usage &amp; minutes</a>
+      <a data-href="{BASE}/settings#buy">Buy minutes</a>
+      <a data-href="{BASE}/settings#billing">Billing</a>
+    </div>
+  </div>
+</nav>
+
+<!-- LOADING -->
+<div class="loading-state" id="loadingState">Loading<span class="spinner" style="margin-left:8px"></span></div>
+
+<!-- CONTENT -->
+<div class="page-content" id="pageContent" style="display:none">
+
+  <!-- HERO -->
+  <div style="text-align:center;margin-bottom:40px">
+    <div class="hero-label">LEADS</div>
+    <h1 class="hero-heading">Visitors who shared<br>their details.</h1>
+  </div>
+
+  <!-- TABLE -->
+  <table class="tbl">
+    <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Date</th><th style="text-align:right">Converted</th></tr></thead>
+    <tbody id="leadsTableBody"><tr><td colspan="5" class="empty-state">Loading...</td></tr></tbody>
+  </table>
+
+  <div id="emptyLeads" style="display:none" class="empty-state">
+    No leads yet. Your agent will collect visitor details when they share them in conversation.
+  </div>
+
+  <hr class="divider">
+
+  <div style="text-align:center">
+    <button class="btn" onclick="window.open(SERVER+'/client/'+TOKEN+'/leads/export','_blank')">Download leads (CSV)</button>
+  </div>
+
+</div>
+
+<div class="footer">&copy; 2026 October AI &middot; hello@october-ai.com &middot; <a href="/legal" style="color:inherit;text-decoration:underline" target="_blank">Legal</a></div>
+<div class="toast" id="toast"></div>
+
+<script src="/client/js/client.js"></script>
+<script>
+(function() {
+  initCommon();
+
+  getClientData().then(function(data) {
+    if (!data) { document.getElementById('loadingState').innerHTML = '<div class="error-state"><h2>Could not load portal</h2><p>Invalid or expired token.</p></div>'; return; }
+    document.getElementById('loadingState').style.display = 'none';
+    document.getElementById('pageContent').style.display = 'block';
+    renderAgentSwitcher();
+
+    var leads = (data.analytics && data.analytics.leads) || [];
+    renderLeads(leads);
+  });
+
+  function renderLeads(leads) {
+    var tb = document.getElementById('leadsTableBody');
+    tb.innerHTML = '';
+    if (!leads || !leads.length) {
+      tb.innerHTML = '';
+      document.getElementById('emptyLeads').style.display = 'block';
+      return;
+    }
+    leads.forEach(function(l) {
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + esc(l.guest_name || '-') + '</td>'
+        + '<td>' + esc(l.guest_email || '-') + '</td>'
+        + '<td>' + esc(l.guest_phone || '-') + '</td>'
+        + '<td>' + new Date(l.created_at).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' }) + '</td>'
+        + '<td style="text-align:right"><span class="badge ' + (l.had_booking_click ? 'badge-green' : 'badge-gray') + '">' + (l.had_booking_click ? 'Yes' : 'No') + '</span></td>';
+      tb.appendChild(tr);
+    });
+  }
+})();
+</script>
+</body>
+</html>

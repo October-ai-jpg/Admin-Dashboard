@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Analytics — October AI</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/client-pages.css">
+</head>
+<body>
+
+<!-- HEADER -->
+<header class="header">
+  <a href="/" class="header-logo"><img src="/images/logo-leaf.svg" alt="">October AI</a>
+  <div class="agent-switcher" id="agentSwitcher"></div>
+  <button class="header-right" onclick="window.location.href=BASE+'/build'">Show guide</button>
+</header>
+
+<!-- NAV -->
+<nav class="sub-nav">
+  <div class="nav-item">
+    <a class="nav-trigger" id="navAgent">Your agents <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/agent">All agents</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger" id="navBuild">Build <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/build#vertical">Choose vertical</a>
+      <a data-href="{BASE}/build#spaces">Map your spaces</a>
+      <a data-href="{BASE}/build#data">Add your data</a>
+      <a data-href="{BASE}/build#conversion">Conversion URL</a>
+      <a data-href="{BASE}/build#embed">Embed code</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger" id="navGuide" href="#" onclick="window.location.href=BASE+'/build';return false;">Guide <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/build" onclick="localStorage.removeItem('october_build_wizard_'+(typeof CACHED_TENANT_ID!=='undefined'?CACHED_TENANT_ID:''))">Run setup wizard</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger active" id="navAnalytics">Analytics <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/analytics">Overview</a>
+      <a data-href="{BASE}/analytics/conversations">Conversations</a>
+      <a data-href="{BASE}/analytics/leads">Leads</a>
+      <a data-href="{BASE}/analytics/report">Download report</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger" id="navKnowledge">Knowledge <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/knowledge">Your data</a>
+      <a data-href="{BASE}/knowledge#sync">Sync from website</a>
+      <a data-href="{BASE}/knowledge#upload">Upload files</a>
+      <a data-href="{BASE}/knowledge#manual">Add manually</a>
+    </div>
+  </div>
+  <div class="nav-item">
+    <a class="nav-trigger" id="navSettings">Settings <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
+    <div class="nav-dropdown">
+      <a data-href="{BASE}/settings">Agent settings</a>
+      <a data-href="{BASE}/settings#usage">Usage &amp; minutes</a>
+      <a data-href="{BASE}/settings#buy">Buy minutes</a>
+      <a data-href="{BASE}/settings#billing">Billing</a>
+    </div>
+  </div>
+</nav>
+
+<!-- LOADING -->
+<div class="loading-state" id="loadingState">Loading<span class="spinner" style="margin-left:8px"></span></div>
+
+<!-- CONTENT -->
+<div class="page-content" id="pageContent" style="display:none">
+
+  <!-- HERO -->
+  <div style="text-align:center;margin-bottom:60px">
+    <div class="hero-label">ANALYTICS</div>
+    <h1 class="hero-heading">How your agent<br>is performing.</h1>
+  </div>
+
+  <!-- KEY METRICS -->
+  <div class="filter-bar" style="margin-bottom:24px">
+    <button class="filter-btn active" data-period="7" onclick="setPeriod(7,this)">7 days</button>
+    <button class="filter-btn" data-period="30" onclick="setPeriod(30,this)">30 days</button>
+    <button class="filter-btn" data-period="0" onclick="setPeriod(0,this)">All time</button>
+  </div>
+
+  <div class="metric-grid" id="metricGrid">
+    <div class="metric-card"><div class="metric-num" id="mConversations">-</div><div class="metric-label">Conversations</div></div>
+    <div class="metric-card"><div class="metric-num" id="mConversions">-</div><div class="metric-label">Conversions</div></div>
+    <div class="metric-card"><div class="metric-num" id="mRate">-</div><div class="metric-label">Rate</div></div>
+    <div class="metric-card"><div class="metric-num" id="mDuration">-</div><div class="metric-label">Avg duration</div></div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- CONVERSION FUNNEL -->
+  <div>
+    <h2 class="section-heading">Your conversion funnel.</h2>
+    <p class="section-sub">How visitors move through your agent experience.</p>
+
+    <div class="funnel" id="funnelContainer">
+      <div class="funnel-step">
+        <span class="funnel-label">Total visitors</span>
+        <div class="funnel-bar"><div class="funnel-fill" id="funnelVisitors" style="width:100%"></div></div>
+        <span class="funnel-pct" id="funnelVisitorsPct">-</span>
+      </div>
+      <div class="funnel-step">
+        <span class="funnel-label">Started conversation</span>
+        <div class="funnel-bar"><div class="funnel-fill" id="funnelStarted" style="width:0%"></div></div>
+        <span class="funnel-pct" id="funnelStartedPct">-</span>
+      </div>
+      <div class="funnel-step">
+        <span class="funnel-label">Shown a space</span>
+        <div class="funnel-bar"><div class="funnel-fill" id="funnelShown" style="width:0%"></div></div>
+        <span class="funnel-pct" id="funnelShownPct">-</span>
+      </div>
+      <div class="funnel-step">
+        <span class="funnel-label">Clicked conversion</span>
+        <div class="funnel-bar"><div class="funnel-fill" id="funnelConverted" style="width:0%"></div></div>
+        <span class="funnel-pct" id="funnelConvertedPct">-</span>
+      </div>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- POPULAR QUESTIONS -->
+  <div>
+    <h2 class="section-heading">What visitors ask most.</h2>
+    <p class="section-sub">The top questions your visitors are asking your agent.</p>
+    <ul class="question-list" id="questionsList"><li class="empty-state">No questions yet</li></ul>
+  </div>
+
+  <hr class="divider">
+
+  <!-- SPACE PERFORMANCE -->
+  <div>
+    <h2 class="section-heading">Which spaces perform best.</h2>
+    <p class="section-sub">See which spaces your agent shows most and which drive conversions.</p>
+    <table class="tbl">
+      <thead><tr><th>Space</th><th>Times shown</th><th style="text-align:right">Conversions</th></tr></thead>
+      <tbody id="spaceTableBody"><tr><td colspan="3" class="empty-state">No data yet</td></tr></tbody>
+    </table>
+  </div>
+
+  <hr class="divider">
+
+  <div style="text-align:center;display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+    <a data-href="{BASE}/analytics/conversations" class="btn-outline">View all conversations</a>
+    <a data-href="{BASE}/analytics/leads" class="btn-outline">View leads</a>
+    <button class="btn-outline" onclick="window.open(SERVER+'/client/'+TOKEN+'/report','_blank')">Download report (PDF)</button>
+  </div>
+
+</div>
+
+<div class="footer">&copy; 2026 October AI &middot; hello@october-ai.com &middot; <a href="/legal" style="color:inherit;text-decoration:underline" target="_blank">Legal</a></div>
+<div class="toast" id="toast"></div>
+
+<script src="/client/js/client.js"></script>
+<script>
+(function() {
+  initCommon();
+
+  getClientData().then(function(data) {
+    if (!data) { document.getElementById('loadingState').innerHTML = '<div class="error-state"><h2>Could not load portal</h2><p>Invalid or expired token.</p></div>'; return; }
+    document.getElementById('loadingState').style.display = 'none';
+    document.getElementById('pageContent').style.display = 'block';
+    renderAgentSwitcher();
+    renderAnalytics(data.analytics || {});
+    scrollToHash();
+  });
+
+  function renderAnalytics(a) {
+    document.getElementById('mConversations').textContent = a.conversations30d || 0;
+    document.getElementById('mConversions').textContent = a.bookings30d || 0;
+    document.getElementById('mRate').textContent = (a.conversionRate || 0) + '%';
+    document.getElementById('mDuration').textContent = formatDuration(a.avgDuration);
+
+    /* Funnel */
+    var total = a.totalVisitors || a.conversations30d || 1;
+    var started = a.conversations30d || 0;
+    var shown = a.spacesShown || 0;
+    var converted = a.bookings30d || 0;
+
+    setFunnel('funnelVisitors', 'funnelVisitorsPct', total, total);
+    setFunnel('funnelStarted', 'funnelStartedPct', started, total);
+    setFunnel('funnelShown', 'funnelShownPct', shown, total);
+    setFunnel('funnelConverted', 'funnelConvertedPct', converted, total);
+
+    /* Questions */
+    if (a.popularQuestions && a.popularQuestions.length > 0) {
+      var ql = document.getElementById('questionsList');
+      ql.innerHTML = '';
+      a.popularQuestions.slice(0, 10).forEach(function(q) {
+        var li = document.createElement('li');
+        li.innerHTML = '<span>' + esc(q.content) + '</span><span class="question-count">' + q.count + '</span>';
+        ql.appendChild(li);
+      });
+    }
+
+    /* Space performance */
+    if (a.roomPerformance && a.roomPerformance.length > 0) {
+      var tb = document.getElementById('spaceTableBody');
+      tb.innerHTML = '';
+      a.roomPerformance.forEach(function(r) {
+        var tr = document.createElement('tr');
+        tr.innerHTML = '<td>' + esc(r.room) + '</td><td>' + r.shown + '</td><td style="text-align:right">' + (r.clicked || 0) + '</td>';
+        tb.appendChild(tr);
+      });
+    }
+  }
+
+  function setFunnel(fillId, pctId, value, total) {
+    var pct = total > 0 ? Math.round((value / total) * 100) : 0;
+    document.getElementById(fillId).style.width = pct + '%';
+    document.getElementById(pctId).textContent = pct + '%';
+  }
+
+  window.setPeriod = function(days, btn) {
+    document.querySelectorAll('.filter-btn[data-period]').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    /* Re-render with same data — period filtering happens server-side in future */
+    if (CLIENT_DATA && CLIENT_DATA.analytics) renderAnalytics(CLIENT_DATA.analytics);
+  };
+})();
+</script>
+</body>
+</html>

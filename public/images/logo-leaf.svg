@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 140" fill="none">
+  <defs>
+    <linearGradient id="leafGrad" x1="30%" y1="0%" x2="70%" y2="100%">
+      <stop offset="0%" stop-color="#D4A04A"/>
+      <stop offset="50%" stop-color="#C4883C"/>
+      <stop offset="100%" stop-color="#A06B2E"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(60,70) rotate(-8) translate(-60,-65)">
+    <!-- Leaf body -->
+    <path d="M60 8
+      C52 18, 30 30, 22 45
+      C14 60, 10 72, 12 82
+      C14 92, 20 100, 28 106
+      C36 112, 48 116, 60 120
+      C72 116, 84 112, 92 106
+      C100 100, 106 92, 108 82
+      C110 72, 106 60, 98 45
+      C90 30, 68 18, 60 8Z"
+      fill="url(#leafGrad)" opacity="0.9"/>
+    <!-- Serrated edge detail -->
+    <path d="M60 8
+      C54 16, 38 26, 28 40
+      C24 46, 20 52, 17 58
+      C15 64, 13 70, 12 76
+      C11 82, 13 88, 16 94
+      C19 100, 24 104, 30 108
+      C36 112, 48 116, 60 120"
+      stroke="#A06B2E" stroke-width="0.8" fill="none" opacity="0.5"/>
+    <path d="M60 8
+      C66 16, 82 26, 92 40
+      C96 46, 100 52, 103 58
+      C105 64, 107 70, 108 76
+      C109 82, 107 88, 104 94
+      C101 100, 96 104, 90 108
+      C84 112, 72 116, 60 120"
+      stroke="#A06B2E" stroke-width="0.8" fill="none" opacity="0.5"/>
+    <!-- Central vein -->
+    <path d="M60 14 L60 118" stroke="#A06B2E" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+    <!-- Stem -->
+    <path d="M60 118 Q62 126, 66 134" stroke="#A06B2E" stroke-width="2" stroke-linecap="round"/>
+    <!-- Left veins -->
+    <path d="M60 30 Q48 38, 30 44" stroke="#A06B2E" stroke-width="0.9" stroke-linecap="round" opacity="0.45"/>
+    <path d="M60 44 Q45 54, 22 58" stroke="#A06B2E" stroke-width="0.9" stroke-linecap="round" opacity="0.45"/>
+    <path d="M60 58 Q44 66, 18 72" stroke="#A06B2E" stroke-width="0.9" stroke-linecap="round" opacity="0.45"/>
+    <path d="M60 72 Q46 78, 20 84" stroke="#A06B2E" stroke-width="0.9" stroke-linecap="round" opacity="0.45"/>
+    <path d="M60 86 Q48 92, 28 98" stroke="#A06B2E" stroke-width="0.8" stroke-linecap="round" opacity="0.4"/>
+    <path d="M60 98 Q50 104, 38 108" stroke="#A06B2E" stroke-width="0.7" stroke-linecap="round" opacity="0.35"/>
+    <!-- Right veins -->
+    <path d="M60 30 Q72 38, 90 44" stroke="#A06B2E" stroke-width="0.9" stroke-linecap="round" opacity="0.45"/>
+    <path d="M60 44 Q75 54, 98 58" stroke="#A06B2E" stroke-width="0.9" stroke-linecap="round" opacity="0.45"/>
+    <path d="M60 58 Q76 66, 102 72" stroke="#A06B2E" stroke-width="0.9" stroke-linecap="round" opacity="0.45"/>
+    <path d="M60 72 Q74 78, 100 84" stroke="#A06B2E" stroke-width="0.9" stroke-linecap="round" opacity="0.45"/>
+    <path d="M60 86 Q72 92, 92 98" stroke="#A06B2E" stroke-width="0.8" stroke-linecap="round" opacity="0.4"/>
+    <path d="M60 98 Q70 104, 82 108" stroke="#A06B2E" stroke-width="0.7" stroke-linecap="round" opacity="0.35"/>
+    <!-- Highlight shimmer -->
+    <path d="M60 8
+      C52 18, 38 28, 30 42
+      C24 52, 18 64, 16 76
+      C14 86, 18 96, 26 104"
+      stroke="#E8C874" stroke-width="0.5" fill="none" opacity="0.3"/>
+  </g>
+</svg>
