@@ -42,6 +42,7 @@
     <a class="nav-trigger active" id="navBuild">Build <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
     <div class="nav-dropdown">
       <a data-href="{BASE}/build#vertical">Choose vertical</a>
+      <a data-href="{BASE}/build#matterport">Matterport tour</a>
       <a data-href="{BASE}/build#spaces">Map your spaces</a>
       <a data-href="{BASE}/build#floorplan">Floor plan</a>
       <a data-href="{BASE}/build#data">Add your data</a>
@@ -182,6 +183,27 @@
       <div class="vertical-card" data-v="retail" onclick="selectVertical('retail',this)">Retail Showroom</div>
       <div class="vertical-card" data-v="education" onclick="selectVertical('education',this)">Education &amp; Campus</div>
       <div class="vertical-card" data-v="other" onclick="selectVertical('other',this)">Other</div>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- MATTERPORT TOUR -->
+  <div id="matterport">
+    <div class="section-label">MATTERPORT TOUR
+      <span class="help-tip">?<span class="help-bubble">Paste the URL of your Matterport 3D tour. This is the virtual space your agent will guide visitors through. You can find the URL on your Matterport account under "Share".</span></span>
+    </div>
+    <h2 class="section-heading">Connect your Matterport tour.</h2>
+    <p class="section-sub">Paste your Matterport tour URL so your agent can guide visitors through your 3D space.</p>
+
+    <div style="max-width:500px;margin:0 auto">
+      <div class="field-group">
+        <input type="url" id="matterportUrl" placeholder="https://my.matterport.com/show/?m=..." style="text-align:center">
+      </div>
+      <div style="text-align:center"><button class="btn" onclick="saveMatterportUrl()">Save</button></div>
+      <div id="matterportPreview" style="margin-top:24px;display:none">
+        <iframe id="matterportIframe" style="width:100%;height:280px;border:0;border-radius:12px;border:0.5px solid var(--border)" allow="xr-spatial-tracking"></iframe>
+      </div>
     </div>
   </div>
 
@@ -407,6 +429,10 @@
       });
     }
 
+    /* Matterport URL */
+    document.getElementById('matterportUrl').value = data.matterportUrl || '';
+    renderMatterportPreview(data.matterportUrl || '');
+
     /* Spaces */
     renderSpaces(data.roomMappings || {});
 
@@ -471,6 +497,38 @@
   /* Enter to save agent */
   document.getElementById('agentNameInput').addEventListener('keydown', function(e) {
     if (e.key === 'Enter') saveAgent();
+  });
+
+  /* ── Matterport URL ── */
+  function renderMatterportPreview(url) {
+    var preview = document.getElementById('matterportPreview');
+    var iframe = document.getElementById('matterportIframe');
+    if (!url || !url.includes('matterport.com')) {
+      preview.style.display = 'none';
+      return;
+    }
+    /* Extract model ID and build clean embed URL */
+    var mMatch = url.match(/[?&]m=([^&]+)/);
+    if (mMatch) {
+      iframe.src = 'https://my.matterport.com/show/?m=' + mMatch[1] + '&play=1';
+      preview.style.display = 'block';
+    } else {
+      preview.style.display = 'none';
+    }
+  }
+
+  window.saveMatterportUrl = async function() {
+    var url = document.getElementById('matterportUrl').value.trim();
+    try {
+      await updateTenant({ matterportUrl: url });
+      renderMatterportPreview(url);
+      showToast(url ? 'Matterport tour saved' : 'Matterport tour removed');
+    } catch(e) { showToast('Error saving', true); }
+  };
+
+  /* Enter to save matterport URL */
+  document.getElementById('matterportUrl').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') saveMatterportUrl();
   });
 
   /* ── Vertical ── */
