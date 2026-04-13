@@ -776,8 +776,11 @@ app.get('/api/tour/:tenantId/config', (req, res) => {
   const modelId = mMatch ? mMatch[1] : 'SxQL3iGyoDo';
   res.json({
     modelId: modelId,
-    propertyName: DEMO_DATA.propertyName || 'Demo Property',
-    vertical: DEMO_DATA.vertical || 'hotel'
+    propertyName: DEMO_DATA.propertyName || DEMO_DATA.agentName || 'Demo Property',
+    vertical: DEMO_DATA.vertical || 'hotel',
+    brandColor: DEMO_DATA.brandColor || '#1a1a1a',
+    bookingUrl: DEMO_DATA.bookingUrl || '',
+    demoQuestions: DEMO_DATA.demoQuestions || []
   });
 });
 
@@ -793,6 +796,11 @@ app.put('/api/my/tenants/:tenantId/rooms', express.json(), (req, res) => {
     DEMO_DATA.roomMappings = roomMappings;
   }
   res.json({ ok: true, rooms: DEMO_DATA.roomMappings });
+});
+
+/* ── Demo tour page ── */
+app.get('/tour/:id', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'kunde', 'tour-demo.html'));
 });
 
 /* ══════════════════════════════════════════
