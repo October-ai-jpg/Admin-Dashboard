@@ -573,7 +573,12 @@ app.get('/client/demo/preview', (req, res) => {
 app.post('/client/demo/update', express.json(), (req, res) => {
   /* Accept updates to demo data (in-memory only) */
   const body = req.body || {};
-  if (body.agentName) DEMO_DATA.agentName = body.agentName;
+  if (body.agentName !== undefined) {
+    DEMO_DATA.agentName = body.agentName;
+    /* Keep tenants list in sync */
+    if (DEMO_DATA.tenants.length > 0) DEMO_DATA.tenants[0].name = body.agentName || 'Demo Agent';
+  }
+  if (body.propertyName !== undefined) DEMO_DATA.propertyName = body.propertyName;
   if (body.language) DEMO_DATA.language = body.language;
   if (body.brandColor) DEMO_DATA.brandColor = body.brandColor;
   if (body.bookingUrl) DEMO_DATA.bookingUrl = body.bookingUrl;

@@ -10,13 +10,35 @@
 .agents-grid{display:grid;grid-template-columns:1fr;gap:24px;max-width:680px;margin:0 auto}
 .agent-card{background:var(--white);border:1px solid var(--border);border-radius:16px;padding:40px 32px;text-align:center;transition:box-shadow 0.2s}
 .agent-card:hover{box-shadow:0 4px 24px rgba(0,0,0,0.06)}
-.agent-card-name{font-family:var(--serif);font-size:28px;font-weight:400;margin-bottom:8px}
+.agent-card-name{font-family:var(--serif);font-size:28px;font-weight:400;margin-bottom:8px;display:flex;align-items:center;justify-content:center;gap:10px}
+.agent-card-name .rename-btn{background:none;border:none;cursor:pointer;color:var(--muted);font-size:14px;padding:4px;opacity:0;transition:opacity 0.15s}
+.agent-card:hover .rename-btn{opacity:1}
+.agent-card-name .rename-btn:hover{color:var(--black)}
 .agent-card-stats{display:flex;justify-content:center;gap:32px;margin:20px 0 28px}
 .agent-card-stat-val{font-family:var(--serif);font-size:24px;font-weight:300}
 .agent-card-stat-label{font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);margin-top:2px}
 .agent-card-actions{display:flex;justify-content:center;gap:12px;flex-wrap:wrap}
 .agent-card-actions .btn{font-size:13px;padding:10px 24px}
 .agent-card-actions .btn-outline{font-size:13px;padding:10px 24px}
+
+/* Create / empty state */
+.create-agent-card{background:var(--white);border:2px dashed var(--border);border-radius:16px;padding:48px 32px;text-align:center;max-width:680px;margin:0 auto}
+.create-agent-card h2{font-family:var(--serif);font-size:26px;font-weight:400;margin-bottom:8px}
+.create-agent-card p{font-size:14px;color:var(--muted);margin-bottom:28px;line-height:1.7}
+.create-agent-card .field-group{max-width:380px;margin:0 auto 20px}
+.create-agent-card .field-group label{display:block;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted);margin-bottom:8px;text-align:left}
+.create-agent-card .field-group input{width:100%;padding:12px 16px;border:1px solid var(--border);border-radius:8px;font-size:15px;font-family:var(--sans);outline:none;text-align:center;transition:border-color 0.2s}
+.create-agent-card .field-group input:focus{border-color:var(--black)}
+.create-agent-card .field-group input::placeholder{color:#bbb}
+
+/* Inline rename */
+.rename-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.3);z-index:100;align-items:center;justify-content:center}
+.rename-overlay.open{display:flex}
+.rename-modal{background:var(--white);border-radius:16px;padding:32px;width:100%;max-width:420px;text-align:center}
+.rename-modal h3{font-family:var(--serif);font-size:22px;font-weight:400;margin-bottom:16px}
+.rename-modal input{width:100%;padding:12px 16px;border:1px solid var(--border);border-radius:8px;font-size:15px;font-family:var(--sans);outline:none;text-align:center;margin-bottom:20px}
+.rename-modal input:focus{border-color:var(--black)}
+.rename-modal .btn-row{display:flex;gap:12px;justify-content:center}
 </style>
 </head>
 <body>
@@ -103,6 +125,18 @@
 <!-- FOOTER -->
 <div class="footer">&copy; 2026 October AI &middot; hello@october-ai.com &middot; <a href="/legal" style="color:inherit;text-decoration:underline" target="_blank">Legal</a></div>
 
+<!-- Rename modal -->
+<div class="rename-overlay" id="renameOverlay">
+  <div class="rename-modal">
+    <h3>Rename agent</h3>
+    <input type="text" id="renameInput" placeholder="Agent name">
+    <div class="btn-row">
+      <button class="btn" onclick="saveRename()">Save</button>
+      <button class="btn-outline" onclick="closeRename()">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script src="/client/js/client.js"></script>
@@ -110,9 +144,12 @@
 (function() {
   initCommon();
 
+  var currentData = null;
+
   getClientData().then(function(data) {
     if (!data) { document.getElementById('loadingState').innerHTML = '<div class="error-state"><h2>Could not load portal</h2><p>Invalid or expired token.</p></div>'; return; }
 
+    currentData = data;
     document.getElementById('loadingState').style.display = 'none';
     document.getElementById('pageContent').style.display = 'block';
 
@@ -120,26 +157,58 @@
     renderAgentsGrid(data);
   });
 
+  function hasAgentName(data) {
+    return data.agentName && data.agentName.trim().length > 0;
+  }
+
   function renderAgentsGrid(data) {
     var grid = document.getElementById('agentsGrid');
-    var tenants = ALL_TENANTS.length > 0 ? ALL_TENANTS : [];
     var a = data.analytics || {};
 
-    if (tenants.length === 0) {
-      grid.innerHTML = '<div style="text-align:center;padding:60px 0"><p style="font-size:16px;color:var(--muted)">No agents configured yet.</p><a href="' + BASE + '/build" class="btn" style="margin-top:24px">Build your first agent</a></div>';
+    /* If no agent name is set yet, show create form */
+    if (!hasAgentName(data)) {
+      grid.innerHTML = '<div class="create-agent-card">'
+        + '<h2>Create your agent</h2>'
+        + '<p>Give your agent a name to get started. This is what visitors will see when they interact with your AI agent.</p>'
+        + '<div class="field-group">'
+        + '<label>Agent name</label>'
+        + '<input type="text" id="createAgentName" placeholder="e.g. Harbour View Hotel">'
+        + '</div>'
+        + '<button class="btn" onclick="createAgent()">Save agent</button>'
+        + '</div>';
+
+      /* Focus the input */
+      setTimeout(function() {
+        var inp = document.getElementById('createAgentName');
+        if (inp) inp.focus();
+      }, 100);
+
+      /* Enter to save */
+      setTimeout(function() {
+        var inp = document.getElementById('createAgentName');
+        if (inp) inp.addEventListener('keydown', function(e) {
+          if (e.key === 'Enter') createAgent();
+        });
+      }, 100);
       return;
     }
 
+    /* Agent exists — show card(s) */
+    var tenants = ALL_TENANTS.length > 0 ? ALL_TENANTS : [];
     var html = '';
+
     tenants.forEach(function(tenant, idx) {
       var isActive = ACTIVE_TENANT && tenant.id === ACTIVE_TENANT.id;
-      var name = tenant.name || 'Agent ' + (idx + 1);
+      var name = data.agentName || tenant.name || 'Agent ' + (idx + 1);
       var convos = isActive ? (a.conversations30d || 0) : 0;
       var conversions = isActive ? (a.bookings30d || 0) : 0;
       var rate = isActive ? ((a.conversionRate || 0) + '%') : '0%';
 
       html += '<div class="agent-card">'
-        + '<h2 class="agent-card-name">' + esc(name) + '</h2>'
+        + '<h2 class="agent-card-name">'
+        + '<span>' + esc(name) + '</span>'
+        + '<button class="rename-btn" onclick="openRename()" title="Rename agent">&#9998;</button>'
+        + '</h2>'
         + '<div style="display:flex;justify-content:center"><span class="status-badge active"><span class="status-dot"></span>Active</span></div>'
         + '<div class="agent-card-stats">'
         + '<div><div class="agent-card-stat-val">' + convos + '</div><div class="agent-card-stat-label">Conversations</div></div>'
@@ -156,6 +225,64 @@
 
     grid.innerHTML = html;
   }
+
+  /* ── Create agent (first time) ── */
+  window.createAgent = async function() {
+    var name = document.getElementById('createAgentName').value.trim();
+    if (!name) { showToast('Enter a name for your agent', true); return; }
+    try {
+      await updateTenant({ agentName: name, propertyName: name });
+      currentData.agentName = name;
+      currentData.propertyName = name;
+      /* Update tenants list locally */
+      if (ALL_TENANTS.length > 0) ALL_TENANTS[0].name = name;
+      renderAgentSwitcher();
+      renderAgentsGrid(currentData);
+      showToast('Agent created');
+    } catch(e) {
+      showToast('Error saving agent', true);
+    }
+  };
+
+  /* ── Rename agent ── */
+  window.openRename = function() {
+    var inp = document.getElementById('renameInput');
+    inp.value = currentData.agentName || '';
+    document.getElementById('renameOverlay').classList.add('open');
+    setTimeout(function() { inp.focus(); inp.select(); }, 100);
+  };
+
+  window.closeRename = function() {
+    document.getElementById('renameOverlay').classList.remove('open');
+  };
+
+  window.saveRename = async function() {
+    var name = document.getElementById('renameInput').value.trim();
+    if (!name) { showToast('Enter a name', true); return; }
+    try {
+      await updateTenant({ agentName: name, propertyName: name });
+      currentData.agentName = name;
+      currentData.propertyName = name;
+      if (ALL_TENANTS.length > 0) ALL_TENANTS[0].name = name;
+      closeRename();
+      renderAgentSwitcher();
+      renderAgentsGrid(currentData);
+      showToast('Agent renamed');
+    } catch(e) {
+      showToast('Error renaming agent', true);
+    }
+  };
+
+  /* Enter to save in rename modal */
+  document.getElementById('renameInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') saveRename();
+    if (e.key === 'Escape') closeRename();
+  });
+
+  /* Close rename on overlay click */
+  document.getElementById('renameOverlay').addEventListener('click', function(e) {
+    if (e.target === this) closeRename();
+  });
 
   window.openAgentById = function(tid) {
     window.open(SERVER + '/tour/' + tid, '_blank');
