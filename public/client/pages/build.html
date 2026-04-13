@@ -43,6 +43,7 @@
     <div class="nav-dropdown">
       <a data-href="{BASE}/build#vertical">Choose vertical</a>
       <a data-href="{BASE}/build#spaces">Map your spaces</a>
+      <a data-href="{BASE}/build#floorplan">Floor plan</a>
       <a data-href="{BASE}/build#data">Add your data</a>
       <a data-href="{BASE}/build#conversion">Conversion URL</a>
       <a data-href="{BASE}/build#embed">Embed code</a>
@@ -239,6 +240,33 @@
 
   <hr class="divider">
 
+  <!-- FLOOR PLAN -->
+  <div id="floorplan">
+    <div class="section-label">FLOOR PLAN
+      <span class="help-tip">?<span class="help-bubble">Upload a floor plan image (PNG, JPG, or WEBP) so your agent can show visitors the layout of your space when they ask for an overview. This will be displayed as a visual overlay during tours.</span></span>
+    </div>
+    <h2 class="section-heading">Upload a floor plan.</h2>
+    <p class="section-sub">Add a visual floor plan so your agent can show visitors the layout when they ask.</p>
+
+    <!-- Preview (shown when image exists) -->
+    <div id="floorplanPreview" style="display:none;margin-bottom:24px;text-align:center">
+      <img id="floorplanImage" style="max-width:100%;max-height:400px;border-radius:12px;border:0.5px solid var(--border);background:#fff" alt="Floor plan">
+      <div style="margin-top:12px">
+        <button class="btn-outline" style="font-size:12px" onclick="clearFloorplan()">Remove floor plan</button>
+      </div>
+    </div>
+
+    <!-- Dropzone (hidden when image exists) -->
+    <div class="dropzone" id="floorplanDropzone" onclick="document.getElementById('floorplanFileInput').click()">
+      <div class="drop-title">Drag a floor plan image here or click to browse</div>
+      <div class="drop-sub">PNG, JPG, or WEBP &mdash; max 5 MB</div>
+      <input type="file" id="floorplanFileInput" accept="image/png,image/jpeg,image/webp" style="display:none">
+    </div>
+    <div class="file-result" id="floorplanResult"></div>
+  </div>
+
+  <hr class="divider">
+
   <!-- DATA -->
   <div id="data">
     <div class="section-label">YOUR AGENT'S DATA
@@ -376,6 +404,10 @@
     fetchTenantId().then(function(tid) {
       if (tid) document.getElementById('embedCode').textContent = generateEmbedCode(tid);
     });
+
+    /* Floor plan */
+    renderFloorplan(data);
+    setupDropzone('floorplanDropzone', 'floorplanFileInput', handleFloorplanUpload);
 
     /* Setup dropzones */
     setupDropzone('dataDropzone', 'dataFileInput', handleFileUpload);
@@ -551,6 +583,82 @@
   window.openSpaceMapper = function() {
     var tid = CACHED_TENANT_ID || '';
     window.open('/rooms?tenant=' + tid + '&from=client', '_blank');
+  };
+
+  /* ── Floor Plan ── */
+  function renderFloorplan(data) {
+    var preview = document.getElementById('floorplanPreview');
+    var dropzone = document.getElementById('floorplanDropzone');
+    var img = document.getElementById('floorplanImage');
+    if (!preview || !dropzone) return;
+    if (data.floorplanImage) {
+      img.src = data.floorplanImage;
+      preview.style.display = 'block';
+      dropzone.style.display = 'none';
+    } else {
+      preview.style.display = 'none';
+      dropzone.style.display = '';
+    }
+  }
+
+  function handleFloorplanUpload(file) {
+    if (!/^image\/(png|jpeg|webp)$/.test(file.type)) {
+      showToast('Only PNG, JPG, or WEBP images are allowed', true);
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      showToast('Image must be under 5 MB', true);
+      return;
+    }
+    var result = document.getElementById('floorplanResult');
+    result.className = 'file-result';
+    result.style.display = 'block';
+    result.innerHTML = '<span class="spinner"></span> Uploading ' + esc(file.name) + '...';
+
+    var reader = new FileReader();
+    reader.onload = async function(e) {
+      var dataUrl = e.target.result || '';
+      try {
+        var d = await updateTenant({ floorplanImage: dataUrl });
+        if (d.ok) {
+          result.className = 'file-result success';
+          result.textContent = file.name + ' uploaded';
+          setTimeout(function() { result.style.display = 'none'; }, 2000);
+          /* Show preview */
+          document.getElementById('floorplanImage').src = dataUrl;
+          document.getElementById('floorplanPreview').style.display = 'block';
+          document.getElementById('floorplanDropzone').style.display = 'none';
+          showToast('Floor plan uploaded');
+        } else {
+          result.className = 'file-result error';
+          result.textContent = 'Error: ' + (d.error || 'unknown');
+        }
+      } catch(err) {
+        result.className = 'file-result error';
+        result.textContent = 'Network error';
+      }
+    };
+    reader.onerror = function() {
+      result.className = 'file-result error';
+      result.textContent = 'Could not read image';
+    };
+    reader.readAsDataURL(file);
+  }
+
+  window.clearFloorplan = async function() {
+    try {
+      var d = await updateTenant({ floorplanImage: '' });
+      if (d.ok) {
+        document.getElementById('floorplanPreview').style.display = 'none';
+        document.getElementById('floorplanDropzone').style.display = '';
+        document.getElementById('floorplanImage').src = '';
+        showToast('Floor plan removed');
+      } else {
+        showToast('Error removing floor plan', true);
+      }
+    } catch(e) {
+      showToast('Network error', true);
+    }
   };
 
   /* ── Data ── */

@@ -588,6 +588,7 @@ const DEMO_DATA = {
     status: 'active',
     nextBillingDate: '2026-05-01T00:00:00Z'
   },
+  floorplanImage: '',
   scrapeStatus: null,
   scrapeMessage: null
 };
@@ -664,6 +665,7 @@ app.post('/client/demo/update', express.json(), (req, res) => {
   if (body.property_data !== undefined) DEMO_DATA.property_data = body.property_data;
   if (body.website) DEMO_DATA.website = body.website;
   if (body.matterportUrl) DEMO_DATA.matterportUrl = body.matterportUrl;
+  if (body.floorplanImage !== undefined) DEMO_DATA.floorplanImage = body.floorplanImage;
   res.json({ ok: true });
 });
 
