@@ -42,6 +42,9 @@ function navigateTo(page) {
   document.querySelectorAll('.sidebar-link').forEach(function(l) { l.classList.remove('active'); });
   var activeLink = document.querySelector('[data-page="' + page + '"]');
   if (activeLink) activeLink.classList.add('active');
+  // Show/hide sidebar dropdowns
+  var thSub = document.getElementById('testHistorySub');
+  if (thSub) thSub.style.display = page === 'test-history' ? 'block' : 'none';
   // Show page
   document.querySelectorAll('.page-container').forEach(function(p) { p.style.display = 'none'; });
   var container = document.getElementById('page-' + page);
@@ -52,6 +55,8 @@ function navigateTo(page) {
   if (REFRESH_INTERVAL) clearInterval(REFRESH_INTERVAL);
   if (page === 'overview') REFRESH_INTERVAL = setInterval(function() { loadPage('overview'); }, 60000);
   if (page === 'health') REFRESH_INTERVAL = setInterval(function() { loadPage('health'); }, 30000);
+  // Handle hash-based navigation
+  if (page !== 'overview') window.location.hash = page;
 }
 
 /* ── Page loader ── */
@@ -70,6 +75,7 @@ function loadPage(page) {
     case 'prompts': loadPrompts(); break;
     case 'configurations': loadConfigurations(); break;
     case 'test-history': loadTestHistory(); break;
+    case 'test-protocol': loadTestProtocol(); break;
     case 'client-portal': window.open('/client/demo/agent', '_blank'); break;
   }
 }
@@ -3716,87 +3722,511 @@ function exportConfig(id) {
 /* ═══════════════════════════════════════════════
    TEST HISTORY
    ═══════════════════════════════════════════════ */
+var testHistoryFilter = 'all';
+var testHistoryData = [];
+var currentTestSession = null;
+var lastFixReport = '';
+
+var SCORE_LABELS = {
+  one_question: 'One question at a time',
+  reacts_to_guest: 'Reacts to guest input',
+  navigation: 'Navigation quality',
+  natural_tone: 'Natural tone',
+  qualifying: 'Qualifying quality',
+  conversion_focus: 'Conversion focus',
+  response_quality: 'Response quality',
+  response_time: 'Response time',
+  opening_quality: 'Opening quality',
+  overall_impression: 'Overall impression'
+};
+
+var TAG_OPTIONS = ['Navigation','Tone','Dobbeltsvar','Latency','Conversion','Qualifying','Natural','Unnatural','Good session','Ready','Needs work'];
+
+function calcOverall(scores) {
+  var keys = Object.keys(scores || {});
+  if (keys.length === 0) return 0;
+  var sum = 0;
+  keys.forEach(function(k) { sum += ((scores[k] && scores[k].score) || 0); });
+  return sum / keys.length;
+}
+
+function scoreColor(score) { return score <= 5 ? '#dc2626' : score <= 7 ? '#d97706' : '#16a34a'; }
+
+function loadTestHistoryFilter(filter) {
+  testHistoryFilter = filter;
+  renderTestHistory();
+}
+
 function loadTestHistory() {
   var c = document.getElementById('page-test-history');
+  c.innerHTML = '<div class="page-label">AGENT BUILDER</div><h1 class="page-heading">Test History</h1><p class="page-sub">Loading...</p>';
 
-  api('/api/history').then(function(history) {
-    var html = '<div class="page-label">AGENT BUILDER</div>'
-      + '<h1 class="page-heading">Test History</h1>'
-      + '<p class="page-sub">Review past test sessions and their results.</p>'
-      + '<table class="data-table"><thead><tr>'
-      + '<th>Date</th><th>Vertical</th><th>Duration</th><th>Messages</th><th>Rating</th><th>Notes</th>'
-      + '</tr></thead><tbody>';
-
-    if (history.length === 0) {
-      html += '<tr><td colspan="6" style="text-align:center;color:var(--muted)">No test sessions yet. Use the sandbox to create one.</td></tr>';
-    }
-
-    history.forEach(function(h) {
-      html += '<tr onclick="showTestDetail(\'' + h.id + '\')">'
-        + '<td>' + fmtDate(h.created) + '</td>'
-        + '<td>' + esc(h.vertical) + '</td>'
-        + '<td>' + fmtDuration(h.duration) + '</td>'
-        + '<td>' + (h.messages ? h.messages.length : 0) + '</td>'
-        + '<td>' + (h.rating ? h.rating + '/5' : '-') + '</td>'
-        + '<td>' + esc(h.notes ? h.notes.substring(0, 40) + (h.notes.length > 40 ? '...' : '') : '-') + '</td>'
-        + '</tr>';
-    });
-
-    html += '</tbody></table>';
-    html += '<div class="detail-overlay" id="testDetail"><button class="detail-close" onclick="closeDetail(\'testDetail\')">&times;</button><div id="testDetailContent"></div></div>';
-    c.innerHTML = html;
+  api('/api/test-sessions').then(function(data) {
+    testHistoryData = data || [];
+    renderTestHistory();
+  }).catch(function(e) {
+    c.innerHTML = '<div class="page-label">AGENT BUILDER</div><h1 class="page-heading">Test History</h1><p class="page-sub" style="color:#dc2626">Failed to load: ' + esc(e.message) + '</p>';
   });
 }
 
-function showTestDetail(id) {
-  api('/api/history/' + id).then(function(h) {
+function getFilteredSessions() {
+  if (testHistoryFilter === 'all') return testHistoryData;
+  if (testHistoryFilter === 'flagged') return testHistoryData.filter(function(s) { return s.status === 'flagged'; });
+  if (testHistoryFilter === 'approved') return testHistoryData.filter(function(s) { return s.status === 'approved'; });
+  return testHistoryData.filter(function(s) { return s.vertical === testHistoryFilter; });
+}
+
+function renderTestHistory() {
+  var c = document.getElementById('page-test-history');
+  var filtered = getFilteredSessions();
+
+  // Filter pills
+  var filters = ['all','hotel','education','retail','real_estate_sale','real_estate_development','flagged','approved'];
+  var filterLabels = { all:'All', hotel:'Hotel', education:'Education', retail:'Retail', real_estate_sale:'Real Estate Sale', real_estate_development:'Real Estate Dev', flagged:'Flagged', approved:'Approved' };
+  var pillsHtml = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">';
+  filters.forEach(function(f) {
+    var active = f === testHistoryFilter ? 'background:var(--black);color:var(--white);' : '';
+    pillsHtml += '<button class="btn btn-outline btn-sm" style="' + active + '" onclick="loadTestHistoryFilter(\'' + f + '\')">' + filterLabels[f] + '</button>';
+  });
+  pillsHtml += '</div>';
+
+  // Stats
+  var scored = filtered.filter(function(s) { return s.gpt_scores && Object.keys(s.gpt_scores).length > 0; });
+  var avgScore = 0;
+  if (scored.length > 0) {
+    var total = 0;
+    scored.forEach(function(s) { total += calcOverall(s.gpt_scores); });
+    avgScore = (total / scored.length).toFixed(1);
+  }
+  var readyCount = filtered.filter(function(s) { return s.gpt_ready_for_customers === true; }).length;
+  var evalCount = filtered.filter(function(s) { return s.gpt_ready_for_customers !== null && s.gpt_ready_for_customers !== undefined; }).length;
+
+  var statsHtml = '<div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:20px;padding:12px 16px;background:var(--cream);border-radius:10px;font-size:13px;color:var(--muted)">'
+    + '<span>Sessions: <strong style="color:var(--black)">' + filtered.length + '</strong></span>'
+    + '<span>Avg score: <strong style="color:var(--black)">' + (scored.length > 0 ? avgScore + '/10' : '\u2014') + '</strong></span>'
+    + '<span>Ready: <strong style="color:var(--black)">' + readyCount + '/' + evalCount + '</strong></span>'
+    + '</div>';
+
+  // Table
+  var tableHtml = '<table class="data-table"><thead><tr>'
+    + '<th>Date</th><th>Vertical</th><th>Score</th><th>Ready</th><th>Biggest Problem</th><th>Rating</th><th>Tags</th>'
+    + '</tr></thead><tbody>';
+
+  if (filtered.length === 0) {
+    tableHtml += '<tr><td colspan="7" style="text-align:center;color:var(--muted)">No test sessions found. Run a test with ?test=true on an agent tour.</td></tr>';
+  }
+
+  filtered.forEach(function(s) {
+    var scores = s.gpt_scores || {};
+    var overall = calcOverall(scores);
+    var color = scoreColor(overall);
+    var readyBadge = s.gpt_ready_for_customers === true
+      ? '<span style="background:rgba(22,163,74,0.12);color:#16a34a;padding:2px 8px;border-radius:980px;font-size:11px;font-weight:600">Ready \u2713</span>'
+      : s.gpt_ready_for_customers === false
+        ? '<span style="background:rgba(220,38,38,0.12);color:#dc2626;padding:2px 8px;border-radius:980px;font-size:11px;font-weight:600">Not ready \u2717</span>'
+        : '<span style="color:var(--muted);font-size:11px">\u2014</span>';
+    var tags = (s.manual_tags || []).map(function(t) { return '<span style="font-size:10px;padding:1px 6px;border-radius:980px;background:var(--cream);border:1px solid var(--border);color:var(--muted);margin:0 2px">' + esc(t) + '</span>'; }).join('');
+    var stars = s.manual_rating ? '\u2605'.repeat(s.manual_rating) + '\u2606'.repeat(5 - s.manual_rating) : '\u2014';
+    var date = s.created_at ? new Date(s.created_at).toLocaleDateString('da-DK', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' }) : '\u2014';
+
+    tableHtml += '<tr onclick="showTestSessionDetail(\'' + s.id + '\')" style="cursor:pointer">'
+      + '<td>' + date + '</td>'
+      + '<td>' + esc(s.vertical || '\u2014') + '</td>'
+      + '<td><span style="background:' + color + '22;color:' + color + ';padding:2px 10px;border-radius:980px;font-weight:600;font-size:12px">' + overall.toFixed(1) + '</span></td>'
+      + '<td>' + readyBadge + '</td>'
+      + '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(s.gpt_biggest_problem || '\u2014') + '</td>'
+      + '<td style="color:#8B6F4E;letter-spacing:2px">' + stars + '</td>'
+      + '<td>' + tags + '</td>'
+      + '</tr>';
+  });
+  tableHtml += '</tbody></table>';
+
+  c.innerHTML = '<div class="page-label">AGENT BUILDER</div>'
+    + '<h1 class="page-heading">Test History</h1>'
+    + '<p class="page-sub">Evaluate and compare test sessions with GPT scoring.</p>'
+    + pillsHtml + statsHtml + tableHtml
+    + '<div class="detail-overlay" id="testDetail"><button class="detail-close" onclick="closeDetail(\'testDetail\')">&times;</button><div id="testDetailContent" style="max-height:85vh;overflow-y:auto"></div></div>';
+}
+
+function showTestSessionDetail(id) {
+  api('/api/test-sessions/' + id).then(function(s) {
+    currentTestSession = s;
+    var scores = s.gpt_scores || {};
+    var overall = calcOverall(scores);
+    var date = s.created_at ? new Date(s.created_at).toLocaleDateString('da-DK', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '\u2014';
+
     var html = '<div class="detail-title">Test Session</div>'
-      + '<div class="detail-subtitle">' + fmtDate(h.created) + ' &middot; ' + esc(h.vertical) + '</div>'
-      + '<div class="detail-section"><h4>Details</h4>'
-      + detailRow('Duration', fmtDuration(h.duration))
-      + detailRow('Messages', h.messages ? h.messages.length : 0)
-      + detailRow('Rating', h.rating ? h.rating + '/5' : 'Not rated')
+      + '<div class="detail-subtitle">' + date + ' &middot; ' + esc(s.vertical || '?') + '</div>';
+
+    // Header meta
+    html += '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px;font-size:13px;color:var(--muted)">'
+      + '<span>Model: <strong style="color:var(--black)">' + esc(s.model || '?') + '</strong></span>'
+      + '<span>Temp: <strong style="color:var(--black)">' + (s.temperature || '?') + '</strong></span>'
+      + '<span>Duration: <strong style="color:var(--black)">' + (s.duration_seconds || 0) + 's</strong></span>'
+      + '<span>Messages: <strong style="color:var(--black)">' + (s.message_count || 0) + '</strong></span>'
       + '</div>';
 
-    if (h.messages && h.messages.length > 0) {
+    // Scores
+    if (Object.keys(scores).length > 0) {
+      html += '<div class="detail-section"><h4>GPT Scores \u2014 Overall: ' + overall.toFixed(1) + '/10</h4>';
+      var scoreOrder = ['one_question','reacts_to_guest','navigation','natural_tone','qualifying','conversion_focus','response_quality','response_time','opening_quality','overall_impression'];
+      scoreOrder.forEach(function(key) {
+        var sc = scores[key];
+        if (!sc) return;
+        var pct = (sc.score / 10) * 100;
+        var color = scoreColor(sc.score);
+        html += '<div style="margin-bottom:10px">'
+          + '<div style="display:flex;justify-content:space-between;font-size:12px;font-weight:500;margin-bottom:3px"><span>' + (SCORE_LABELS[key] || key) + '</span><span style="font-weight:600">' + sc.score + '/10</span></div>'
+          + '<div style="height:8px;background:var(--cream);border-radius:8px;overflow:hidden"><div style="height:100%;width:' + pct + '%;background:' + color + ';border-radius:8px"></div></div>';
+        if (sc.explanation) html += '<div style="font-size:11px;color:var(--muted);font-style:italic;margin-top:2px">' + esc(sc.explanation) + '</div>';
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+
+    // Ready box
+    if (s.gpt_ready_for_customers !== null && s.gpt_ready_for_customers !== undefined) {
+      var readyColor = s.gpt_ready_for_customers ? '#16a34a' : '#dc2626';
+      var readyBg = s.gpt_ready_for_customers ? 'rgba(22,163,74,0.08)' : 'rgba(220,38,38,0.08)';
+      var readyIcon = s.gpt_ready_for_customers ? '\u2713 READY FOR CUSTOMERS' : '\u2717 NOT READY';
+      html += '<div style="padding:14px 18px;border-radius:10px;background:' + readyBg + ';border:1.5px solid ' + readyColor + '33;color:' + readyColor + ';font-weight:600;font-size:14px;margin-bottom:16px">' + readyIcon;
+      if (s.gpt_ready_explanation) html += '<div style="font-weight:400;font-size:12px;margin-top:4px;opacity:0.8">' + esc(s.gpt_ready_explanation) + '</div>';
+      html += '</div>';
+    }
+
+    // GPT Flags
+    var flags = s.gpt_flags || [];
+    if (flags.length > 0) {
+      html += '<div class="detail-section"><h4>GPT Flags</h4>';
+      flags.forEach(function(f) {
+        var icon = f.severity === 'critical' ? '\uD83D\uDD34' : f.severity === 'major' ? '\uD83D\uDFE1' : '\u26AA';
+        html += '<div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--border)">' + icon + ' ' + (f.severity || 'minor').toUpperCase() + ': ' + esc(f.issue || '') + '</div>';
+      });
+      html += '</div>';
+    }
+
+    // Automatic warnings from latency_log
+    var latencyLog = s.latency_log || [];
+    var allWarnings = [];
+    latencyLog.forEach(function(turn) {
+      if (turn.warnings && turn.warnings.length > 0) {
+        turn.warnings.forEach(function(w) { allWarnings.push(w); });
+      }
+    });
+    if (allWarnings.length > 0) {
+      html += '<div class="detail-section"><h4>Automatic Warnings</h4>';
+      allWarnings.forEach(function(w) {
+        html += '<div style="font-size:12px;padding:3px 0;color:#d97706">\u26A0 ' + esc(w.type || '') + ' \u2014 ' + esc(w.detail || w.message || '') + '</div>';
+      });
+      html += '</div>';
+    }
+
+    // GPT Summary
+    if (s.gpt_summary) {
+      html += '<div class="detail-section"><h4>GPT Summary</h4><div style="font-size:13px;line-height:1.6;background:var(--cream);padding:12px 16px;border-radius:10px">' + esc(s.gpt_summary) + '</div></div>';
+    }
+
+    // Biggest problem
+    if (s.gpt_biggest_problem) {
+      html += '<div style="background:rgba(217,119,6,0.08);border:1.5px solid rgba(217,119,6,0.25);border-radius:10px;padding:14px 18px;margin-bottom:16px">'
+        + '<div style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:#d97706;font-weight:600;margin-bottom:4px">Biggest Problem</div>'
+        + '<div style="font-size:14px;color:var(--black);line-height:1.5">' + esc(s.gpt_biggest_problem) + '</div></div>';
+    }
+
+    // Transcript
+    var transcript = s.transcript || [];
+    if (transcript.length > 0) {
       html += '<div class="detail-section"><h4>Transcript</h4><div class="transcript-panel">';
-      h.messages.forEach(function(m) {
-        html += '<div class="transcript-msg"><span class="role ' + (m.role || 'user') + '">[' + (m.role || 'user') + ']</span>' + esc(m.content || m.text || '') + '</div>';
+      transcript.forEach(function(msg, idx) {
+        var role = msg.role || 'user';
+        html += '<div class="transcript-msg"><span class="role ' + role + '">[' + role + ']</span>' + esc(msg.text || msg.content || '');
+        var turnData = latencyLog[idx] || {};
+        var totalMs = turnData.total_ms || (turnData.latency && turnData.latency.total_ms) || 0;
+        var sttMs = turnData.stt_ms || (turnData.latency && turnData.latency.stt_ms) || 0;
+        if (totalMs) html += '<div style="font-size:10px;color:var(--muted);margin-top:2px">STT: ' + sttMs + 'ms | Total: ' + totalMs + 'ms</div>';
+        if (turnData.warnings && turnData.warnings.length > 0) {
+          turnData.warnings.forEach(function(w) {
+            html += '<div style="font-size:10px;color:#d97706;margin-top:1px">\u26A0 ' + esc(w.type) + ': ' + esc(w.detail || w.message || '') + '</div>';
+          });
+        }
+        html += '</div>';
       });
       html += '</div></div>';
     }
 
-    if (h.promptUsed) {
-      html += '<div class="detail-section"><h4>System Prompt Used</h4><pre style="font-size:11px;background:var(--cream);padding:12px;border-radius:8px;white-space:pre-wrap;max-height:200px;overflow-y:auto">' + esc(h.promptUsed) + '</pre></div>';
+    // Latency chart
+    if (latencyLog.length > 0) {
+      html += '<div class="detail-section"><h4>Latency per Turn</h4>';
+      var maxMs = 0;
+      latencyLog.forEach(function(t) {
+        var ms = t.total_ms || (t.latency && t.latency.total_ms) || 0;
+        if (ms > maxMs) maxMs = ms;
+      });
+      var chartMax = Math.max(maxMs, 4000);
+      var redPct = (3000 / chartMax) * 100;
+      html += '<div style="display:flex;align-items:flex-end;gap:3px;height:100px;position:relative;margin-bottom:8px">';
+      latencyLog.forEach(function(t, i) {
+        var ms = t.total_ms || (t.latency && t.latency.total_ms) || 0;
+        var h = (ms / chartMax) * 100;
+        var color = ms > 3000 ? '#dc2626' : ms > 2000 ? '#d97706' : '#16a34a';
+        html += '<div style="flex:1;min-width:8px;height:' + h + '%;background:' + color + ';border-radius:3px 3px 0 0" title="Turn ' + (i+1) + ': ' + ms + 'ms"></div>';
+      });
+      html += '<div style="position:absolute;bottom:' + redPct + '%;left:0;right:0;border-top:2px dashed #dc2626"><span style="position:absolute;right:0;top:-14px;font-size:9px;color:#dc2626">3000ms</span></div>';
+      html += '</div></div>';
     }
 
-    // Rating form
-    html += '<div class="detail-section"><h4>Rate This Session</h4>'
-      + '<div style="display:flex;gap:8px;margin-bottom:12px">';
+    // Manual note
+    html += '<div class="detail-section"><h4>YOUR NOTES</h4>'
+      + '<textarea class="form-textarea" id="testSessionNote" rows="3" placeholder="What did you notice that GPT couldn\'t?\nTone, pauses, unnatural moments..." onblur="saveTestSessionNote()">' + esc(s.manual_note || '') + '</textarea></div>';
+
+    // Star rating
+    html += '<div class="detail-section"><h4>YOUR RATING</h4><div style="display:flex;gap:4px">';
+    var rating = s.manual_rating || 0;
     for (var i = 1; i <= 5; i++) {
-      html += '<button class="btn btn-outline btn-sm" onclick="rateTest(\'' + h.id + '\',' + i + ')" style="' + (h.rating === i ? 'background:var(--black);color:var(--white)' : '') + '">' + i + '</button>';
+      var filled = i <= rating ? 'color:#8B6F4E' : 'color:var(--border)';
+      html += '<span style="font-size:24px;cursor:pointer;' + filled + '" onclick="rateTestSession(\'' + s.id + '\',' + i + ')">\u2605</span>';
     }
-    html += '</div>'
-      + '<textarea class="form-textarea" id="testNotes" rows="3" placeholder="Add notes...">' + esc(h.notes || '') + '</textarea>'
-      + '<button class="btn btn-dark btn-sm" onclick="saveTestNotes(\'' + h.id + '\')" style="margin-top:8px">Save Notes</button></div>';
+    html += '</div></div>';
+
+    // Tags
+    html += '<div class="detail-section"><h4>TAGS</h4><div style="display:flex;flex-wrap:wrap;gap:6px">';
+    var activeTags = s.manual_tags || [];
+    TAG_OPTIONS.forEach(function(tag) {
+      var isActive = activeTags.indexOf(tag) >= 0;
+      var style = isActive ? 'background:var(--black);color:var(--white);border-color:var(--black)' : '';
+      html += '<button class="btn btn-outline btn-sm" style="font-size:11px;padding:3px 10px;' + style + '" onclick="toggleTestTag(\'' + s.id + '\',\'' + tag + '\')">' + tag + '</button>';
+    });
+    html += '</div></div>';
+
+    // Actions
+    html += '<div style="display:flex;gap:8px;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">';
+    html += '<button class="btn btn-dark btn-sm" style="background:#16a34a" onclick="setTestStatus(\'' + s.id + '\',\'approved\')">Mark as ready</button>';
+    html += '<button class="btn btn-dark btn-sm" style="background:#dc2626" onclick="setTestStatus(\'' + s.id + '\',\'flagged\')">Flag for fix</button>';
+    if (!scores || Object.keys(scores).length === 0) {
+      html += '<button class="btn btn-outline btn-sm" onclick="evaluateTestSession(\'' + s.id + '\')">Evaluate with GPT</button>';
+    }
+    html += '<button class="btn btn-outline btn-sm" style="color:var(--muted)" onclick="deleteTestSession(\'' + s.id + '\')">Delete</button>';
+    html += '</div>';
 
     document.getElementById('testDetailContent').innerHTML = html;
     document.getElementById('testDetail').classList.add('open');
   });
 }
 
-function rateTest(id, rating) {
-  api('/api/history/' + id, { method: 'PUT', body: JSON.stringify({ rating: rating }) }).then(function() {
+function evaluateTestSession(id) {
+  showToast('Evaluating with GPT...', 'info');
+  api('/api/test-sessions/evaluate', { method: 'POST', body: JSON.stringify({ sessionId: id }) }).then(function() {
+    showToast('Evaluation complete', 'success');
+    showTestSessionDetail(id);
+    loadTestHistory();
+  }).catch(function(e) { showToast('Evaluation failed: ' + e.message, 'error'); });
+}
+
+function saveTestSessionNote() {
+  if (!currentTestSession) return;
+  var note = document.getElementById('testSessionNote').value;
+  api('/api/test-sessions/' + currentTestSession.id + '/note', { method: 'PUT', body: JSON.stringify({ note: note }) }).then(function() {
+    showToast('Note saved', 'success');
+  });
+}
+
+function rateTestSession(id, rating) {
+  api('/api/test-sessions/' + id + '/note', { method: 'PUT', body: JSON.stringify({ rating: rating }) }).then(function() {
     showToast('Rating saved', 'success');
+    showTestSessionDetail(id);
     loadTestHistory();
   });
 }
 
-function saveTestNotes(id) {
-  var notes = document.getElementById('testNotes').value;
-  api('/api/history/' + id, { method: 'PUT', body: JSON.stringify({ notes: notes }) }).then(function() {
-    showToast('Notes saved', 'success');
+function toggleTestTag(id, tag) {
+  if (!currentTestSession) return;
+  var tags = currentTestSession.manual_tags || [];
+  var idx = tags.indexOf(tag);
+  if (idx >= 0) tags.splice(idx, 1); else tags.push(tag);
+  currentTestSession.manual_tags = tags;
+  api('/api/test-sessions/' + id + '/note', { method: 'PUT', body: JSON.stringify({ tags: tags }) }).then(function() {
+    showTestSessionDetail(id);
   });
+}
+
+function setTestStatus(id, status) {
+  api('/api/test-sessions/' + id + '/note', { method: 'PUT', body: JSON.stringify({ status: status }) }).then(function() {
+    showToast('Status updated', 'success');
+    closeDetail('testDetail');
+    loadTestHistory();
+  });
+}
+
+function deleteTestSession(id) {
+  if (!confirm('Delete this test session permanently?')) return;
+  api('/api/test-sessions/' + id, { method: 'DELETE' }).then(function() {
+    showToast('Session deleted', 'success');
+    closeDetail('testDetail');
+    loadTestHistory();
+  });
+}
+
+function generateFixReport() {
+  var vertical = prompt('Enter vertical (all, hotel, education, retail, real_estate_sale, real_estate_development):', 'all');
+  if (!vertical) return;
+  showToast('Generating fix report...', 'info');
+  api('/api/test-sessions/report', { method: 'POST', body: JSON.stringify({ vertical: vertical }) }).then(function(data) {
+    lastFixReport = data.report || '';
+    showModal('<h2 style="font-family:var(--serif);margin-bottom:16px">Fix Report</h2>'
+      + '<div style="white-space:pre-wrap;font-size:13px;line-height:1.7;max-height:60vh;overflow-y:auto">' + esc(lastFixReport) + '</div>'
+      + '<div style="display:flex;gap:8px;margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">'
+      + '<button class="btn btn-dark btn-sm" onclick="copyFixReport()">Copy report</button>'
+      + '<button class="btn btn-outline btn-sm" onclick="copyFixForClaude()">Send to Claude Code</button>'
+      + '</div>');
+  }).catch(function(e) { showToast('Report failed: ' + e.message, 'error'); });
+}
+
+function copyFixReport() {
+  navigator.clipboard.writeText(lastFixReport);
+  showToast('Report copied', 'success');
+}
+
+function copyFixForClaude() {
+  var formatted = 'OCTOBER AI \u2014 AGENT FIX REPORT\nGenerated: ' + new Date().toISOString().slice(0,10) + '\n\n'
+    + lastFixReport + '\n\nINSTRUCTIONS FOR CLAUDE CODE:\nRead this report and generate targeted fix prompts for each issue in priority order.\nStart with the biggest problem identified above.';
+  navigator.clipboard.writeText(formatted);
+  showToast('Copied for Claude Code', 'success');
+}
+
+/* ═══════════════════════════════════════════════
+   TEST PROTOCOL PAGE
+   ═══════════════════════════════════════════════ */
+function loadTestProtocol() {
+  var c = document.getElementById('page-test-protocol');
+  c.innerHTML = '<div class="page-label">AGENT BUILDER</div>'
+    + '<h1 class="page-heading">Test Protocol</h1>'
+    + '<p class="page-sub">Standardized test procedures for evaluating voice agents.</p>'
+
+    + '<div style="background:var(--cream);border-radius:10px;padding:16px 20px;margin-bottom:24px">'
+    + '<h3 style="font-family:var(--serif);font-size:18px;font-weight:400;margin:0 0 10px">How to run a test</h3>'
+    + '<ol style="font-size:13px;line-height:1.8;padding-left:20px;margin:0">'
+    + '<li>Open the tour with <code style="background:var(--white);padding:1px 6px;border-radius:4px;font-size:12px;border:1px solid var(--border)">?test=true</code> in the URL</li>'
+    + '<li>The red "TEST MODE" badge confirms test logging is active</li>'
+    + '<li>Follow the protocol for the relevant vertical below</li>'
+    + '<li>Click "End &amp; evaluate" button when done</li>'
+    + '<li>The session saves automatically and appears in Test History with GPT scores</li>'
+    + '</ol></div>'
+
+    // Protocol tabs
+    + '<div style="display:flex;gap:0;border:1.5px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:24px;flex-wrap:wrap">'
+    + '<button class="proto-tab active" onclick="showProto(\'standard\',this)">Standard</button>'
+    + '<button class="proto-tab" onclick="showProto(\'hotel\',this)">Hotel</button>'
+    + '<button class="proto-tab" onclick="showProto(\'education\',this)">Education</button>'
+    + '<button class="proto-tab" onclick="showProto(\'retail\',this)">Retail</button>'
+    + '<button class="proto-tab" onclick="showProto(\'real_estate_sale\',this)">Real Estate Sale</button>'
+    + '<button class="proto-tab" onclick="showProto(\'real_estate_development\',this)">Real Estate Dev</button>'
+    + '</div>'
+    + '<style>.proto-tab{padding:8px 16px;font-size:13px;border:none;background:var(--cream);color:var(--muted);cursor:pointer;transition:all 0.2s;font-weight:500;font-family:var(--sans)}.proto-tab.active{background:var(--black);color:var(--white)}.proto-tab:hover:not(.active){background:var(--border)}</style>'
+
+    // Standard
+    + '<div class="proto-section active" id="proto-standard">'
+    + testCard('Session Test', '10 times per vertical', 'Run a full conversation from greeting to conversion. Close and reopen. Verify state resets correctly.')
+    + testCard('Stress Test', '3 times', 'Speak quickly. Interrupt the agent mid-sentence. Speak again immediately. Reveals race conditions and double-response bugs.')
+    + testCard('Idle Test', '2 times', 'Open the agent and wait 10 minutes without speaking. Then speak. Reveals WebSocket degradation and silence follow-up quality.')
+    + testCard('Conversion Test', '5 times', 'Run the conversation targeted towards conversion. Verify booking URL opens correctly and trigger_conversion tool call works.')
+    + '<div style="background:var(--cream);border-radius:10px;padding:16px 20px"><h4 style="margin:0 0 8px;font-size:14px">General checks (all verticals)</h4>'
+    + protoCheck('Latency', 'Total turn time under 3 seconds')
+    + protoCheck('Language', 'Agent stays consistent with configured language')
+    + protoCheck('Tool leaks', 'No tool calls or JSON leaks into spoken responses')
+    + protoCheck('Repetition', 'Agent does not repeat itself')
+    + protoCheck('Silence follow-up', 'On silence, agent asks a natural follow-up question')
+    + protoCheck('State reset', 'New session starts with fresh greeting \u2014 no memory from before')
+    + '</div></div>'
+
+    // Hotel
+    + '<div class="proto-section" id="proto-hotel" style="display:none">'
+    + protoQuestions('Hotel', [
+      ['Greeting test', 'Say nothing \u2014 wait for the agent. Check greeting is warm, short and natural.'],
+      ['Factual knowledge', '"What time is check-in?"'],
+      ['Facilities', '"Do you have parking available?"'],
+      ['Qualifying + recommendation', '"I\'m traveling with two kids \u2014 what room would you recommend?"'],
+      ['Navigation', '"Show me what the suite looks like"'],
+      ['Restaurant/facilities', '"Is the restaurant open for dinner?"'],
+      ['Details', '"What\'s included in the breakfast?"'],
+      ['Conversion', '"I\'d like to book a room for this weekend"']
+    ]) + '</div>'
+
+    // Education
+    + '<div class="proto-section" id="proto-education" style="display:none">'
+    + protoQuestions('Education', [
+      ['Greeting', '"Hi, I\'m considering studying here"'],
+      ['Program overview', '"What programs do you offer?"'],
+      ['Specific program', '"I\'m interested in business \u2014 what courses are available?"'],
+      ['Practical info', '"Will my credits transfer back home?"'],
+      ['Navigation', '"Can you show me the campus facilities?"'],
+      ['Housing', '"What\'s student housing like?"'],
+      ['Conversion', '"How do I apply for next semester?"']
+    ]) + '</div>'
+
+    // Retail
+    + '<div class="proto-section" id="proto-retail" style="display:none">'
+    + protoQuestions('Retail', [
+      ['Greeting', '"I\'m looking for a sofa"'],
+      ['Specific preference', '"Do you have anything in grey?"'],
+      ['Price', '"What\'s the price range for sofas?"'],
+      ['Materials', '"What materials do you offer?"'],
+      ['Navigation', '"Show me your premium collection"'],
+      ['Delivery', '"What\'s the delivery time?"'],
+      ['Conversion', '"I want to order the grey leather one"']
+    ]) + '</div>'
+
+    // Real Estate Sale
+    + '<div class="proto-section" id="proto-real_estate_sale" style="display:none">'
+    + protoQuestions('Real Estate Sale', [
+      ['Greeting', '"I\'m looking for a home"'],
+      ['Size', '"What\'s the square footage?"'],
+      ['Room details', '"How big is the master bedroom?"'],
+      ['Area', '"What school district is this in?"'],
+      ['Navigation', '"Show me the living room"'],
+      ['Financials', '"What are the HOA fees?"'],
+      ['Conversion', '"I\'d like to schedule a viewing"']
+    ]) + '</div>'
+
+    // Real Estate Development
+    + '<div class="proto-section" id="proto-real_estate_development" style="display:none">'
+    + protoQuestions('Real Estate Development', [
+      ['Greeting', '"I\'m interested in this development"'],
+      ['Qualifying', '"Are you looking to live here or invest?"'],
+      ['Availability', '"What units are still available?"'],
+      ['Yield', '"What\'s the expected rental yield?"'],
+      ['Navigation', '"Show me a two-bedroom unit"'],
+      ['Timeline', '"When is the completion date?"'],
+      ['Financing', '"What financing options do you offer?"'],
+      ['Conversion', '"How do I reserve a unit?"']
+    ]) + '</div>';
+}
+
+function testCard(title, repeat, desc) {
+  return '<div style="background:var(--cream);border-radius:10px;padding:16px 20px;margin-bottom:12px">'
+    + '<h4 style="font-family:var(--serif);font-size:16px;font-weight:400;margin:0 0 4px">' + title + '</h4>'
+    + '<span style="display:inline-block;font-size:10px;font-weight:600;color:#8B6F4E;background:rgba(139,111,78,0.08);padding:2px 8px;border-radius:980px;margin-bottom:6px">' + repeat + '</span>'
+    + '<p style="font-size:13px;color:var(--muted);line-height:1.6;margin:0">' + desc + '</p></div>';
+}
+
+function protoCheck(label, text) {
+  return '<div style="font-size:13px;padding:6px 12px;border-left:3px solid var(--border);margin-bottom:4px;background:var(--white);border-radius:0 6px 6px 0">'
+    + '<span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;font-weight:600;display:block;margin-bottom:1px">' + label + '</span>' + text + '</div>';
+}
+
+function protoQuestions(title, items) {
+  var html = '<div style="background:var(--cream);border-radius:10px;padding:16px 20px">'
+    + '<h4 style="font-family:var(--serif);font-size:16px;font-weight:400;margin:0 0 10px">' + title + ' test questions</h4>';
+  items.forEach(function(item) {
+    html += protoCheck(item[0], item[1]);
+  });
+  return html + '</div>';
+}
+
+function showProto(id, btn) {
+  document.querySelectorAll('.proto-section').forEach(function(s) { s.style.display = 'none'; });
+  document.querySelectorAll('.proto-tab').forEach(function(t) { t.classList.remove('active'); });
+  document.getElementById('proto-' + id).style.display = 'block';
+  if (btn) btn.classList.add('active');
 }
 
 /* ═══════════════════════════════════════════════
@@ -3869,4 +4299,5 @@ document.addEventListener('keydown', function(e) {
 });
 
 /* ── INIT ── */
-navigateTo('overview');
+var initPage = window.location.hash ? window.location.hash.replace('#', '') : 'overview';
+navigateTo(initPage);

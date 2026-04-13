@@ -97,6 +97,9 @@ app.use('/api/configs', requireAuth, configsRoutes(loadJSON, saveJSON));
 const historyRoutes = require('./routes/history');
 app.use('/api/history', requireAuth, historyRoutes(loadJSON, saveJSON));
 
+const testingRoutes = require('./routes/testing');
+app.use('/api/test-sessions', testingRoutes(pool));
+
 /* ══════════════════════════════════════════
    HEALTH CHECK ROUTE
    ══════════════════════════════════════════ */
@@ -823,6 +826,8 @@ app.get('/tour/:id', (req, res) => {
 /* ══════════════════════════════════════════
    SPA FALLBACK — serve dashboard.html
    ══════════════════════════════════════════ */
+app.get('/test-history', (req, res) => res.sendFile(path.join(__dirname, 'public', 'testing', 'history.html')));
+app.get('/test-protocol', (req, res) => res.sendFile(path.join(__dirname, 'public', 'testing', 'protocol.html')));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.get('/dashboard', (req, res) => res.sendFile(path.join(__dirname, 'public', 'dashboard.html')));
 app.get('/dashboard/*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'dashboard.html')));
