@@ -768,20 +768,32 @@ app.get('/rooms', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin', 'rooms.html'));
 });
 
-/* ── Demo tour config (for Room Mapper) ── */
+/* ── Demo tour config (for embed.js + Room Mapper) ── */
 app.get('/api/tour/:tenantId/config', (req, res) => {
   /* Extract model ID from Matterport URL */
   const mUrl = DEMO_DATA.matterportUrl || '';
   const mMatch = mUrl.match(/[?&]m=([^&]+)/);
-  const modelId = mMatch ? mMatch[1] : 'SxQL3iGyoDo';
+  const modelId = mMatch ? mMatch[1] : '';
   res.json({
     modelId: modelId,
     propertyName: DEMO_DATA.propertyName || DEMO_DATA.agentName || 'Demo Property',
+    agentName: DEMO_DATA.agentName || '',
+    agentIcon: '',
     vertical: DEMO_DATA.vertical || 'hotel',
     brandColor: DEMO_DATA.brandColor || '#1a1a1a',
     bookingUrl: DEMO_DATA.bookingUrl || '',
-    demoQuestions: DEMO_DATA.demoQuestions || []
+    conversionUrl: DEMO_DATA.bookingUrl || '',
+    demoQuestions: DEMO_DATA.demoQuestions || [],
+    roomMappings: DEMO_DATA.roomMappings || {},
+    voiceToken: ADMIN_SECRET,
+    planActive: true,
+    language: DEMO_DATA.language || 'en'
   });
+});
+
+/* ── Demo tour activate (stub for embed.js paywall) ── */
+app.post('/api/tour/:tenantId/activate', express.json(), (req, res) => {
+  res.json({ ok: true, planActive: true });
 });
 
 /* ── Demo rooms GET (for Room Mapper) ── */
@@ -822,12 +834,6 @@ const voiceWss = createVoiceWSS();
 server.on('upgrade', (request, socket, head) => {
   const url = new URL(request.url, 'http://localhost');
   if (url.pathname === '/ws/test' || url.pathname === '/ws/voice') {
-    const token = url.searchParams.get('token');
-    if (token !== ADMIN_SECRET) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-      socket.destroy();
-      return;
-    }
     voiceWss.handleUpgrade(request, socket, head, (ws) => {
       voiceWss.emit('connection', ws, request);
     });

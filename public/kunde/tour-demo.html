@@ -1,185 +1,28 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>October AI Tour</title>
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-
-.tour-wrap { width: 100vw; height: 100vh; position: relative; }
-.tour-wrap iframe { width: 100%; height: 100%; border: 0; }
-
-/* Agent widget — bottom-right overlay */
-.agent-widget { position: absolute; bottom: 24px; right: 24px; width: 360px; z-index: 100; }
-
-/* Collapsed state — mic button */
-.agent-btn { width: 64px; height: 64px; border-radius: 50%; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 32px rgba(0,0,0,0.4); transition: transform 0.15s, box-shadow 0.15s; float: right; }
-.agent-btn:hover { transform: scale(1.08); box-shadow: 0 12px 40px rgba(0,0,0,0.5); }
-.agent-btn svg { width: 26px; height: 26px; }
-
-/* Expanded panel */
-.agent-panel { display: none; background: #111; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; overflow: hidden; box-shadow: 0 12px 48px rgba(0,0,0,0.6); }
-.agent-panel.open { display: block; }
-
-.agent-panel-header { padding: 20px; border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; align-items: center; justify-content: space-between; }
-.agent-panel-header h3 { color: #fff; font-size: 15px; font-weight: 600; }
-.agent-panel-close { background: none; border: none; color: #666; font-size: 20px; cursor: pointer; padding: 4px; }
-.agent-panel-close:hover { color: #fff; }
-
-.agent-panel-body { padding: 20px; max-height: 400px; overflow-y: auto; }
-
-.demo-questions { list-style: none; }
-.demo-questions li { padding: 12px 16px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; color: #ccc; font-size: 13px; margin-bottom: 8px; cursor: pointer; transition: all 0.15s; }
-.demo-questions li:hover { background: rgba(255,255,255,0.1); color: #fff; border-color: rgba(255,255,255,0.15); }
-
-.agent-panel-footer { padding: 16px 20px; border-top: 1px solid rgba(255,255,255,0.08); text-align: center; }
-.agent-panel-footer p { font-size: 11px; color: #555; }
-
-/* Chat messages */
-.chat-messages { margin-bottom: 16px; }
-.chat-msg { padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 1.5; margin-bottom: 8px; max-width: 90%; animation: fadeIn 0.2s ease; }
-@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
-.chat-msg.assistant { background: rgba(255,255,255,0.08); color: #e0e0e0; }
-.chat-msg.user { background: rgba(79,110,247,0.2); color: #c8d4ff; margin-left: auto; text-align: right; }
-
-/* No tour placeholder */
-.no-tour { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: #666; font-size: 16px; text-align: center; padding: 40px; line-height: 1.7; }
-
-/* Loading */
-.loading-dots { display: inline-flex; gap: 4px; }
-.loading-dots span { width: 6px; height: 6px; background: #666; border-radius: 50%; animation: dotPulse 1.2s infinite; }
-.loading-dots span:nth-child(2) { animation-delay: 0.2s; }
-.loading-dots span:nth-child(3) { animation-delay: 0.4s; }
-@keyframes dotPulse { 0%, 80%, 100% { opacity: 0.3; } 40% { opacity: 1; } }
-</style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>October AI Tour</title>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+    #october-ai { width: 100vw; height: 100vh; }
+  </style>
 </head>
 <body>
-
-<div class="tour-wrap">
-  <iframe id="showcase" allow="xr-spatial-tracking"></iframe>
-  <div class="no-tour" id="noTour" style="display:none">
-    <div>
-      <p style="font-size:32px;margin-bottom:16px">&#127758;</p>
-      <p>No Matterport tour configured yet.</p>
-      <p style="font-size:13px;color:#555;margin-top:8px">Add a Matterport URL in the Build page to see your tour here.</p>
-    </div>
-  </div>
-
-  <div class="agent-widget">
-    <!-- Collapsed button -->
-    <button class="agent-btn" id="agentBtn" onclick="togglePanel()">
-      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-    </button>
-
-    <!-- Expanded panel -->
-    <div class="agent-panel" id="agentPanel">
-      <div class="agent-panel-header">
-        <h3 id="agentTitle">AI Agent</h3>
-        <button class="agent-panel-close" onclick="togglePanel()">&times;</button>
-      </div>
-      <div class="agent-panel-body">
-        <div class="chat-messages" id="chatMessages">
-          <div class="chat-msg assistant" id="greetingMsg">Welcome! How can I help you today?</div>
-        </div>
-        <ul class="demo-questions" id="demoQuestions"></ul>
-      </div>
-      <div class="agent-panel-footer">
-        <p>Powered by October AI</p>
-      </div>
-    </div>
-  </div>
-</div>
-
-<script>
-(function() {
-  var tenantMatch = window.location.pathname.match(/\/tour\/([^/]+)/);
-  var tenantId = tenantMatch ? tenantMatch[1] : null;
-  if (!tenantId) {
-    document.getElementById('noTour').style.display = 'flex';
-    document.getElementById('showcase').style.display = 'none';
-    return;
-  }
-
-  /* Fetch config */
-  fetch('/api/tour/' + tenantId + '/config')
-    .then(function(r) { return r.json(); })
-    .then(function(config) {
-      /* Set tour iframe */
-      if (config.modelId) {
-        document.getElementById('showcase').src = 'https://my.matterport.com/show/?m=' + config.modelId + '&play=1';
-      } else {
-        document.getElementById('noTour').style.display = 'flex';
-        document.getElementById('showcase').style.display = 'none';
-      }
-
-      /* Set agent name */
-      var name = config.propertyName || 'AI Agent';
-      document.getElementById('agentTitle').textContent = name;
-      document.title = name + ' — October AI Tour';
-
-      /* Set greeting */
-      document.getElementById('greetingMsg').textContent = 'Welcome to ' + name + '! Ask me anything or pick a question below.';
-
-      /* Set brand color */
-      var color = config.brandColor || '#1a1a1a';
-      document.getElementById('agentBtn').style.background = color;
-
-      /* Demo questions */
-      var questions = config.demoQuestions || [];
-      var ul = document.getElementById('demoQuestions');
-      if (questions.length > 0) {
-        questions.forEach(function(q) {
-          var li = document.createElement('li');
-          li.textContent = q;
-          li.onclick = function() { simulateChat(q); };
-          ul.appendChild(li);
-        });
-      }
-    })
-    .catch(function() {
-      document.getElementById('noTour').style.display = 'flex';
-      document.getElementById('showcase').style.display = 'none';
-    });
-
-  /* Toggle panel */
-  window.togglePanel = function() {
-    var panel = document.getElementById('agentPanel');
-    var btn = document.getElementById('agentBtn');
-    if (panel.classList.contains('open')) {
-      panel.classList.remove('open');
-      btn.style.display = 'flex';
+  <div id="october-ai"></div>
+  <script>
+    // Extract tenant ID from URL path: /tour/:id
+    var match = window.location.pathname.match(/^\/tour\/([a-zA-Z0-9_-]+)/);
+    if (match) {
+      var script = document.createElement("script");
+      script.src = "/kunde/embed.js";
+      script.setAttribute("data-tenant", match[1]);
+      script.setAttribute("data-container", "october-ai");
+      document.body.appendChild(script);
     } else {
-      panel.classList.add('open');
-      btn.style.display = 'none';
+      document.getElementById("october-ai").innerHTML = '<p style="color:#fff;text-align:center;padding:40px">Tour not found</p>';
     }
-  };
-
-  /* Simulate a chat interaction */
-  window.simulateChat = function(question) {
-    var msgs = document.getElementById('chatMessages');
-
-    /* Add user message */
-    var userMsg = document.createElement('div');
-    userMsg.className = 'chat-msg user';
-    userMsg.textContent = question;
-    msgs.appendChild(userMsg);
-
-    /* Add loading */
-    var loading = document.createElement('div');
-    loading.className = 'chat-msg assistant';
-    loading.innerHTML = '<div class="loading-dots"><span></span><span></span><span></span></div>';
-    msgs.appendChild(loading);
-    msgs.scrollTop = msgs.scrollHeight;
-
-    /* Simulate response after delay */
-    setTimeout(function() {
-      loading.textContent = 'This is a demo preview. In the live agent, I would respond with information from your knowledge base using voice and text. Connect the agent to your website using the embed code to go live.';
-      msgs.scrollTop = msgs.scrollHeight;
-    }, 1200);
-  };
-})();
-</script>
+  </script>
 </body>
 </html>
