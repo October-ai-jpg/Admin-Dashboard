@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Room Mapper — October AI</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f1117; color: #e0e0e0; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+
+.topbar { background: #161822; border-bottom: 1px solid #2a2d3a; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; z-index: 10; }
+.topbar h1 { font-size: 15px; font-weight: 600; color: #fff; }
+.topbar .back { color: #4f6ef7; text-decoration: none; font-size: 13px; font-weight: 500; }
+.topbar .back:hover { text-decoration: underline; }
+.topbar .property-name { font-size: 13px; color: #888; }
+
+.main { display: flex; flex: 1; overflow: hidden; }
+
+/* Tour preview */
+.tour-pane { flex: 1; position: relative; background: #000; }
+.tour-pane iframe { width: 100%; height: 100%; border: 0; }
+
+/* Open in new tab button — floating over tour */
+.open-tab-bar { position: absolute; top: 16px; left: 16px; right: 16px; z-index: 20; display: flex; align-items: center; gap: 12px; background: rgba(0,0,0,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 12px 16px; }
+.open-tab-bar p { font-size: 13px; color: #ccc; flex: 1; line-height: 1.4; }
+.open-tab-bar p strong { color: #fff; }
+.open-tab-btn { padding: 10px 20px; background: #4f6ef7; color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+.open-tab-btn:hover { background: #3b5ce4; }
+
+/* Add room button — floating bottom right */
+.add-btn-wrap { position: absolute; bottom: 20px; right: 20px; z-index: 20; }
+.add-btn { padding: 14px 28px; background: #4f6ef7; color: #fff; border: none; border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 32px rgba(79,110,247,0.35); transition: all 0.15s; }
+.add-btn:hover { background: #3b5ce4; transform: scale(1.03); }
+
+/* Side panel */
+.panel { width: 340px; background: #161822; border-left: 1px solid #2a2d3a; display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden; }
+.panel-header { padding: 20px; border-bottom: 1px solid #2a2d3a; }
+.panel-header h2 { font-size: 16px; font-weight: 600; color: #fff; margin-bottom: 4px; }
+.panel-header p { font-size: 12px; color: #666; }
+
+.room-list { flex: 1; overflow-y: auto; padding: 12px; }
+.room-item { background: #1c1f2e; border: 1px solid #2a2d3a; border-radius: 8px; padding: 12px; margin-bottom: 8px; position: relative; transition: border-color 0.15s; cursor: pointer; }
+.room-item:hover { border-color: #4f6ef7; }
+.room-item .room-label { font-size: 14px; font-weight: 500; color: #fff; }
+.room-item .room-sweep { font-size: 11px; color: #4f6ef7; font-family: monospace; margin-top: 4px; word-break: break-all; }
+.room-item .room-actions { position: absolute; top: 10px; right: 10px; }
+.room-item .room-actions button { background: none; border: none; cursor: pointer; font-size: 14px; padding: 2px 4px; opacity: 0.5; transition: opacity 0.15s; }
+.room-item .room-actions button:hover { opacity: 1; }
+
+.panel-footer { padding: 16px 20px; border-top: 1px solid #2a2d3a; }
+.save-btn { width: 100%; padding: 12px; background: #30a46c; color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+.save-btn:hover { background: #2b9a62; }
+.save-btn:disabled { opacity: 0.4; cursor: default; }
+.room-count { text-align: center; font-size: 12px; color: #666; margin-top: 8px; }
+
+/* Add room modal */
+.overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; align-items: center; justify-content: center; }
+.overlay.open { display: flex; }
+.modal { background: #1c1f2e; border: 1px solid #2a2d3a; border-radius: 12px; padding: 28px; width: 100%; max-width: 520px; max-height: 90vh; overflow-y: auto; }
+.modal h3 { font-size: 16px; color: #fff; margin-bottom: 16px; }
+.modal .step { display: flex; gap: 12px; margin-bottom: 16px; align-items: flex-start; }
+.modal .step-num { width: 24px; height: 24px; background: #4f6ef7; color: #fff; border-radius: 50%; font-size: 12px; font-weight: 700; display: grid; place-items: center; flex-shrink: 0; margin-top: 2px; }
+.modal .step-text { font-size: 13px; color: #ccc; line-height: 1.5; }
+.modal label { display: block; font-size: 12px; color: #aaa; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+.modal input { width: 100%; padding: 10px 12px; background: #0f1117; border: 1px solid #2a2d3a; border-radius: 6px; color: #fff; font-size: 14px; outline: none; }
+.modal input:focus { border-color: #4f6ef7; }
+.modal .input-group { margin-bottom: 14px; }
+.modal .extracted { font-size: 11px; color: #30a46c; margin-top: 4px; display: none; }
+.modal .error-msg { font-size: 11px; color: #e5484d; margin-top: 4px; display: none; }
+.modal .btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+.btn { padding: 8px 18px; border: none; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; }
+.btn-primary { background: #4f6ef7; color: #fff; }
+.btn-primary:hover { background: #3b5ce4; }
+.btn-ghost { background: transparent; color: #888; border: 1px solid #2a2d3a; }
+.btn-ghost:hover { background: #1c1f2e; color: #fff; }
+
+/* Retail fields */
+.modal textarea { width: 100%; padding: 10px 12px; background: #0f1117; border: 1px solid #2a2d3a; border-radius: 6px; color: #fff; font-size: 13px; outline: none; resize: vertical; min-height: 60px; font-family: inherit; }
+.modal textarea:focus { border-color: #4f6ef7; }
+.modal select { width: 100%; padding: 10px 12px; background: #0f1117; border: 1px solid #2a2d3a; border-radius: 6px; color: #fff; font-size: 14px; outline: none; }
+.modal select:focus { border-color: #4f6ef7; }
+.retail-fields { display: none; border-top: 1px solid #2a2d3a; margin-top: 16px; padding-top: 16px; }
+.retail-fields .section-label { font-size: 11px; color: #4f6ef7; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; font-weight: 600; }
+.retail-fields .field-row { display: flex; gap: 10px; }
+.retail-fields .field-row .input-group { flex: 1; }
+.room-item .room-meta { font-size: 11px; color: #888; margin-top: 4px; }
+.room-item .room-meta span { margin-right: 10px; }
+
+.empty-rooms { text-align: center; padding: 40px 20px; color: #555; }
+.empty-rooms p { font-size: 13px; margin-top: 8px; }
+.empty-rooms .steps { text-align: left; margin: 16px auto; max-width: 260px; }
+.empty-rooms .steps li { font-size: 12px; color: #666; margin-bottom: 6px; line-height: 1.4; }
+
+.toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #30a46c; color: #fff; padding: 12px 24px; border-radius: 8px; font-size: 13px; font-weight: 500; z-index: 200; display: none; }
+.toast.error { background: #e5484d; }
+.toast.show { display: block; animation: fadeUp 0.25s ease; }
+@keyframes fadeUp { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+
+.loading { display: flex; align-items: center; justify-content: center; height: 100%; color: #666; font-size: 14px; }
+
+/* Client welcome banner */
+.client-welcome { background: #fff; border-left: 4px solid #22C55E; border-radius: 10px; padding: 20px; margin: 16px; margin-bottom: 0; color: #1a1611; }
+.client-welcome h3 { font-size: 16px; font-weight: 600; margin-bottom: 8px; color: #1a1611; }
+.client-welcome > p { font-size: 14px; line-height: 1.6; color: #555; margin-bottom: 16px; }
+.client-welcome ol { padding-left: 20px; margin: 0 0 12px; }
+.client-welcome ol li { font-size: 13px; color: #555; line-height: 1.6; margin-bottom: 6px; }
+.client-welcome ol li strong { color: #1a1611; }
+.client-welcome ol li kbd { background: #f0f0f0; padding: 2px 6px; border-radius: 4px; font-size: 12px; font-family: monospace; border: 1px solid #ddd; }
+.client-welcome .got-it { font-size: 13px; color: #4f6ef7; cursor: pointer; background: none; border: none; font-family: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.client-welcome .got-it:hover { color: #3b5ce4; }
+
+@media (max-width: 768px) {
+  .main { flex-direction: column; }
+  .panel { width: 100%; max-height: 40vh; border-left: none; border-top: 1px solid #2a2d3a; }
+  .open-tab-bar { flex-direction: column; text-align: center; }
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div style="display:flex;align-items:center;gap:16px;">
+    <a href="/dashboard" class="back">&larr; Dashboard</a>
+    <h1>Room Mapper</h1>
+  </div>
+  <div class="property-name" id="propertyName">Loading...</div>
+</div>
+
+<div class="client-welcome" id="clientWelcome" style="display:none">
+  <h3>Welcome to Space Mapper</h3>
+  <p>This is where you connect your Matterport spaces to your AI agent. Your agent uses these mappings to navigate visitors to the right place when it makes a recommendation.</p>
+  <ol>
+    <li>Click <strong>"Open tour in new tab"</strong> to open your Matterport tour</li>
+    <li>Walk to a space, press <kbd>U</kbd> on your keyboard to copy the link</li>
+    <li>Come back here, click <strong>"+ Add Room"</strong> and paste the link</li>
+  </ol>
+  <button class="got-it" onclick="dismissWelcome()">Got it</button>
+</div>
+
+<div class="main">
+  <div class="tour-pane">
+    <iframe id="showcase" allow="xr-spatial-tracking"></iframe>
+    <div class="open-tab-bar">
+      <p><strong>How it works:</strong> Open your tour in a new tab, walk to a room, press <kbd style="background:#2a2d3a;padding:2px 6px;border-radius:4px;font-size:12px;font-family:monospace;">U</kbd> on your keyboard to copy the link, then paste it here.</p>
+      <button class="open-tab-btn" id="openTabBtn">Open tour in new tab &nearr;</button>
+    </div>
+    <div class="add-btn-wrap">
+      <button class="add-btn" id="addBtn">+ Add Room</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Marked Rooms</h2>
+      <p>These are the areas your AI guide knows about</p>
+    </div>
+    <div class="room-list" id="roomList">
+      <div class="empty-rooms">
+        <p style="font-size:28px;">&#x1F4CD;</p>
+        <p style="font-size:14px;color:#aaa;margin-top:12px;">No rooms mapped yet</p>
+        <ol class="steps">
+          <li>Click <strong style="color:#4f6ef7;">"Open tour in new tab"</strong></li>
+          <li>Walk to a room in the 3D tour</li>
+          <li>Press <strong style="color:#fff;">U</strong> on your keyboard &rarr; click Copy</li>
+          <li>Click <strong style="color:#4f6ef7;">"+ Add Room"</strong> and paste the link</li>
+        </ol>
+      </div>
+    </div>
+    <div class="panel-footer">
+      <button class="save-btn" id="saveBtn" onclick="saveAllRooms()">Save Room Mappings</button>
+      <div class="room-count" id="roomCount">0 rooms mapped</div>
+    </div>
+  </div>
+</div>
+
+<!-- Add room modal -->
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <h3>Add a room</h3>
+
+    <div class="input-group">
+      <label>1. Paste the link from Matterport</label>
+      <input type="text" id="urlInput" placeholder="Paste the link you copied after pressing U">
+      <div class="extracted" id="extractedMsg"></div>
+      <div class="error-msg" id="errorMsg"></div>
+    </div>
+
+    <div class="input-group">
+      <label id="nameLabel">2. Name this room</label>
+      <input type="text" id="nameInput" placeholder="e.g. Lobby, Restaurant, Junior Suite">
+    </div>
+
+    <div class="realestate-fields" id="realEstateFields" style="display:none">
+      <div class="section-label">Room details</div>
+      <div class="field-row">
+        <div class="input-group">
+          <label>Room type</label>
+          <select id="reRoomType">
+            <option value="">-- Select --</option>
+            <option value="living_room">Living room</option>
+            <option value="bedroom">Bedroom</option>
+            <option value="kitchen">Kitchen</option>
+            <option value="bathroom">Bathroom</option>
+            <option value="balcony">Balcony / Terrace</option>
+            <option value="garden">Garden</option>
+            <option value="garage">Garage</option>
+            <option value="utility">Utility room</option>
+            <option value="office">Office / Study</option>
+            <option value="hallway">Hallway / Entrance</option>
+            <option value="dining">Dining room</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div class="input-group">
+          <label>Size (m&sup2;)</label>
+          <input type="number" id="reSqmInput" placeholder="e.g. 24">
+        </div>
+      </div>
+      <div class="input-group">
+        <label>Dimensions</label>
+        <input type="text" id="reDimsInput" placeholder="e.g. 4.2 x 5.1 m">
+      </div>
+      <div class="field-row">
+        <div class="input-group">
+          <label>Flooring</label>
+          <input type="text" id="reFlooringInput" placeholder="e.g. Hardwood oak">
+        </div>
+        <div class="input-group">
+          <label>Windows</label>
+          <input type="text" id="reWindowsInput" placeholder="e.g. South-facing, floor-to-ceiling">
+        </div>
+      </div>
+      <div class="input-group">
+        <label>Features (comma-separated)</label>
+        <input type="text" id="reFeaturesInput" placeholder="e.g. Built-in wardrobe, Underfloor heating, Fireplace">
+      </div>
+      <div class="input-group">
+        <label>Notes</label>
+        <textarea id="reNotesInput" placeholder="Additional details about this room..." rows="2"></textarea>
+      </div>
+    </div>
+
+    <div class="retail-fields" id="retailFields">
+      <div class="section-label">Product details (optional)</div>
+      <div class="input-group">
+        <label>Description</label>
+        <textarea id="rfDescription" placeholder="Describe this product..." rows="2"></textarea>
+      </div>
+      <div class="field-row">
+        <div class="input-group">
+          <label>Price</label>
+          <input type="text" id="rfPrice" placeholder="e.g. 2.499 kr">
+        </div>
+        <div class="input-group">
+          <label>Availability</label>
+          <select id="rfAvailability">
+            <option value="">-- Select --</option>
+            <option value="in_stock">In stock</option>
+            <option value="limited">Limited stock</option>
+            <option value="made_to_order">Made to order</option>
+            <option value="pre_order">Pre-order</option>
+            <option value="out_of_stock">Out of stock</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="input-group">
+          <label>Dimensions</label>
+          <input type="text" id="rfDimensions" placeholder="e.g. 220 x 90 x 45 cm">
+        </div>
+        <div class="input-group">
+          <label>Delivery / lead time</label>
+          <input type="text" id="rfLeadTime" placeholder="e.g. 2-4 weeks">
+        </div>
+      </div>
+      <div class="input-group">
+        <label>Variants (comma-separated)</label>
+        <input type="text" id="rfVariants" placeholder="e.g. Oak, Walnut, White">
+      </div>
+      <div class="input-group">
+        <label>Materials (comma-separated)</label>
+        <input type="text" id="rfMaterials" placeholder="e.g. Solid oak, Leather, Steel">
+      </div>
+      <div class="input-group">
+        <label>Product URL (for purchase link)</label>
+        <input type="text" id="rfProductUrl" placeholder="https://shop.example.com/product/...">
+      </div>
+    </div>
+
+    <div class="btns">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmAdd()">Add Room</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var TENANT_ID = new URLSearchParams(window.location.search).get("tenant") || new URLSearchParams(window.location.search).get("id");
+var FROM_CLIENT = new URLSearchParams(window.location.search).get("from") === "client";
+var CONFIG = null;
+var rooms = {};
+
+function isRetail() { return CONFIG && (CONFIG.vertical === "retail" || CONFIG.vertical === "showroom"); }
+function isRealEstate() { return CONFIG && (CONFIG.vertical === "real_estate_sale" || CONFIG.vertical === "real_estate_development"); }
+
+/* ── Client welcome banner ── */
+if (FROM_CLIENT && TENANT_ID && !localStorage.getItem("october_room_mapper_welcome_" + TENANT_ID)) {
+  document.getElementById("clientWelcome").style.display = "block";
+}
+function dismissWelcome() {
+  document.getElementById("clientWelcome").style.display = "none";
+  if (TENANT_ID) localStorage.setItem("october_room_mapper_welcome_" + TENANT_ID, "1");
+}
+
+if (!TENANT_ID) {
+  document.body.innerHTML = '<div class="loading">Missing tenant ID. Open this from the dashboard.</div>';
+}
+
+/* ── Extract sweep ID from Matterport URL ── */
+function extractSweepId(input) {
+  if (!input) return null;
+  input = input.trim();
+  /* From full URL: &ss=SWEEP_ID */
+  var match = input.match(/[?&]ss=([^&]+)/);
+  if (match) return match[1];
+  /* Raw sweep ID (fallback for power users) */
+  if (/^[a-zA-Z0-9_-]+$/.test(input) && input.length > 5 && input.length < 40) return input;
+  return null;
+}
+
+/* ── Live URL validation ── */
+document.getElementById("urlInput").addEventListener("input", function() {
+  var val = this.value.trim();
+  var extracted = document.getElementById("extractedMsg");
+  var error = document.getElementById("errorMsg");
+
+  if (!val) { extracted.style.display = "none"; error.style.display = "none"; return; }
+
+  var sweepId = extractSweepId(val);
+  if (sweepId) {
+    extracted.textContent = "\u2713 Position detected: " + sweepId;
+    extracted.style.display = "block";
+    error.style.display = "none";
+  } else if (val.includes("matterport.com")) {
+    error.textContent = "Link found but no room position in it. Make sure you pressed U while standing in the room, then copied the link.";
+    error.style.display = "block";
+    extracted.style.display = "none";
+  } else {
+    error.textContent = "This doesn't look like a Matterport link. Press U in the tour to get the right link.";
+    error.style.display = "block";
+    extracted.style.display = "none";
+  }
+});
+
+/* ── Open tour in new tab ── */
+document.getElementById("openTabBtn").addEventListener("click", function() {
+  if (CONFIG && CONFIG.modelId) {
+    window.open("https://my.matterport.com/show/?m=" + CONFIG.modelId + "&play=1", "_blank");
+  }
+});
+
+/* ── Add room modal ── */
+document.getElementById("addBtn").addEventListener("click", function() {
+  document.getElementById("urlInput").value = "";
+  document.getElementById("nameInput").value = "";
+  document.getElementById("extractedMsg").style.display = "none";
+  document.getElementById("errorMsg").style.display = "none";
+  /* Show/hide retail fields */
+  document.getElementById("retailFields").style.display = isRetail() ? "block" : "none";
+  /* Show/hide real estate fields */
+  document.getElementById("realEstateFields").style.display = isRealEstate() ? "block" : "none";
+  if (isRetail()) {
+    document.getElementById("nameLabel").textContent = "2. Name this product";
+    document.getElementById("nameInput").placeholder = "e.g. Nova Sofa, Dining Table, Floor Lamp";
+    document.getElementById("rfDescription").value = "";
+    document.getElementById("rfPrice").value = "";
+    document.getElementById("rfAvailability").value = "";
+    document.getElementById("rfDimensions").value = "";
+    document.getElementById("rfLeadTime").value = "";
+    document.getElementById("rfVariants").value = "";
+    document.getElementById("rfMaterials").value = "";
+    document.getElementById("rfProductUrl").value = "";
+  } else if (isRealEstate()) {
+    document.getElementById("nameLabel").textContent = "2. Name this room";
+    document.getElementById("nameInput").placeholder = "e.g. Living Room, Master Bedroom, Kitchen";
+    document.getElementById("reRoomType").value = "";
+    document.getElementById("reSqmInput").value = "";
+    document.getElementById("reDimsInput").value = "";
+    document.getElementById("reFlooringInput").value = "";
+    document.getElementById("reWindowsInput").value = "";
+    document.getElementById("reFeaturesInput").value = "";
+    document.getElementById("reNotesInput").value = "";
+  } else {
+    document.getElementById("nameLabel").textContent = "2. Name this room";
+    document.getElementById("nameInput").placeholder = "e.g. Lobby, Restaurant, Junior Suite";
+  }
+  document.getElementById("overlay").classList.add("open");
+  setTimeout(function() { document.getElementById("urlInput").focus(); }, 100);
+});
+
+document.getElementById("urlInput").addEventListener("keydown", function(e) {
+  if (e.key === "Enter") document.getElementById("nameInput").focus();
+  if (e.key === "Escape") closeModal();
+});
+document.getElementById("nameInput").addEventListener("keydown", function(e) {
+  if (e.key === "Enter") confirmAdd();
+  if (e.key === "Escape") closeModal();
+});
+
+function closeModal() { document.getElementById("overlay").classList.remove("open"); }
+
+function confirmAdd() {
+  var url = document.getElementById("urlInput").value.trim();
+  var label = document.getElementById("nameInput").value.trim();
+
+  if (!url) { showToast("Paste the Matterport URL first", true); return; }
+  var sweepId = extractSweepId(url);
+  if (!sweepId) { showToast("Could not find a position in that URL. Make sure you navigated to the room first.", true); return; }
+  if (!label) { showToast(isRetail() ? "Give the product a name" : "Give the room a name", true); return; }
+
+  /* Generate key */
+  var key = label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+  if (!key) key = "room_" + Date.now();
+  var baseKey = key; var n = 2;
+  while (rooms[key]) { key = baseKey + "_" + n; n++; }
+
+  var entry = { label: label, sweepId: sweepId };
+
+  /* Retail extended fields */
+  if (isRetail()) {
+    var desc = document.getElementById("rfDescription").value.trim();
+    var price = document.getElementById("rfPrice").value.trim();
+    var avail = document.getElementById("rfAvailability").value;
+    var dims = document.getElementById("rfDimensions").value.trim();
+    var lead = document.getElementById("rfLeadTime").value.trim();
+    var variants = document.getElementById("rfVariants").value.trim();
+    var materials = document.getElementById("rfMaterials").value.trim();
+    var prodUrl = document.getElementById("rfProductUrl").value.trim();
+    if (desc) entry.description = desc;
+    if (price) entry.price = price;
+    if (avail) entry.availability = avail;
+    if (dims) entry.dimensions = dims;
+    if (lead) entry.leadTime = lead;
+    if (variants) entry.variants = variants.split(",").map(function(v){return v.trim();}).filter(Boolean);
+    if (materials) entry.materials = materials.split(",").map(function(v){return v.trim();}).filter(Boolean);
+    if (prodUrl) entry.productUrl = prodUrl;
+  }
+
+  /* Real estate extended fields */
+  if (isRealEstate()) {
+    var roomType = document.getElementById("reRoomType").value;
+    var sqm = document.getElementById("reSqmInput").value.trim();
+    var dims2 = document.getElementById("reDimsInput").value.trim();
+    var flooring = document.getElementById("reFlooringInput").value.trim();
+    var windows = document.getElementById("reWindowsInput").value.trim();
+    var features = document.getElementById("reFeaturesInput").value.trim();
+    var notes = document.getElementById("reNotesInput").value.trim();
+    if (roomType) entry.roomType = roomType;
+    if (sqm) entry.sqm = parseInt(sqm) || 0;
+    if (dims2) entry.dimensions = dims2;
+    if (flooring) entry.flooring = flooring;
+    if (windows) entry.windows = windows;
+    if (features) entry.features = features.split(",").map(function(v){return v.trim();}).filter(Boolean);
+    if (notes) entry.notes = notes;
+  }
+
+  rooms[key] = entry;
+  closeModal();
+  renderRooms();
+  showToast("Added: " + label);
+}
+
+/* ── Navigate preview to room ── */
+function goToSweep(sweepId) {
+  if (sweepId && CONFIG && CONFIG.modelId) {
+    document.getElementById("showcase").src = "https://my.matterport.com/show/?m=" + CONFIG.modelId + "&ss=" + sweepId + "&sr=-.05,.5&play=1";
+  }
+}
+
+/* ── Delete room ── */
+function deleteRoom(key) {
+  delete rooms[key];
+  renderRooms();
+}
+
+/* ── Render ── */
+function renderRooms() {
+  var list = document.getElementById("roomList");
+  var keys = Object.keys(rooms);
+
+  if (keys.length === 0) {
+    list.innerHTML = '<div class="empty-rooms"><p style="font-size:28px;">&#x1F4CD;</p><p style="font-size:14px;color:#aaa;margin-top:12px;">No rooms mapped yet</p><ol class="steps"><li>Click <strong style="color:#4f6ef7;">"Open tour in new tab"</strong></li><li>Walk to a room in the 3D tour</li><li>Press <strong style="color:#fff;">U</strong> on your keyboard &rarr; click Copy</li><li>Click <strong style="color:#4f6ef7;">"+ Add Room"</strong> and paste the link</li></ol></div>';
+    document.getElementById("roomCount").textContent = "0 rooms mapped";
+    return;
+  }
+
+  list.innerHTML = keys.map(function(key) {
+    var r = rooms[key];
+    var meta = '';
+    if (isRetail()) {
+      var parts = [];
+      if (r.price) parts.push('<span>' + esc(r.price) + '</span>');
+      if (r.availability) {
+        var avLabels = { in_stock: 'In stock', limited: 'Limited', made_to_order: 'Made to order', pre_order: 'Pre-order', out_of_stock: 'Out of stock' };
+        parts.push('<span>' + (avLabels[r.availability] || r.availability) + '</span>');
+      }
+      if (r.leadTime) parts.push('<span>' + esc(r.leadTime) + '</span>');
+      if (parts.length) meta = '<div class="room-meta">' + parts.join('') + '</div>';
+    } else if (isRealEstate()) {
+      var parts2 = [];
+      if (r.roomType) {
+        var rtLabels = { living_room: 'Living room', bedroom: 'Bedroom', kitchen: 'Kitchen', bathroom: 'Bathroom', balcony: 'Balcony', garden: 'Garden', garage: 'Garage', utility: 'Utility', office: 'Office', hallway: 'Hallway', dining: 'Dining', other: 'Other' };
+        parts2.push('<span>' + (rtLabels[r.roomType] || r.roomType) + '</span>');
+      }
+      if (r.sqm) parts2.push('<span>' + r.sqm + ' m&sup2;</span>');
+      if (r.flooring) parts2.push('<span>' + esc(r.flooring) + '</span>');
+      if (parts2.length) meta = '<div class="room-meta">' + parts2.join('') + '</div>';
+    }
+    return '<div class="room-item" onclick="goToSweep(\'' + esc(r.sweepId) + '\')">' +
+      '<div class="room-actions"><button onclick="event.stopPropagation();deleteRoom(\'' + esc(key) + '\')" title="Remove">\u2715</button></div>' +
+      '<div class="room-label">' + esc(r.label) + '</div>' +
+      meta +
+      '<div class="room-sweep">sweep: ' + esc(r.sweepId) + '</div>' +
+    '</div>';
+  }).join("");
+  document.getElementById("roomCount").textContent = keys.length + " room" + (keys.length !== 1 ? "s" : "") + " mapped";
+}
+
+function esc(s) { var d = document.createElement("div"); d.textContent = s || ""; return d.innerHTML; }
+
+/* ── Save ── */
+async function saveAllRooms() {
+  var btn = document.getElementById("saveBtn");
+  btn.disabled = true; btn.textContent = "Saving...";
+  try {
+    var res = await fetch("/api/my/tenants/" + TENANT_ID + "/rooms", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ roomMappings: rooms })
+    });
+    if (!res.ok) throw new Error("(" + res.status + ")");
+    showToast("Room mappings saved!");
+  } catch (e) { showToast("Save failed " + e.message, true); }
+  finally { btn.disabled = false; btn.textContent = "Save Room Mappings"; }
+}
+
+/* ── Toast ── */
+function showToast(msg, isError) {
+  var t = document.getElementById("toast");
+  t.textContent = msg; t.className = "toast show" + (isError ? " error" : "");
+  clearTimeout(t._timer);
+  t._timer = setTimeout(function() { t.className = "toast"; }, 3000);
+}
+
+/* ── Init ── */
+async function init() {
+  try {
+    var res = await fetch("/api/tour/" + TENANT_ID + "/config");
+    if (!res.ok) { showToast("Tour not found", true); return; }
+    CONFIG = await res.json();
+    document.getElementById("propertyName").textContent = CONFIG.propertyName || CONFIG.hotelName || "";
+
+    /* Update labels for retail */
+    if (isRetail()) {
+      document.querySelector(".topbar h1").textContent = "Product Mapper";
+      document.getElementById("addBtn").textContent = "+ Add Product";
+      document.querySelector(".panel-header h2").textContent = "Mapped Products";
+      document.querySelector(".panel-header p").textContent = "Products your AI advisor knows about";
+    } else if (isRealEstate()) {
+      document.querySelector(".topbar h1").textContent = "Room Mapper";
+      document.getElementById("addBtn").textContent = "+ Add Room";
+      document.querySelector(".panel-header h2").textContent = "Mapped Rooms";
+      document.querySelector(".panel-header p").textContent = "Rooms your AI property advisor knows about";
+    }
+
+    /* Load existing rooms */
+    var roomRes = await fetch("/api/my/tenants/" + TENANT_ID + "/rooms");
+    if (roomRes.ok) {
+      var rd = await roomRes.json();
+      if (rd.rooms) {
+        Object.keys(rd.rooms).forEach(function(key) {
+          var e = rd.rooms[key];
+          if (typeof e === "object") {
+            var entry = { label: e.label || key, sweepId: e.sweepId || "" };
+            /* Preserve retail fields if present */
+            if (e.description) entry.description = e.description;
+            if (e.price) entry.price = e.price;
+            if (e.availability) entry.availability = e.availability;
+            if (e.dimensions) entry.dimensions = e.dimensions;
+            if (e.leadTime) entry.leadTime = e.leadTime;
+            if (e.variants) entry.variants = e.variants;
+            if (e.materials) entry.materials = e.materials;
+            if (e.productUrl) entry.productUrl = e.productUrl;
+            if (e.imageUrl) entry.imageUrl = e.imageUrl;
+            /* Preserve real estate fields if present */
+            if (e.roomType) entry.roomType = e.roomType;
+            if (e.sqm) entry.sqm = e.sqm;
+            if (e.features) entry.features = e.features;
+            if (e.flooring) entry.flooring = e.flooring;
+            if (e.windows) entry.windows = e.windows;
+            if (e.notes) entry.notes = e.notes;
+            rooms[key] = entry;
+          } else if (typeof e === "string") {
+            rooms[key] = { label: e || key, sweepId: "" };
+          }
+        });
+      }
+    }
+    renderRooms();
+
+    /* Load tour preview */
+    document.getElementById("showcase").src = "https://my.matterport.com/show/?m=" + CONFIG.modelId + "&play=1";
+  } catch (e) { showToast("Failed to load: " + e.message, true); }
+}
+
+if (TENANT_ID) init();
+</script>
+</body>
+</html>

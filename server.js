@@ -680,8 +680,56 @@ app.post('/client/demo/upload', express.json(), (req, res) => {
 });
 
 /* ── Demo upload file ── */
-app.post('/client/demo/upload-file', upload.single('file'), (req, res) => {
-  res.json({ ok: true, wordCount: 250 });
+app.post('/client/demo/upload-file', upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+  const { originalname, mimetype, buffer } = req.file;
+  const ext = path.extname(originalname).toLowerCase();
+
+  try {
+    let rawText = '';
+
+    if (ext === '.pdf' || mimetype === 'application/pdf') {
+      try {
+        const parser = new PDFParse({ data: new Uint8Array(buffer) });
+        try {
+          const result = await parser.getText();
+          rawText = result.text || '';
+        } finally {
+          try { await parser.destroy(); } catch (e) {}
+        }
+      } catch (pdfErr) {
+        console.log('[DEMO-UPLOAD] PDF parse failed, treating as raw text:', pdfErr.message);
+        rawText = buffer.toString('utf-8').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      }
+    } else if (['.txt', '.csv', '.json', '.md', '.xml', '.html'].includes(ext)) {
+      rawText = buffer.toString('utf-8');
+    } else if (ext === '.docx') {
+      const AdmZip = (() => { try { return require('adm-zip'); } catch(e) { return null; } })();
+      if (AdmZip) {
+        const zip = new AdmZip(buffer);
+        const doc = zip.getEntry('word/document.xml');
+        if (doc) {
+          const xml = doc.getData().toString('utf-8');
+          rawText = xml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        }
+      } else {
+        rawText = buffer.toString('utf-8').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      }
+    } else {
+      rawText = buffer.toString('utf-8');
+    }
+
+    rawText = cleanExtractedText(rawText);
+    if (rawText) {
+      DEMO_DATA.property_data = (DEMO_DATA.property_data || '') + '\n\n' + rawText;
+    }
+    const words = DEMO_DATA.property_data.trim().split(/\s+/).length;
+    res.json({ ok: true, wordCount: words });
+  } catch (e) {
+    console.error('[DEMO-UPLOAD] Error:', e.message);
+    res.json({ ok: true, wordCount: DEMO_DATA.property_data.trim().split(/\s+/).length });
+  }
 });
 
 /* ── Demo scrape ── */
@@ -791,6 +839,38 @@ app.get('/client/demo/analytics/:sub', (req, res) => {
   } else {
     res.status(404).send('Page not found');
   }
+});
+
+/* ── Room Mapper page ── */
+app.get('/rooms', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin', 'rooms.html'));
+});
+
+/* ── Demo tour config (for Room Mapper) ── */
+app.get('/api/tour/:tenantId/config', (req, res) => {
+  /* Extract model ID from Matterport URL */
+  const mUrl = DEMO_DATA.matterportUrl || '';
+  const mMatch = mUrl.match(/[?&]m=([^&]+)/);
+  const modelId = mMatch ? mMatch[1] : 'SxQL3iGyoDo';
+  res.json({
+    modelId: modelId,
+    propertyName: DEMO_DATA.propertyName || 'Demo Property',
+    vertical: DEMO_DATA.vertical || 'hotel'
+  });
+});
+
+/* ── Demo rooms GET (for Room Mapper) ── */
+app.get('/api/my/tenants/:tenantId/rooms', (req, res) => {
+  res.json({ rooms: DEMO_DATA.roomMappings || {} });
+});
+
+/* ── Demo rooms PUT (for Room Mapper save) ── */
+app.put('/api/my/tenants/:tenantId/rooms', express.json(), (req, res) => {
+  const { roomMappings } = req.body || {};
+  if (roomMappings && typeof roomMappings === 'object') {
+    DEMO_DATA.roomMappings = roomMappings;
+  }
+  res.json({ ok: true, rooms: DEMO_DATA.roomMappings });
 });
 
 /* ══════════════════════════════════════════
