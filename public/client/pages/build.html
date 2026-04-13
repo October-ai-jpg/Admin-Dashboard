@@ -41,6 +41,7 @@
   <div class="nav-item">
     <a class="nav-trigger active" id="navBuild">Build <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
     <div class="nav-dropdown">
+      <a data-href="{BASE}/build#agent-name">Name your agent</a>
       <a data-href="{BASE}/build#vertical">Choose vertical</a>
       <a data-href="{BASE}/build#spaces">Map your spaces</a>
       <a data-href="{BASE}/build#floorplan">Floor plan</a>
@@ -166,6 +167,25 @@
     <h1 class="hero-heading">Configure your agent.</h1>
     <p class="hero-sub">Set up your vertical, map spaces, add knowledge, and set your conversion URL.</p>
   </div>
+
+  <!-- AGENT NAME -->
+  <div id="agent-name">
+    <div class="section-label">YOUR AGENT
+      <span class="help-tip">?<span class="help-bubble">Give your agent a name. This is how it will appear to visitors and on your dashboard. You can change this at any time.</span></span>
+    </div>
+    <h2 class="section-heading">Name your agent.</h2>
+    <p class="section-sub">This is the name visitors will see when they interact with your AI agent.</p>
+
+    <div style="max-width:500px;margin:0 auto">
+      <div class="field-group">
+        <input type="text" id="agentNameInput" placeholder="e.g. Harbour View Hotel" style="text-align:center">
+      </div>
+      <div style="text-align:center"><button class="btn" onclick="saveAgentName()">Save</button></div>
+      <div id="agentNameStatus" style="text-align:center;margin-top:12px;font-size:13px;color:var(--success);display:none"></div>
+    </div>
+  </div>
+
+  <hr class="divider">
 
   <!-- VERTICAL -->
   <div id="vertical">
@@ -377,6 +397,9 @@
     document.getElementById('pageContent').style.display = 'block';
     renderAgentSwitcher();
 
+    /* Agent name */
+    document.getElementById('agentNameInput').value = data.agentName || '';
+
     /* Set active vertical */
     var v = data.vertical || '';
     if (v) {
@@ -426,6 +449,28 @@
     else if (pct < 60) fill.style.background = 'var(--warning)';
     else fill.style.background = 'var(--success)';
   }
+
+  /* ── Agent name ── */
+  window.saveAgentName = async function() {
+    var name = document.getElementById('agentNameInput').value.trim();
+    if (!name) { showToast('Enter a name for your agent', true); return; }
+    try {
+      await updateTenant({ agentName: name, propertyName: name });
+      /* Update local state so agent switcher reflects the change */
+      if (ALL_TENANTS.length > 0) ALL_TENANTS[0].name = name;
+      renderAgentSwitcher();
+      var status = document.getElementById('agentNameStatus');
+      status.textContent = 'Saved as "' + name + '"';
+      status.style.display = 'block';
+      setTimeout(function() { status.style.display = 'none'; }, 3000);
+      showToast('Agent name saved');
+    } catch(e) { showToast('Error saving name', true); }
+  };
+
+  /* Enter to save agent name */
+  document.getElementById('agentNameInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') saveAgentName();
+  });
 
   /* ── Vertical ── */
   window.selectVertical = async function(v, el) {
