@@ -40,7 +40,7 @@
   <div class="nav-item">
     <a class="nav-trigger" id="navBuild">Build <svg class="nav-arrow" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l3 3 3-3"/></svg></a>
     <div class="nav-dropdown">
-      <a data-href="{BASE}/build#agent-name">Name your agent</a>
+      <a data-href="{BASE}/build#save-agent">Save agent</a>
       <a data-href="{BASE}/build#vertical">Choose vertical</a>
       <a data-href="{BASE}/build#spaces">Map your spaces</a>
       <a data-href="{BASE}/build#floorplan">Floor plan</a>
@@ -133,7 +133,7 @@
     if (!hasAgent) {
       grid.innerHTML = '<div class="empty-agents">'
         + '<p>You haven\'t created an agent yet. Head over to Build to name your agent, add your data, and get started.</p>'
-        + '<a href="' + BASE + '/build#agent-name" class="btn">Build your first agent</a>'
+        + '<a href="' + BASE + '/build" class="btn">Build your first agent</a>'
         + '</div>';
       return;
     }
