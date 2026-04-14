@@ -282,6 +282,12 @@ module.exports = function(pool) {
       return ts + (t.role || 'unknown') + ': ' + (t.text || t.content || '');
     }).join('\n');
 
+    // Count guest vs agent messages for evaluation context
+    var guestMessages = transcript.filter(function(t) { return t.role === 'user' || t.role === 'guest'; });
+    var agentMessages = transcript.filter(function(t) { return t.role === 'assistant' || t.role === 'agent'; });
+    var guestMessageCount = guestMessages.length;
+    var agentMessageCount = agentMessages.length;
+
     var latencyLog = session.latency_log || [];
     var latencyText = latencyLog.map(function(l, i) {
       return 'Turn ' + (i+1) + ': total=' + (l.total_ms || l.latency && l.latency.total_ms || '?') + 'ms';
@@ -295,21 +301,48 @@ module.exports = function(pool) {
     });
     var warningsText = warningsArr.length > 0 ? warningsArr.join('\n') : 'None';
 
-    var systemPrompt = 'You are a strict expert evaluator of AI voice agents designed to act as virtual employees in Matterport 3D tours. Your job is to evaluate conversations critically and honestly.\n\n' +
+    // Build critical context warnings for GPT
+    var criticalWarnings = [];
+    if (guestMessageCount === 0) {
+      criticalWarnings.push('*** CRITICAL: ZERO GUEST MESSAGES — The guest never spoke. This session FAILED completely. ALL scores must be 0-1. ***');
+    } else if (guestMessageCount <= 2) {
+      criticalWarnings.push('*** WARNING: Only ' + guestMessageCount + ' guest message(s). Very minimal interaction. Maximum overall score: 3. ***');
+    }
+    if ((session.duration_seconds || 0) < 30 && guestMessageCount === 0) {
+      criticalWarnings.push('*** CRITICAL: Session under 30 seconds with no guest interaction. Automatic 0-1 overall. ***');
+    }
+    if (session.manual_note) {
+      criticalWarnings.push('TESTER NOTE: ' + session.manual_note);
+    }
+    var criticalWarningsText = criticalWarnings.length > 0 ? '\n\n' + criticalWarnings.join('\n') : '';
+
+    var systemPrompt = 'You are an extremely strict expert evaluator of AI voice agents designed to act as virtual employees in Matterport 3D tours. Your job is to evaluate conversations critically and honestly. You are known for being harsh but fair.\n\n' +
       'The agent should behave like a warm, knowledgeable human employee \u2014 not like a chatbot or assistant. It should:\n' +
       '- Ask one question at a time\n- React to what the visitor says before moving on\n- Navigate the tour naturally\n- Never use corporate filler phrases\n- Move conversations towards booking\n- Sound completely natural\n\n' +
-      'Be strict. A score of 8+ means the agent is genuinely ready for real customers. Do not give high scores for mediocre performance.';
+      'CRITICAL SCORING RULES:\n' +
+      '- If the transcript has 0 guest messages or only a greeting with no guest interaction: ALL scores MUST be 0-1, overall MUST be 0-1. There is nothing to evaluate \u2014 the session failed.\n' +
+      '- If the transcript has only 1-2 guest messages: maximum overall score is 3. The agent barely had a chance to demonstrate anything.\n' +
+      '- If the agent never navigated to any room despite having room mappings: navigation score MUST be 0-2.\n' +
+      '- If the agent never moved towards conversion: conversion_focus MUST be 0-2.\n' +
+      '- A score of 8+ means the agent performed EXCEPTIONALLY well on that criterion across multiple turns. This is rare.\n' +
+      '- A score of 5 means MEDIOCRE, not "average". Most sessions should score 3-6.\n' +
+      '- Be honest: would a real hotel/real estate company pay for this agent? If not, ready_for_customers MUST be false.\n' +
+      '- Duration under 30 seconds with no real conversation = automatic 0-1 overall.\n' +
+      '- Count the actual guest messages. If message_count is 0 or the transcript shows no real guest dialogue, this is a FAILED session.';
 
     var userPrompt = 'Evaluate this AI voice agent conversation.\n\n' +
       'VERTICAL: ' + (session.vertical || 'unknown') + '\n' +
       'MODEL: ' + (session.model || 'unknown') + '\n' +
       'TEMPERATURE: ' + (session.temperature || 'unknown') + '\n' +
       'DURATION: ' + (session.duration_seconds || 0) + ' seconds\n' +
-      'MESSAGE COUNT: ' + (session.message_count || 0) + '\n' +
+      'TOTAL MESSAGE COUNT: ' + (session.message_count || 0) + '\n' +
+      'GUEST MESSAGES: ' + guestMessageCount + '\n' +
+      'AGENT MESSAGES: ' + agentMessageCount + '\n' +
+      criticalWarningsText + '\n\n' +
       'LATENCY LOG:\n' + latencyText + '\n' +
       'AUTOMATIC WARNINGS:\n' + warningsText + '\n\n' +
       'FULL TRANSCRIPT:\n' + transcriptText + '\n\n' +
-      'Score each criterion 0-10 with a specific explanation. Be strict.\n\n' +
+      'Score each criterion 0-10 with a specific explanation. Be strict. Pay close attention to the GUEST MESSAGES count above — if it is 0, this is a failed session and all scores must reflect that.\n\n' +
       'CRITERION 1 \u2014 ONE QUESTION AT A TIME:\nDid the agent ask exactly one question per response throughout? Count multiple questions per response.\n0: Multiple questions every turn\n5: Multiple questions half the time\n8: Occasional double questions\n10: Perfectly one question every time\n\n' +
       'CRITERION 2 \u2014 REACTS TO GUEST INPUT:\nBefore moving on, did the agent acknowledge what the guest said? Does it reference what was just said or ignore it and move to next topic?\n0: Completely ignores guest input\n5: Sometimes acknowledges\n8: Usually acknowledges\n10: Always reacts naturally\n\n' +
       'CRITERION 3 \u2014 NAVIGATION QUALITY:\nWas navigation to the correct room? Triggered at the right moment? Did it feel natural or forced? No navigation despite mappings = score 3.\n0: Never navigated or always wrong\n5: Navigated but wrong timing/room\n8: Good with minor issues\n10: Perfect \u2014 right room, right moment\n\n' +
