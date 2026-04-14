@@ -3999,12 +3999,13 @@ function showTestSessionDetail(id) {
     html += '</div></div>';
 
     // Actions
-    html += '<div style="display:flex;gap:8px;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">';
+    html += '<div style="display:flex;gap:8px;margin-top:16px;padding-top:16px;border-top:1px solid var(--border);flex-wrap:wrap">';
     html += '<button class="btn btn-dark btn-sm" style="background:#16a34a" onclick="setTestStatus(\'' + s.id + '\',\'approved\')">Mark as ready</button>';
     html += '<button class="btn btn-dark btn-sm" style="background:#dc2626" onclick="setTestStatus(\'' + s.id + '\',\'flagged\')">Flag for fix</button>';
     if (!scores || Object.keys(scores).length === 0) {
       html += '<button class="btn btn-outline btn-sm" onclick="evaluateTestSession(\'' + s.id + '\')">Evaluate with GPT</button>';
     }
+    html += '<button class="btn btn-outline btn-sm" onclick="downloadTestSessionPDF()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="vertical-align:-2px;margin-right:4px"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Download PDF</button>';
     html += '<button class="btn btn-outline btn-sm" style="color:var(--muted)" onclick="deleteTestSession(\'' + s.id + '\')">Delete</button>';
     html += '</div>';
 
@@ -4064,6 +4065,275 @@ function deleteTestSession(id) {
     closeDetail('testDetail');
     loadTestHistory();
   });
+}
+
+/* ── Download Test Session as PDF ── */
+function downloadTestSessionPDF() {
+  if (!currentTestSession) { showToast('No session loaded', 'error'); return; }
+  var s = currentTestSession;
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  var pageW = doc.internal.pageSize.getWidth();
+  var pageH = doc.internal.pageSize.getHeight();
+  var margin = 16;
+  var contentW = pageW - margin * 2;
+  var y = margin;
+
+  function checkPage(needed) {
+    if (y + needed > pageH - 20) {
+      doc.addPage();
+      y = margin;
+    }
+  }
+
+  function sectionTitle(text) {
+    checkPage(14);
+    y += 4;
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(60, 60, 60);
+    doc.text(text.toUpperCase(), margin, y);
+    y += 2;
+    doc.setDrawColor(200, 200, 200);
+    doc.line(margin, y, pageW - margin, y);
+    y += 6;
+  }
+
+  function bodyText(text, opts) {
+    opts = opts || {};
+    doc.setFontSize(opts.size || 10);
+    doc.setFont('helvetica', opts.bold ? 'bold' : 'normal');
+    doc.setTextColor(opts.color || '#333333');
+    var lines = doc.splitTextToSize(text || '', contentW - (opts.indent || 0));
+    lines.forEach(function(line) {
+      checkPage(5);
+      doc.text(line, margin + (opts.indent || 0), y);
+      y += 4.5;
+    });
+  }
+
+  // ── Header ──
+  doc.setFontSize(18);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(17, 17, 17);
+  doc.text('October AI', margin, y);
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(120, 120, 120);
+  doc.text('Test Session Report', margin + 42, y);
+  y += 10;
+
+  // Date + vertical
+  var date = s.created_at ? new Date(s.created_at).toLocaleDateString('da-DK', { day:'2-digit', month:'long', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '-';
+  bodyText(date + '  |  ' + (s.vertical || 'Unknown vertical'), { size: 11, bold: true });
+  y += 2;
+
+  // Meta row
+  var metaParts = [];
+  if (s.model) metaParts.push('Model: ' + s.model);
+  if (s.temperature !== null && s.temperature !== undefined) metaParts.push('Temp: ' + s.temperature);
+  metaParts.push('Duration: ' + (s.duration_seconds || 0) + 's');
+  metaParts.push('Messages: ' + (s.message_count || 0));
+  bodyText(metaParts.join('   |   '), { size: 9, color: '#888888' });
+  y += 4;
+
+  // ── GPT Scores ──
+  var scores = s.gpt_scores || {};
+  var scoreKeys = Object.keys(scores);
+  if (scoreKeys.length > 0) {
+    var overall = calcOverall(scores);
+    sectionTitle('GPT Scores — Overall: ' + overall.toFixed(1) + '/10');
+
+    var scoreOrder = ['one_question','reacts_to_guest','navigation','natural_tone','qualifying','conversion_focus','response_quality','response_time','opening_quality','overall_impression'];
+    var tableBody = [];
+    scoreOrder.forEach(function(key) {
+      var sc = scores[key];
+      if (!sc) return;
+      tableBody.push([SCORE_LABELS[key] || key, sc.score + '/10', sc.explanation || '']);
+    });
+
+    doc.autoTable({
+      startY: y,
+      margin: { left: margin, right: margin },
+      head: [['Criterion', 'Score', 'Explanation']],
+      body: tableBody,
+      styles: { fontSize: 8.5, cellPadding: 3, lineColor: [220, 220, 220], lineWidth: 0.3, textColor: [50, 50, 50] },
+      headStyles: { fillColor: [245, 245, 240], textColor: [60, 60, 60], fontStyle: 'bold', fontSize: 8.5 },
+      columnStyles: { 0: { cellWidth: 38 }, 1: { cellWidth: 16, halign: 'center', fontStyle: 'bold' }, 2: { cellWidth: contentW - 54 } },
+      didParseCell: function(data) {
+        if (data.section === 'body' && data.column.index === 1) {
+          var val = parseInt(data.cell.raw);
+          if (val <= 5) data.cell.styles.textColor = [220, 38, 38];
+          else if (val <= 7) data.cell.styles.textColor = [217, 119, 6];
+          else data.cell.styles.textColor = [22, 163, 74];
+        }
+      }
+    });
+    y = doc.lastAutoTable.finalY + 6;
+  }
+
+  // ── Ready status ──
+  if (s.gpt_ready_for_customers !== null && s.gpt_ready_for_customers !== undefined) {
+    checkPage(14);
+    var readyLabel = s.gpt_ready_for_customers ? 'READY FOR CUSTOMERS' : 'NOT READY FOR CUSTOMERS';
+    var readyColor = s.gpt_ready_for_customers ? '#16a34a' : '#dc2626';
+    bodyText(readyLabel, { size: 11, bold: true, color: readyColor });
+    if (s.gpt_ready_explanation) {
+      bodyText(s.gpt_ready_explanation, { size: 9, color: '#666666', indent: 0 });
+    }
+    y += 4;
+  }
+
+  // ── GPT Flags ──
+  var flags = s.gpt_flags || [];
+  if (flags.length > 0) {
+    sectionTitle('GPT Flags');
+    flags.forEach(function(f) {
+      var prefix = (f.severity || 'minor').toUpperCase();
+      bodyText(prefix + ': ' + (f.issue || ''), { size: 9 });
+    });
+    y += 2;
+  }
+
+  // ── Automatic Warnings ──
+  var latencyLog = s.latency_log || [];
+  var allWarnings = [];
+  latencyLog.forEach(function(turn) {
+    if (turn.warnings && turn.warnings.length > 0) {
+      turn.warnings.forEach(function(w) { allWarnings.push(w); });
+    }
+  });
+  if (allWarnings.length > 0) {
+    sectionTitle('Automatic Warnings');
+    allWarnings.forEach(function(w) {
+      bodyText((w.type || '') + ': ' + (w.detail || w.message || ''), { size: 9, color: '#d97706' });
+    });
+    y += 2;
+  }
+
+  // ── GPT Summary ──
+  if (s.gpt_summary) {
+    sectionTitle('GPT Summary');
+    bodyText(s.gpt_summary, { size: 10 });
+    y += 2;
+  }
+
+  // ── Biggest Problem ──
+  if (s.gpt_biggest_problem) {
+    sectionTitle('Biggest Problem');
+    bodyText(s.gpt_biggest_problem, { size: 10, color: '#d97706' });
+    y += 2;
+  }
+
+  // ── Transcript ──
+  var transcript = s.transcript || [];
+  if (transcript.length > 0) {
+    sectionTitle('Transcript (' + transcript.length + ' messages)');
+    transcript.forEach(function(msg, idx) {
+      var role = (msg.role || 'user').toUpperCase();
+      var text = msg.text || msg.content || '';
+      var turnData = latencyLog[idx] || {};
+      var totalMs = turnData.total_ms || (turnData.latency && turnData.latency.total_ms) || 0;
+
+      checkPage(12);
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(role === 'USER' || role === 'GUEST' ? '#3b82f6' : '#8B6F4E');
+      doc.text('[' + role + ']', margin, y);
+      if (totalMs) {
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(170, 170, 170);
+        doc.text(totalMs + 'ms', pageW - margin - 12, y);
+      }
+      y += 4;
+
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(50, 50, 50);
+      var lines = doc.splitTextToSize(text, contentW - 4);
+      lines.forEach(function(line) {
+        checkPage(4.5);
+        doc.text(line, margin + 2, y);
+        y += 4;
+      });
+      y += 2;
+    });
+  }
+
+  // ── Latency Table ──
+  if (latencyLog.length > 0) {
+    sectionTitle('Latency per Turn');
+    var latencyBody = [];
+    latencyLog.forEach(function(t, i) {
+      var ms = t.total_ms || (t.latency && t.latency.total_ms) || 0;
+      var stt = t.stt_ms || (t.latency && t.latency.stt_ms) || 0;
+      var llm = t.llm_ms || (t.latency && t.latency.llm_ms) || 0;
+      var tts = t.tts_ms || (t.latency && t.latency.tts_ms) || 0;
+      latencyBody.push(['Turn ' + (i + 1), ms + 'ms', stt + 'ms', llm + 'ms', tts + 'ms']);
+    });
+    doc.autoTable({
+      startY: y,
+      margin: { left: margin, right: margin },
+      head: [['Turn', 'Total', 'STT', 'LLM', 'TTS']],
+      body: latencyBody,
+      styles: { fontSize: 8, cellPadding: 2.5, lineColor: [220, 220, 220], lineWidth: 0.3, textColor: [50, 50, 50] },
+      headStyles: { fillColor: [245, 245, 240], textColor: [60, 60, 60], fontStyle: 'bold', fontSize: 8 },
+      columnStyles: { 0: { cellWidth: 20 } },
+      didParseCell: function(data) {
+        if (data.section === 'body' && data.column.index === 1) {
+          var ms = parseInt(data.cell.raw);
+          if (ms > 3000) data.cell.styles.textColor = [220, 38, 38];
+          else if (ms > 2000) data.cell.styles.textColor = [217, 119, 6];
+          else data.cell.styles.textColor = [22, 163, 74];
+        }
+      }
+    });
+    y = doc.lastAutoTable.finalY + 6;
+  }
+
+  // ── Manual Notes ──
+  if (s.manual_note) {
+    sectionTitle('Tester Notes');
+    bodyText(s.manual_note, { size: 10 });
+    y += 2;
+  }
+
+  // ── Rating ──
+  if (s.manual_rating) {
+    checkPage(8);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(139, 111, 78);
+    doc.text('Manual rating: ' + s.manual_rating + '/5', margin, y);
+    y += 5;
+  }
+
+  // ── Tags ──
+  var tags = s.manual_tags || [];
+  if (tags.length > 0) {
+    checkPage(8);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(100, 100, 100);
+    doc.text('Tags: ' + tags.join(', '), margin, y);
+    y += 5;
+  }
+
+  // ── Footer ──
+  var pageCount = doc.internal.getNumberOfPages();
+  for (var p = 1; p <= pageCount; p++) {
+    doc.setPage(p);
+    doc.setFontSize(7);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(180, 180, 180);
+    doc.text('October AI — Test Session Report — Page ' + p + '/' + pageCount, margin, pageH - 8);
+    doc.text('Generated ' + new Date().toLocaleDateString('da-DK', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }), pageW - margin - 50, pageH - 8);
+  }
+
+  // Save
+  var filename = 'test-session_' + (s.vertical || 'unknown') + '_' + (s.created_at ? new Date(s.created_at).toISOString().slice(0, 10) : 'undated') + '.pdf';
+  doc.save(filename);
+  showToast('PDF downloaded', 'success');
 }
 
 function generateFixReport() {
