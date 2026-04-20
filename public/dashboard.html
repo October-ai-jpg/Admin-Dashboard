@@ -51,6 +51,10 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
     <span>System Health</span>
   </a>
+  <a class="sidebar-link" data-page="scalability-audit">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/><line x1="9" y1="9" x2="11" y2="9"/></svg>
+    <span>Scalability Audit</span>
+  </a>
 
   <div class="sidebar-section-label">Agent Builder</div>
   <a class="sidebar-link" data-page="default-system">
@@ -113,6 +117,280 @@
   <div class="page-container" id="page-affiliates"></div>
   <div class="page-container" id="page-revenue"></div>
   <div class="page-container" id="page-health"></div>
+
+  <!-- ═══ SCALABILITY AUDIT (static reference page) ═══ -->
+  <div class="page-container" id="page-scalability-audit">
+    <style>
+      #page-scalability-audit .audit-page{max-width:920px}
+      #page-scalability-audit .audit-meta{color:var(--muted);font-size:13px;margin-bottom:36px}
+      #page-scalability-audit h2{font-family:var(--serif);font-size:26px;font-weight:400;letter-spacing:-0.01em;margin:36px 0 12px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+      #page-scalability-audit h3{font-size:14px;font-weight:600;margin:20px 0 8px;color:var(--black);letter-spacing:0.02em;text-transform:uppercase;font-size:12px}
+      #page-scalability-audit p{font-size:14px;line-height:1.65;color:var(--black);margin:0 0 14px}
+      #page-scalability-audit ul{margin:0 0 18px;padding-left:24px}
+      #page-scalability-audit li{font-size:14px;line-height:1.75;color:var(--black);margin-bottom:4px}
+      #page-scalability-audit ol{margin:0 0 18px;padding-left:24px}
+      #page-scalability-audit ol li{font-size:14px;line-height:1.75;color:var(--black);margin-bottom:6px}
+      #page-scalability-audit table{width:100%;border-collapse:collapse;margin:10px 0 20px;font-size:13px;background:var(--white);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+      #page-scalability-audit th{text-align:left;padding:10px 14px;background:var(--cream-dark);color:var(--muted);font-weight:600;border-bottom:1px solid var(--border);font-size:12px;letter-spacing:0.04em;text-transform:uppercase}
+      #page-scalability-audit td{padding:11px 14px;border-bottom:1px solid var(--border);color:var(--black);vertical-align:top;line-height:1.55}
+      #page-scalability-audit td:last-child, #page-scalability-audit th:last-child{border-right:0}
+      #page-scalability-audit tr:last-child td{border-bottom:0}
+      #page-scalability-audit code{background:var(--cream-dark);border:1px solid var(--border);border-radius:4px;padding:1px 6px;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--black)}
+      #page-scalability-audit .callout{background:var(--white);border:1px solid var(--border);border-left:3px solid var(--orange);padding:14px 18px;border-radius:6px;margin:14px 0 20px;color:var(--black);font-size:13px;line-height:1.65}
+      #page-scalability-audit .pill{display:inline-block;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:600;margin-right:8px;letter-spacing:0.02em}
+      #page-scalability-audit .pill-ok{background:rgba(45,138,78,0.12);color:var(--green)}
+      #page-scalability-audit .pill-warn{background:rgba(230,126,34,0.14);color:var(--orange)}
+      #page-scalability-audit .pill-bad{background:rgba(192,57,43,0.12);color:var(--red)}
+      #page-scalability-audit .toc{background:var(--white);border:1px solid var(--border);border-radius:8px;padding:16px 20px;margin-bottom:32px}
+      #page-scalability-audit .toc strong{font-size:11px;color:var(--muted);display:block;margin-bottom:10px;letter-spacing:0.08em;text-transform:uppercase}
+      #page-scalability-audit .toc ol{margin:0;padding-left:22px;columns:2;column-gap:32px}
+      #page-scalability-audit .toc li{font-size:13px;line-height:1.8;margin-bottom:2px}
+      #page-scalability-audit .toc a{color:var(--black);text-decoration:none}
+      #page-scalability-audit .toc a:hover{color:var(--orange)}
+      #page-scalability-audit .ok{color:var(--green)}
+      #page-scalability-audit .warn{color:var(--orange)}
+      #page-scalability-audit .bad{color:var(--red)}
+    </style>
+
+    <div class="audit-page">
+      <div class="page-label">MONITORING</div>
+      <h1 class="page-heading">Scalability Audit</h1>
+      <div class="audit-meta">Performed 2026-04-20 · Single Node process on one VM, Postgres 20-conn pool · Reference snapshot of the system at this point in time.</div>
+
+      <div class="toc">
+        <strong>Contents</strong>
+        <ol>
+          <li><a href="#sa-summary">Executive summary</a></li>
+          <li><a href="#sa-compute">Compute model</a></li>
+          <li><a href="#sa-database">Database</a></li>
+          <li><a href="#sa-ws">WebSocket capacity gates</a></li>
+          <li><a href="#sa-apis">External APIs &amp; cost</a></li>
+          <li><a href="#sa-static">Static assets / CDN</a></li>
+          <li><a href="#sa-rate">HTTP rate limits</a></li>
+          <li><a href="#sa-mem">Memory / leaks</a></li>
+          <li><a href="#sa-obs">Observability</a></li>
+          <li><a href="#sa-deploy">Deployment / backup</a></li>
+          <li><a href="#sa-sec">Security at scale</a></li>
+          <li><a href="#sa-actions">Priority actions</a></li>
+          <li><a href="#sa-good">What's already good</a></li>
+        </ol>
+      </div>
+
+      <h2 id="sa-summary">Executive summary</h2>
+      <p><strong>Current architecture ceiling:</strong> single Node.js process on one VM, backed by a single Postgres with a 20-connection pool. Practical concurrent capacity estimated:</p>
+      <ul>
+        <li><strong>Voice sessions:</strong> ~150–300 simultaneous before performance degrades</li>
+        <li><strong>HTTP / portal traffic:</strong> several thousand concurrent users is fine — these are HTTP-only and cheap</li>
+      </ul>
+      <p>To serve real "hundreds-thousands of users" the system is <strong>not blocked by a code rewrite</strong>. The bottlenecks are operational: (1) no horizontal scaling wiring, (2) single-point DB, (3) external API rate limits + cost, (4) no CDN, (5) no metrics. Each is addressable incrementally.</p>
+
+      <h2 id="sa-compute">1. Compute model — biggest risk</h2>
+      <h3>What's there today</h3>
+      <ul>
+        <li><code>server.js</code> runs as a single Node process. No clustering, no PM2, no worker threads.</li>
+        <li>Voice pipeline runs in the same process as the HTTP API and WebSocket server.</li>
+        <li>Every WS connection runs STT → LLM → TTS on the same event loop.</li>
+      </ul>
+      <h3>Why it matters</h3>
+      <ul>
+        <li>A single Node process tops out at ~1000 idle WS connections, but ~100–300 active voice sessions (each holds buffers, timers, hits 3 external APIs per turn).</li>
+        <li>One slow GPT call blocks nothing (async), but one CPU-bound op (scraping, PDF parsing, image upload) pauses the entire event loop — affecting every other user.</li>
+      </ul>
+      <h3>Headroom before action needed</h3>
+      <table>
+        <tr><th>Concurrent voice sessions</th><th>Status</th></tr>
+        <tr><td>Up to 100</td><td><span class="pill pill-ok">FINE</span> on one box</td></tr>
+        <tr><td>100–300</td><td><span class="pill pill-warn">JITTER</span> noticeable latency, still functional</td></tr>
+        <tr><td>300+</td><td><span class="pill pill-bad">PROBLEMS</span> action required</td></tr>
+      </table>
+      <h3>What to do</h3>
+      <ol>
+        <li>Enable Node clustering (<code>cluster</code> module or PM2) — ~30 lines, gives N-core parallelism on same VM</li>
+        <li>Move scraper + PDF parsing to a separate worker process (isolates CPU-heavy work from voice hot path)</li>
+        <li>Separate WS service from HTTP service onto different VMs at ~500 concurrent sessions</li>
+      </ol>
+
+      <h2 id="sa-database">2. Database — biggest silent risk</h2>
+      <h3>What's there today</h3>
+      <ul>
+        <li><code>pg</code> pool with <code>max: 20</code> connections (<code>db/index.js:11</code>)</li>
+        <li>28 migration files, many indexes already in place (26 <code>CREATE INDEX</code> lines)</li>
+        <li>Zero transaction usage outside Stripe webhooks (no <code>BEGIN</code>/<code>COMMIT</code>/<code>ROLLBACK</code>)</li>
+        <li>Single Postgres instance, no read replicas</li>
+      </ul>
+      <h3>Why it matters</h3>
+      <ul>
+        <li>20 connections is plenty for ~1000 concurrent HTTP users. But the pool gets exhausted fast if a handful of queries hang.</li>
+        <li>Zero transactions = race-condition risk in: voice-minute increments, concurrent subscription upsize+downsize, affiliate commission creation, pause/reactivate toggles.</li>
+        <li>No read replica = analytics queries compete with production writes.</li>
+      </ul>
+      <h3>What to do</h3>
+      <ol>
+        <li>Wrap <code>billing.js</code> webhook handlers in transactions + idempotency keys</li>
+        <li>Wrap voice-minute UPDATEs in atomic statements (<code>SET minutes_used = minutes_used + Y</code>)</li>
+        <li>Add a read replica + route analytics endpoints to it</li>
+        <li>Bump pool <code>max</code> to 40–60 once clustering is added</li>
+      </ol>
+
+      <h2 id="sa-ws">3. WebSocket capacity gates — already in place</h2>
+      <p>From <code>middleware/wsCapacity.js</code>:</p>
+      <ul>
+        <li><code>IP_NEW_CONN_PER_MIN = 30</code></li>
+        <li><code>TENANT_CONCURRENT_CAP = 100</code></li>
+        <li><code>IP_TENANT_CONCURRENT_CAP = 3</code></li>
+        <li><code>IP_DAILY_MINUTES_CAP = 120</code></li>
+      </ul>
+      <div class="callout"><span class="ok">✓ Verdict:</span> well-designed and hardens against abuse + runaway costs. Per-tenant cap of 100 is a sane ceiling.</div>
+
+      <h2 id="sa-apis">4. External APIs — your real scalability constraint</h2>
+      <h3>What's there today</h3>
+      <ul>
+        <li>Every voice turn hits Deepgram (STT) + OpenAI (LLM) + Cartesia (TTS) in sequence</li>
+        <li>No caching, no batching — every turn is fresh API calls</li>
+        <li>Sentry configured with <code>tracesSampleRate: 0.1</code> (10% — good)</li>
+      </ul>
+      <h3>Per-user cost at scale (rough)</h3>
+      <table>
+        <tr><th>Provider</th><th>Approx cost</th></tr>
+        <tr><td>Deepgram Nova-2 STT</td><td>~$0.0043 / min audio</td></tr>
+        <tr><td>OpenAI GPT-4o-mini</td><td>~$0.001–$0.003 / turn (prompt is ~35K chars)</td></tr>
+        <tr><td>Cartesia Sonic-2 TTS</td><td>~$0.02–$0.05 / min audio produced</td></tr>
+        <tr><td><strong>Total per minute of conversation</strong></td><td><strong>~$0.03 – $0.10</strong></td></tr>
+      </table>
+      <h3>Rate limits to watch</h3>
+      <ul>
+        <li>OpenAI: per-account RPM (~10K RPM for gpt-4o-mini tier 2). Fine until thousands of concurrent sessions.</li>
+        <li>Deepgram / Cartesia: streaming concurrency limits. These are real ceilings.</li>
+      </ul>
+      <h3>What to do</h3>
+      <ol>
+        <li>Monitor per-provider spend + rate-limit errors weekly</li>
+        <li>Trim conversation history smarter (currently sends last 16 turns regardless)</li>
+        <li>Cache compiled context (<code>tenants.compiled_context</code>) — already done <span class="ok">✓</span></li>
+        <li>Consider a fallback model if primary fails</li>
+      </ol>
+
+      <h2 id="sa-static">5. Static assets / CDN</h2>
+      <h3>What's there today</h3>
+      <ul>
+        <li><code>express.static</code> serving <code>/css</code>, <code>/js</code>, <code>/images</code>, <code>/client/js</code></li>
+        <li><code>Cache-Control: no-cache</code> on <code>/client/js/*</code> (correct for dynamic JS)</li>
+        <li>No CDN in front of the app</li>
+        <li>No gzip / brotli middleware</li>
+        <li>No image optimization</li>
+      </ul>
+      <p><span class="warn">Verdict:</span> every static asset request hits the Node box. Fine for 1000 users — not fine for 100K.</p>
+      <h3>Cheap wins</h3>
+      <ol>
+        <li>Cloudflare (free plan) in front → auto CDN + DDoS + cache</li>
+        <li><code>compression</code> middleware → reduces payload sizes 60–80%</li>
+        <li>Optimize images in <code>/public/images</code> (some are likely multi-MB)</li>
+      </ol>
+
+      <h2 id="sa-rate">6. HTTP rate limits</h2>
+      <p>From <code>middleware/rateLimit.js</code>:</p>
+      <ul>
+        <li>auth: 10 / 15min · signup: 5 / hour · api: 100 / min · scrape: 3 / 10min</li>
+        <li>tour-api: 60 / min · client-portal: 60 / min · affiliate: 60 / min</li>
+      </ul>
+      <p><span class="warn">Issue:</span> in-memory limiter = breaks with clustering. A user's 10 auth requests could hit 10 different workers and bypass the limit.</p>
+      <h3>What to do</h3>
+      <ol>
+        <li>Move to Redis-backed rate limiting (<code>rate-limit-redis</code>) when clustering is added</li>
+      </ol>
+
+      <h2 id="sa-mem">7. Memory / leaks</h2>
+      <ul>
+        <li>Puppeteer pool restarts browser after <code>MAX_PAGES_BEFORE_RESTART = 50</code> (good — prevents leaks)</li>
+        <li>No explicit session cleanup code visible — relies on WS close events</li>
+        <li>Conversation history stored per-session in memory (not in DB for every turn)</li>
+      </ul>
+      <h3>What to do</h3>
+      <ol>
+        <li>Add a monitoring dashboard with process RSS memory — alert if climbing steadily without session count rising</li>
+      </ol>
+
+      <h2 id="sa-obs">8. Observability — thin</h2>
+      <ul>
+        <li>Sentry initialized <span class="ok">✓</span> (good for errors)</li>
+        <li>Abundant <code>console.log</code> / <code>console.error</code> (good for tracing, overwhelming at scale)</li>
+        <li>No metrics system (no Prometheus, no Datadog, no StatsD)</li>
+        <li>No structured logging, no distributed tracing</li>
+      </ul>
+      <h3>What to do</h3>
+      <ol>
+        <li>Add a basic metrics dashboard (Grafana Cloud or OTel + Honeycomb free tier)</li>
+        <li>Track: voice session count, per-provider latency, DB query time p50/p95/p99, error rate, cost per session</li>
+      </ol>
+
+      <h2 id="sa-deploy">9. Deployment / backup</h2>
+      <ul>
+        <li><code>Backup Scheduler started (daily)</code> — but content + restore procedure unverified</li>
+        <li><code>KeepWarm</code> pinger every 4 min — implies serverless-adjacent host that sleeps idle processes</li>
+      </ul>
+      <h3>What to do</h3>
+      <ol>
+        <li>Verify daily backup actually works and test a restore once</li>
+        <li>Document the restore procedure</li>
+        <li>Add a staging environment (separate DB) if not already</li>
+      </ol>
+
+      <h2 id="sa-sec">10. Security at scale</h2>
+      <ul>
+        <li><span class="ok">✓</span> JWT auth middleware</li>
+        <li><span class="ok">✓</span> Rate limiting</li>
+        <li><span class="ok">✓</span> Stripe webhook signature verification</li>
+        <li><span class="ok">✓</span> <code>express.json({ limit: "15mb" })</code> body size capped</li>
+        <li><span class="ok">✓</span> WS abuse gates</li>
+        <li><span class="bad">✗</span> No <code>helmet</code> middleware (no HSTS, no CSP, no X-Frame-Options)</li>
+        <li><span class="warn">!</span> Cookie-based session auth = some endpoints exposed to CSRF</li>
+        <li><span class="ok">✓</span> SQL injection: all queries use parameterized <code>$1, $2</code></li>
+      </ul>
+      <h3>What to do</h3>
+      <ol>
+        <li>Add <code>helmet</code> middleware — 2 lines, big security hygiene win</li>
+        <li>CSRF protection for cookie-auth POST endpoints</li>
+      </ol>
+
+      <h2 id="sa-actions">Priority actions</h2>
+      <h3>For &lt;100 users today → 1,000 users in 3–6 months</h3>
+      <ol>
+        <li><strong>Cloudflare in front</strong> (1 hour, free) — CDN + DDoS</li>
+        <li><strong>Add <code>helmet</code> + <code>compression</code></strong> middleware (20 min)</li>
+        <li><strong>Enable Node clustering</strong> + switch rate limiter to Redis (1 day)</li>
+        <li><strong>Verify backups + test restore</strong> (2 hours)</li>
+        <li><strong>Wrap billing webhooks in transactions</strong> with idempotency (½ day)</li>
+        <li><strong>Add a basic metrics dashboard</strong> (½ day)</li>
+      </ol>
+      <h3>For 10,000+ users</h3>
+      <ol start="7">
+        <li>Separate voice WS service from HTTP service</li>
+        <li>Postgres read replica</li>
+        <li>Move scraper to a dedicated worker</li>
+        <li>Move puppeteer to a queue-based system (BullMQ + Redis)</li>
+        <li>Move to proper Kubernetes / autoscaling group</li>
+      </ol>
+
+      <h2 id="sa-good">What the system does well already</h2>
+      <ul>
+        <li><span class="pill pill-ok">OK</span> Clean middleware layering</li>
+        <li><span class="pill pill-ok">OK</span> Rate limiting at every sensitive endpoint</li>
+        <li><span class="pill pill-ok">OK</span> WS abuse protection (tenant caps, IP caps, daily minute caps)</li>
+        <li><span class="pill pill-ok">OK</span> Puppeteer memory-leak protection via restart threshold</li>
+        <li><span class="pill pill-ok">OK</span> Parameterized SQL everywhere (no injection risk)</li>
+        <li><span class="pill pill-ok">OK</span> Stripe webhook signature verification</li>
+        <li><span class="pill pill-ok">OK</span> Sentry already wired</li>
+        <li><span class="pill pill-ok">OK</span> Per-tenant volume pricing capacity gates</li>
+        <li><span class="pill pill-ok">OK</span> 28 migrations cleanly tracked</li>
+        <li><span class="pill pill-ok">OK</span> Admin-role bypass + <code>DISABLE_AGENT_CAP</code> env var for flexibility</li>
+      </ul>
+
+      <div class="callout">
+        <strong>Bottom line:</strong> the system is in surprisingly good shape for a solo-built platform. The ceiling is lower than it needs to be because of <strong>operational</strong> gaps (no clustering, no CDN, no metrics) — not <strong>architectural</strong> ones. None of this requires a rewrite — it's a 1–2 week hardening pass when justified by paying customers.
+      </div>
+    </div>
+  </div>
+
   <div class="page-container" id="page-default-system"></div>
   <div class="page-container" id="page-sandbox"></div>
   <div class="page-container" id="page-sdk-sandbox"></div>
