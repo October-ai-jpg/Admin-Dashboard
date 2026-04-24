@@ -51,11 +51,10 @@ app.get('/embed.js', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'kunde', 'embed.js'));
 });
 
-/* Auth middleware — check ADMIN_SECRET */
+/* Auth middleware — open access (login requirement removed per owner).
+   Kept as a pass-through so existing route wiring doesn't need rewrites. */
 function requireAuth(req, res, next) {
-  const token = req.headers['x-admin-token'] || req.query.token;
-  if (token === ADMIN_SECRET) return next();
-  res.status(401).json({ error: 'Unauthorized' });
+  return next();
 }
 
 /* ══════════════════════════════════════════
@@ -828,7 +827,8 @@ app.get('/tour/:id', (req, res) => {
    ══════════════════════════════════════════ */
 app.get('/test-history', (req, res) => res.sendFile(path.join(__dirname, 'public', 'testing', 'history.html')));
 app.get('/test-protocol', (req, res) => res.sendFile(path.join(__dirname, 'public', 'testing', 'protocol.html')));
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+// Root → dashboard directly (login removed per owner)
+app.get('/', (req, res) => res.redirect('/dashboard'));
 app.get('/dashboard', (req, res) => res.sendFile(path.join(__dirname, 'public', 'dashboard.html')));
 app.get('/dashboard/*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'dashboard.html')));
 

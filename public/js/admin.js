@@ -2,8 +2,9 @@
    OCTOBER AI — ADMIN DASHBOARD JS
    ═══════════════════════════════════════════════ */
 
-var TOKEN = localStorage.getItem('october_admin_token');
-if (!TOKEN) window.location.href = '/';
+// Login removed — keep TOKEN for backwards-compat with existing fetch headers,
+// but never redirect away. Server ignores the header now anyway.
+var TOKEN = localStorage.getItem('october_admin_token') || 'open';
 
 var CURRENT_PAGE = 'overview';
 var REFRESH_INTERVAL = null;
@@ -13,16 +14,11 @@ var CHARTS = {};
 function api(url, opts) {
   opts = opts || {};
   opts.headers = Object.assign({ 'x-admin-token': TOKEN, 'Content-Type': 'application/json' }, opts.headers || {});
-  return fetch(url, opts).then(function(r) {
-    if (r.status === 401) { logout(); throw new Error('Unauthorized'); }
-    return r.json();
-  });
+  return fetch(url, opts).then(function(r) { return r.json(); });
 }
 
-function logout() {
-  localStorage.removeItem('october_admin_token');
-  window.location.href = '/';
-}
+// Logout is a no-op now (login removed), but kept so existing buttons don't crash.
+function logout() { /* noop — login removed */ }
 
 /* ── Sidebar navigation ── */
 document.querySelectorAll('.sidebar-link[data-page]').forEach(function(link) {
