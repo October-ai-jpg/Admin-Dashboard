@@ -743,5 +743,60 @@ module.exports = function(pool) {
     }
   });
 
+  /* ═══════════════════════════════════════
+     DELETE users — hard wipe. Guarded against
+     protected accounts (kontakt@eb-media.dk,
+     any admin role).
+     ═══════════════════════════════════════ */
+  router.post('/users/delete', async (req, res) => {
+    if (!pool) return res.status(503).json({ error: 'DB not connected' });
+    const ids = Array.isArray(req.body && req.body.userIds) ? req.body.userIds : null;
+    if (!ids || ids.length === 0) return res.status(400).json({ error: 'userIds[] required' });
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!ids.every(function(i) { return typeof i === 'string' && UUID.test(i); })) {
+      return res.status(400).json({ error: 'userIds must be valid UUIDs' });
+    }
+
+    const rowsRes = await query('SELECT id, email, role FROM users WHERE id = ANY($1)', [ids]);
+    const rows = rowsRes.rows || [];
+    const PROTECTED = new Set(['kontakt@eb-media.dk']);
+    const blocked = rows.filter(function(r) { return PROTECTED.has(r.email) || r.role === 'admin'; });
+    if (blocked.length) {
+      return res.status(403).json({
+        error: 'Refusing to delete protected account(s)',
+        protected: blocked.map(function(r) { return r.email; })
+      });
+    }
+
+    const deleted = [];
+    for (const r of rows) {
+      const uid = r.id;
+      try {
+        await query('DELETE FROM email_tokens WHERE user_id = $1', [uid]);
+        await query('DELETE FROM sessions WHERE user_id = $1', [uid]);
+        await query('DELETE FROM conversation_messages WHERE tenant_id IN (SELECT id FROM tenants WHERE user_id = $1)', [uid]);
+        await query('DELETE FROM conversion_events WHERE tenant_id IN (SELECT id FROM tenants WHERE user_id = $1)', [uid]);
+        await query('DELETE FROM conversations WHERE tenant_id IN (SELECT id FROM tenants WHERE user_id = $1)', [uid]);
+        await query('DELETE FROM data_gaps WHERE tenant_id IN (SELECT id FROM tenants WHERE user_id = $1)', [uid]);
+        await query('DELETE FROM voice_usage WHERE user_id = $1', [uid]);
+        await query('DELETE FROM monthly_usage WHERE user_id = $1', [uid]);
+        await query('DELETE FROM affiliate_commissions WHERE user_id = $1', [uid]);
+        await query('DELETE FROM followups WHERE user_id = $1', [uid]);
+        await query('DELETE FROM tenants WHERE user_id = $1', [uid]);
+        await query('DELETE FROM clients WHERE user_id = $1', [uid]);
+        await query('DELETE FROM users WHERE id = $1', [uid]);
+        deleted.push({ id: uid, email: r.email });
+      } catch (e) {
+        return res.status(500).json({ error: 'Failed on ' + r.email + ': ' + e.message, deleted: deleted });
+      }
+    }
+    res.json({
+      ok: true,
+      deleted: deleted,
+      requested: ids.length,
+      notFound: ids.filter(function(i) { return !rows.some(function(r) { return r.id === i; }); })
+    });
+  });
+
   return router;
 };
