@@ -47,10 +47,16 @@ function navigateTo(page) {
   if (container) { container.style.display = 'block'; }
   // Load page content
   loadPage(page);
-  // Clear auto-refresh
+  // Clear auto-refresh, then install page-specific interval.
+  // Signup-tracking pages (customers/agents/affiliates) auto-refresh every
+  // 30 min so new accounts surface without a manual F5. Overview stays 60s
+  // for the live counter; health stays 30s for the status indicator.
   if (REFRESH_INTERVAL) clearInterval(REFRESH_INTERVAL);
-  if (page === 'overview') REFRESH_INTERVAL = setInterval(function() { loadPage('overview'); }, 60000);
-  if (page === 'health') REFRESH_INTERVAL = setInterval(function() { loadPage('health'); }, 30000);
+  if (page === 'overview')   REFRESH_INTERVAL = setInterval(function() { loadPage('overview');   }, 60000);
+  if (page === 'health')     REFRESH_INTERVAL = setInterval(function() { loadPage('health');     }, 30000);
+  if (page === 'customers')  REFRESH_INTERVAL = setInterval(function() { loadPage('customers');  }, 30 * 60 * 1000);
+  if (page === 'agents')     REFRESH_INTERVAL = setInterval(function() { loadPage('agents');     }, 30 * 60 * 1000);
+  if (page === 'affiliates') REFRESH_INTERVAL = setInterval(function() { loadPage('affiliates'); }, 30 * 60 * 1000);
   // Handle hash-based navigation
   if (page !== 'overview') window.location.hash = page;
 }
