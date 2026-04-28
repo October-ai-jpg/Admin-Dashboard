@@ -364,7 +364,14 @@ module.exports = function(pool) {
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt }
         ],
-        temperature: 0.3,
+        // 2026-04-28 — was 0.3. Test-runner suite revealed scorer
+        // itself was stochastic: same transcript scored 0/10 navigation
+        // in 4 runs and 10/10 in 1 run, with ready_for_customers
+        // sometimes null. We need DETERMINISTIC scoring so we can
+        // distinguish agent inconsistency from scorer noise. temp=0
+        // + seed makes the same input → same output.
+        temperature: 0,
+        seed: 42,
         response_format: { type: 'json_object' }
       })
     });
@@ -376,6 +383,16 @@ module.exports = function(pool) {
 
     var evaluation;
     try { evaluation = JSON.parse(rawContent); } catch(e) { throw new Error('Failed to parse GPT response'); }
+    /* Defensive — if GPT ever returns ready_for_customers: null we want
+       to treat it as false explicitly (the field is BOOLEAN NOT NULL in
+       schema's intent even though column allows null). null → DB null
+       → UI shows "—" instead of "Not ready" which is misleading. */
+    if (evaluation.ready_for_customers !== true && evaluation.ready_for_customers !== false) {
+      evaluation.ready_for_customers = false;
+      if (!evaluation.ready_explanation) {
+        evaluation.ready_explanation = "Scorer did not return a definitive ready flag — defaulting to not ready.";
+      }
+    }
 
     // Store in DB
     await pool.query(
