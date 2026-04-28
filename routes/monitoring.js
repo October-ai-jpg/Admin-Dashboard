@@ -155,13 +155,13 @@ module.exports = function(pool) {
 
       const agents = await query(`
         SELECT t.id, t.name, t.agent_name, t.minutes_used_this_month, t.created_at, t.active,
-               cl.vertical,
+               cl.vertical, cl.data_score,
                COUNT(c.id) as conversation_count
         FROM tenants t
         LEFT JOIN clients cl ON cl.id = t.client_id
         LEFT JOIN conversations c ON c.tenant_id = t.id
         WHERE t.user_id = $1
-        GROUP BY t.id, cl.vertical
+        GROUP BY t.id, cl.vertical, cl.data_score
         ORDER BY t.created_at DESC
       `, [req.params.id]);
 
@@ -174,10 +174,56 @@ module.exports = function(pool) {
         ORDER BY c.created_at DESC LIMIT 50
       `, [req.params.id]);
 
+      /* 2026-04-28 — emails sent to this user, persisted by the platform's
+         services/email.js#_logEmailSend (migration v42 in eb-tour-agent).
+         Match by user_id when present, else fall back to to_addr matching
+         the user's email so logs predating v42 deploy still surface for
+         this user. Limit 50 — drawer is for at-a-glance, not full audit. */
+      const emails = await query(`
+        SELECT id, to_addr, subject, kind, status, resend_message_id, error, sent_at
+        FROM email_log
+        WHERE user_id = $1 OR to_addr = $2
+        ORDER BY sent_at DESC LIMIT 50
+      `, [req.params.id, user.rows[0].email]);
+
+      /* Last login proxy: most recent sessions row created. sessions are
+         created by /auth/login; created_at = login time. NULL if user
+         has never logged in (or session expired + cleaned). */
+      const lastLogin = await query(`
+        SELECT MAX(created_at) as last_login_at
+        FROM sessions WHERE user_id = $1
+      `, [req.params.id]);
+
+      /* Aggregate data_score across all agents for this user — single
+         "knowledge completeness" indicator for the dashboard. NULL if
+         user has no agents yet. */
+      const dataScore = await query(`
+        SELECT ROUND(AVG(cl.data_score)) as avg_data_score
+        FROM tenants t
+        LEFT JOIN clients cl ON cl.id = t.client_id
+        WHERE t.user_id = $1 AND cl.data_score IS NOT NULL
+      `, [req.params.id]);
+
       res.json({
         customer: user.rows[0],
         agents: agents.rows,
-        conversations: conversations.rows
+        conversations: conversations.rows,
+        emails: emails.rows,
+        status: {
+          email_verified: user.rows[0].email_verified || false,
+          plan: user.rows[0].plan || 'trial',
+          plan_active: user.rows[0].plan_active || false,
+          plan_expires_at: user.rows[0].plan_expires_at,
+          trial_ends_at: user.rows[0].trial_ends_at,
+          account_type: user.rows[0].account_type || 'provider',
+          agent_package: user.rows[0].agent_package || 'starter',
+          stripe_customer_id: user.rows[0].stripe_customer_id || null,
+          stripe_subscription_id: user.rows[0].stripe_subscription_id || null,
+          tenant_count: agents.rows.length,
+          last_login_at: lastLogin.rows[0]?.last_login_at || null,
+          avg_data_score: dataScore.rows[0]?.avg_data_score !== null
+            ? parseInt(dataScore.rows[0].avg_data_score) : null
+        }
       });
     } catch(e) {
       console.error('Customer detail error:', e);

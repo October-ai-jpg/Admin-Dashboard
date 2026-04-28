@@ -249,14 +249,68 @@ function loadCustomers() {
 function showCustomerDetail(id) {
   api('/api/monitoring/customers/' + id).then(function(data) {
     var cu = data.customer;
+    var st = data.status || {};
+    var emails = data.emails || [];
+
+    /* === Account status block ===========================================
+       v42 (2026-04-28): expanded from minimal "Status / Since / Affiliate"
+       to a full lifecycle view. Verification, plan + trial state, last
+       login, agent count, knowledge score and Stripe linkage are the
+       fields support most often needs to triage a "why isn't X working
+       for this customer" question. */
     var html = '<div class="detail-title">' + esc(cu.name) + '</div>'
-      + '<div class="detail-subtitle">' + esc(cu.email) + '</div>'
-      + '<div class="detail-section"><h4>Account</h4>'
-      + detailRow('Status', cu.plan_active ? 'Active' : 'Inactive')
-      + detailRow('Since', fmtDate(cu.created_at))
-      + detailRow('Affiliate Ref', cu.affiliate_ref || 'None')
+      + '<div class="detail-subtitle">' + esc(cu.email)
+      + (st.email_verified
+          ? ' <span class="badge badge-active" style="margin-left:8px;font-size:10px">Verified</span>'
+          : ' <span class="badge badge-inactive" style="margin-left:8px;font-size:10px">Not verified</span>')
       + '</div>'
-      + '<div class="detail-section"><h4>Agents (' + data.agents.length + ')</h4>';
+      + '<div class="detail-section"><h4>Account status</h4>'
+      + detailRow('Email verified', st.email_verified ? 'Yes' : 'No')
+      + detailRow('Plan', (st.plan || 'trial') + (st.plan_active ? ' (active)' : ' (inactive)'))
+      + detailRow('Trial ends', st.trial_ends_at ? fmtDate(st.trial_ends_at) : '—')
+      + detailRow('Plan expires', st.plan_expires_at ? fmtDate(st.plan_expires_at) : '—')
+      + detailRow('Account type', st.account_type || '—')
+      + detailRow('Agent package', st.agent_package || '—')
+      + detailRow('Agents', st.tenant_count || 0)
+      + detailRow('Avg data score', st.avg_data_score !== null && st.avg_data_score !== undefined ? (st.avg_data_score + '%') : '—')
+      + detailRow('Last login', st.last_login_at ? fmtDate(st.last_login_at) : 'Never')
+      + detailRow('Created', fmtDate(cu.created_at))
+      + detailRow('Affiliate ref', cu.affiliate_ref || 'None')
+      + detailRow('Stripe customer', st.stripe_customer_id ? '<code style="font-size:11px">' + esc(st.stripe_customer_id) + '</code>' : '—')
+      + detailRow('Stripe subscription', st.stripe_subscription_id ? '<code style="font-size:11px">' + esc(st.stripe_subscription_id) + '</code>' : '—')
+      + '</div>';
+
+    /* === Emails sent block ==============================================
+       Reads from email_log via the platform DB. Each row gets a kind tag
+       (verification / welcome / password_reset / etc.) and a pass/fail
+       badge. resend_message_id is shown truncated as a quick "did the
+       provider actually accept it" indicator without cluttering. */
+    html += '<div class="detail-section"><h4>Emails sent (' + emails.length + ')</h4>';
+    if (emails.length === 0) {
+      html += '<div style="color:#888;font-size:13px;padding:8px 0">No emails logged for this user yet.</div>';
+    } else {
+      html += '<table class="data-table" style="font-size:13px">'
+        + '<thead><tr><th>Sent</th><th>Kind</th><th>Subject</th><th>Status</th><th>Resend ID</th></tr></thead>'
+        + '<tbody>';
+      emails.forEach(function(em) {
+        var kindBadge = em.kind ? '<span class="badge" style="background:#eef;color:#446;font-size:10px">' + esc(em.kind) + '</span>' : '—';
+        var statusBadge = em.status === 'sent'
+          ? '<span class="badge badge-active" style="font-size:10px">sent</span>'
+          : '<span class="badge badge-inactive" style="font-size:10px" title="' + esc(em.error || 'failed') + '">failed</span>';
+        var rid = em.resend_message_id ? '<code style="font-size:10px">' + esc(em.resend_message_id.slice(0, 8)) + '…</code>' : '—';
+        html += '<tr>'
+          + '<td>' + fmtDate(em.sent_at) + '</td>'
+          + '<td>' + kindBadge + '</td>'
+          + '<td>' + esc(em.subject) + '</td>'
+          + '<td>' + statusBadge + '</td>'
+          + '<td>' + rid + '</td>'
+          + '</tr>';
+      });
+      html += '</tbody></table>';
+    }
+    html += '</div>';
+
+    html += '<div class="detail-section"><h4>Agents (' + data.agents.length + ')</h4>';
     data.agents.forEach(function(a) {
       html += detailRow(esc(a.agent_name || a.name || 'Agent'), (a.conversation_count || 0) + ' conversations');
     });
