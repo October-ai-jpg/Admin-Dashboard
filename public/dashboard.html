@@ -55,6 +55,10 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/><line x1="9" y1="9" x2="11" y2="9"/></svg>
     <span>Scalability Audit</span>
   </a>
+  <a class="sidebar-link" data-page="meta-lp">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 12c0-5.52-4.48-10-10-10S2 6.48 2 12s4.48 10 10 10 10-4.48 10-10z"/><path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
+    <span>Meta Landing Page</span>
+  </a>
 
   <div class="sidebar-section-label">Agent Builder</div>
   <a class="sidebar-link" data-page="default-system">
@@ -117,6 +121,62 @@
   <div class="page-container" id="page-affiliates"></div>
   <div class="page-container" id="page-revenue"></div>
   <div class="page-container" id="page-health"></div>
+
+  <!-- ═══ META LANDING PAGE ANALYTICS ═══ -->
+  <div class="page-container" id="page-meta-lp">
+    <style>
+      #page-meta-lp{padding:32px}
+      #page-meta-lp .lp-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;flex-wrap:wrap;gap:16px}
+      #page-meta-lp h1{font-family:var(--serif);font-size:32px;font-weight:400;margin:0}
+      #page-meta-lp .lp-status{font-size:13px;color:var(--muted)}
+      #page-meta-lp .lp-status.ok{color:#16a34a}
+      #page-meta-lp .lp-status.warn{color:#d97706}
+      #page-meta-lp .lp-range select{padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--white);font-size:13px}
+      #page-meta-lp .lp-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:32px}
+      #page-meta-lp .lp-card{background:var(--white);border:1px solid var(--border);border-radius:10px;padding:18px}
+      #page-meta-lp .lp-card-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px}
+      #page-meta-lp .lp-card-value{font-family:var(--serif);font-size:36px;font-weight:300;line-height:1;color:var(--black)}
+      #page-meta-lp .lp-card-sub{font-size:12px;color:var(--muted);margin-top:6px}
+      #page-meta-lp h2{font-family:var(--serif);font-size:22px;font-weight:400;margin:32px 0 12px}
+      #page-meta-lp table{width:100%;border-collapse:collapse;background:var(--white);border:1px solid var(--border);border-radius:8px;overflow:hidden;font-size:13px}
+      #page-meta-lp th{text-align:left;padding:10px 14px;background:var(--cream-dark);color:var(--muted);font-weight:600;font-size:11px;letter-spacing:0.04em;text-transform:uppercase;border-bottom:1px solid var(--border)}
+      #page-meta-lp td{padding:10px 14px;border-bottom:0.5px solid var(--border);vertical-align:top}
+      #page-meta-lp tr:last-child td{border-bottom:none}
+      #page-meta-lp .lp-badge{display:inline-block;padding:2px 8px;border-radius:4px;background:var(--cream-dark);color:var(--black);font-size:11px;font-weight:600}
+      #page-meta-lp .lp-link{color:var(--black);text-decoration:none;border-bottom:1px solid var(--border);padding-bottom:1px}
+      #page-meta-lp .lp-link:hover{border-color:var(--black)}
+      #page-meta-lp .lp-empty{padding:40px;text-align:center;color:var(--muted);background:var(--white);border:1px dashed var(--border);border-radius:8px}
+    </style>
+
+    <div class="lp-header">
+      <div>
+        <h1>Meta Landing Page</h1>
+        <div class="lp-status" id="metaLpStatus">Loading…</div>
+      </div>
+      <div class="lp-range">
+        <label style="font-size:12px;color:var(--muted);margin-right:8px">Range</label>
+        <select id="metaLpRange">
+          <option value="7">Last 7 days</option>
+          <option value="30" selected>Last 30 days</option>
+          <option value="90">Last 90 days</option>
+        </select>
+        <a href="https://www.october-ai.com/lp/meta" target="_blank" class="lp-link" style="margin-left:16px;font-size:13px">Open page →</a>
+      </div>
+    </div>
+
+    <div class="lp-cards" id="metaLpCards">
+      <!-- populated by JS -->
+    </div>
+
+    <h2>Daily traffic</h2>
+    <div id="metaLpDaily"></div>
+
+    <h2>Top FAQ opens</h2>
+    <div id="metaLpFaqs"></div>
+
+    <h2>Recent events</h2>
+    <div id="metaLpRecent"></div>
+  </div>
 
   <!-- ═══ SCALABILITY AUDIT (static reference page) ═══ -->
   <div class="page-container" id="page-scalability-audit">

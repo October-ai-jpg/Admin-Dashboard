@@ -79,6 +79,110 @@ function loadPage(page) {
     case 'test-history': loadTestHistory(); break;
     case 'test-protocol': loadTestProtocol(); break;
     case 'client-portal': window.open('/client/demo/agent', '_blank'); break;
+    case 'meta-lp': loadMetaLp(); break;
+  }
+}
+
+/* ── /lp/meta analytics page ── */
+function loadMetaLp() {
+  var range = document.getElementById('metaLpRange');
+  if (range && !range.__bound) {
+    range.addEventListener('change', loadMetaLp);
+    range.__bound = true;
+  }
+  var days = (range && range.value) || 30;
+
+  var statusEl = document.getElementById('metaLpStatus');
+  var cardsEl = document.getElementById('metaLpCards');
+  var dailyEl = document.getElementById('metaLpDaily');
+  var faqsEl = document.getElementById('metaLpFaqs');
+  var recentEl = document.getElementById('metaLpRecent');
+  if (!cardsEl) return;
+
+  if (statusEl) statusEl.textContent = 'Loading…';
+  cardsEl.innerHTML = '';
+
+  fetch('/api/meta-lp/stats?days=' + days, { credentials: 'include' })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d.error) { if (statusEl) statusEl.textContent = 'Error: ' + d.error; return; }
+
+      var t = d.totals || {};
+      var pv = parseInt(t.pageviews || 0);
+      var uv = parseInt(t.unique_visitors || 0);
+      var p1 = parseInt(t.clicks_primary || 0);
+      var p2 = parseInt(t.clicks_secondary || 0);
+      var vc = parseInt(t.view_content || 0);
+      var fq = parseInt(t.faq_opens || 0);
+
+      if (statusEl) {
+        statusEl.textContent = 'Last ' + d.range_days + ' days · ' + pv + ' pageviews · CTR ' + t.ctr_primary_pct + '% (paid) / ' + t.ctr_secondary_pct + '% (free)';
+        statusEl.className = 'lp-status ' + (pv > 0 ? 'ok' : 'warn');
+      }
+
+      cardsEl.innerHTML =
+        cardHTML('Pageviews', pv, uv + ' unique visitors') +
+        cardHTML('Engaged (5s+)', vc, pv > 0 ? Math.round(vc/pv*100) + '% of visitors' : '') +
+        cardHTML('Clicks → /pricing', p1, t.ctr_primary_pct + '% CTR') +
+        cardHTML('Clicks → /start', p2, t.ctr_secondary_pct + '% CTR') +
+        cardHTML('FAQ opens', fq, '');
+
+      // Daily table
+      if ((d.daily || []).length === 0) {
+        dailyEl.innerHTML = '<div class="lp-empty">No traffic in this range.</div>';
+      } else {
+        var dh = '<table><thead><tr><th>Day</th><th style="text-align:right">Views</th><th style="text-align:right">→ Pricing</th><th style="text-align:right">→ Free trial</th></tr></thead><tbody>';
+        d.daily.forEach(function(row){
+          dh += '<tr>'
+            + '<td>' + fmtDateShort(row.day) + '</td>'
+            + '<td style="text-align:right">' + (row.pageviews || 0) + '</td>'
+            + '<td style="text-align:right">' + (row.primary_clicks || 0) + '</td>'
+            + '<td style="text-align:right">' + (row.secondary_clicks || 0) + '</td>'
+            + '</tr>';
+        });
+        dh += '</tbody></table>';
+        dailyEl.innerHTML = dh;
+      }
+
+      // Top FAQs
+      if ((d.top_faqs || []).length === 0) {
+        faqsEl.innerHTML = '<div class="lp-empty">No FAQ opens yet.</div>';
+      } else {
+        var fh = '<table><thead><tr><th>Question</th><th style="text-align:right">Opens</th></tr></thead><tbody>';
+        d.top_faqs.forEach(function(q){
+          fh += '<tr><td>' + esc((q.question || '').slice(0,120)) + '</td><td style="text-align:right">' + q.opens + '</td></tr>';
+        });
+        fh += '</tbody></table>';
+        faqsEl.innerHTML = fh;
+      }
+
+      // Recent events
+      if ((d.recent || []).length === 0) {
+        recentEl.innerHTML = '<div class="lp-empty">No events recorded yet.</div>';
+      } else {
+        var rh = '<table><thead><tr><th>Time</th><th>Event</th><th>CTA</th><th>Referrer</th></tr></thead><tbody>';
+        d.recent.forEach(function(e){
+          rh += '<tr>'
+            + '<td>' + new Date(e.created_at).toLocaleString() + '</td>'
+            + '<td><span class="lp-badge">' + esc(e.event_name) + '</span></td>'
+            + '<td>' + (e.cta ? esc(e.cta) : '—') + '</td>'
+            + '<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (e.referrer ? esc(e.referrer) : '—') + '</td>'
+            + '</tr>';
+        });
+        rh += '</tbody></table>';
+        recentEl.innerHTML = rh;
+      }
+    })
+    .catch(function(err){
+      if (statusEl) { statusEl.textContent = 'Failed to load: ' + err.message; statusEl.className = 'lp-status warn'; }
+    });
+
+  function cardHTML(label, val, sub) {
+    return '<div class="lp-card">'
+      + '<div class="lp-card-label">' + esc(label) + '</div>'
+      + '<div class="lp-card-value">' + (val != null ? val : '—') + '</div>'
+      + (sub ? '<div class="lp-card-sub">' + esc(sub) + '</div>' : '')
+      + '</div>';
   }
 }
 

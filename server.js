@@ -100,6 +100,76 @@ const testingRoutes = require('./routes/testing');
 app.use('/api/test-sessions', testingRoutes(pool));
 
 /* ══════════════════════════════════════════
+   META LP STATS — /lp/meta tracking dashboard
+   Reads meta_lp_events from the shared prod DB
+   (table is created by eb-tour-agent migration v46).
+   ══════════════════════════════════════════ */
+app.get('/api/meta-lp/stats', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ error: 'DB not available' });
+  try {
+    const rangeRaw = parseInt(req.query.days || '30', 10);
+    const range = (rangeRaw > 0 && rangeRaw <= 365) ? rangeRaw : 30;
+
+    const totals = await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE event_name = 'PageView')::int AS pageviews,
+        COUNT(*) FILTER (WHERE event_name = 'Lead' AND cta = 'primary_pricing')::int AS clicks_primary,
+        COUNT(*) FILTER (WHERE event_name = 'Lead' AND cta = 'secondary_free_trial')::int AS clicks_secondary,
+        COUNT(*) FILTER (WHERE event_name = 'ViewContent')::int AS view_content,
+        COUNT(*) FILTER (WHERE event_name = 'FAQ_Open')::int AS faq_opens,
+        COUNT(DISTINCT ip_hash) FILTER (WHERE event_name = 'PageView')::int AS unique_visitors
+      FROM meta_lp_events
+      WHERE created_at >= NOW() - ($1::int || ' days')::interval
+    `, [range]);
+
+    const daily = await pool.query(`
+      SELECT DATE_TRUNC('day', created_at) AS day,
+             COUNT(*) FILTER (WHERE event_name = 'PageView')::int AS pageviews,
+             COUNT(*) FILTER (WHERE event_name = 'Lead' AND cta = 'primary_pricing')::int AS primary_clicks,
+             COUNT(*) FILTER (WHERE event_name = 'Lead' AND cta = 'secondary_free_trial')::int AS secondary_clicks
+      FROM meta_lp_events
+      WHERE created_at >= NOW() - ($1::int || ' days')::interval
+      GROUP BY day
+      ORDER BY day DESC
+    `, [range]);
+
+    const recent = await pool.query(`
+      SELECT id, created_at, event_name, cta, referrer, user_agent
+      FROM meta_lp_events
+      ORDER BY created_at DESC
+      LIMIT 50
+    `);
+
+    const faqQuestions = await pool.query(`
+      SELECT payload->>'question' AS question, COUNT(*)::int AS opens
+      FROM meta_lp_events
+      WHERE event_name = 'FAQ_Open'
+        AND created_at >= NOW() - ($1::int || ' days')::interval
+        AND payload->>'question' IS NOT NULL
+      GROUP BY payload->>'question'
+      ORDER BY opens DESC
+      LIMIT 10
+    `, [range]);
+
+    const t = totals.rows[0] || {};
+    const pv = parseInt(t.pageviews || 0);
+    const ctrPrimary = pv > 0 ? ((parseInt(t.clicks_primary || 0) / pv) * 100).toFixed(1) : '0.0';
+    const ctrSecondary = pv > 0 ? ((parseInt(t.clicks_secondary || 0) / pv) * 100).toFixed(1) : '0.0';
+
+    res.json({
+      range_days: range,
+      totals: { ...t, ctr_primary_pct: ctrPrimary, ctr_secondary_pct: ctrSecondary },
+      daily: daily.rows,
+      recent: recent.rows,
+      top_faqs: faqQuestions.rows
+    });
+  } catch (err) {
+    console.error('[meta-lp/stats]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ══════════════════════════════════════════
    HEALTH CHECK ROUTE
    ══════════════════════════════════════════ */
 app.get('/api/health-check', requireAuth, async (req, res) => {
