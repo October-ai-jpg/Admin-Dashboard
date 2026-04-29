@@ -341,8 +341,13 @@ module.exports = function(pool) {
       'CRITICAL SCORING RULES:\n' +
       '- If the transcript has 0 guest messages or only a greeting with no guest interaction: ALL scores MUST be 0-1, overall MUST be 0-1. There is nothing to evaluate \u2014 the session failed.\n' +
       '- If the transcript has only 1-2 guest messages: maximum overall score is 3. The agent barely had a chance to demonstrate anything.\n' +
-      '- If the agent never navigated to any room despite having room mappings: navigation score MUST be 0-2.\n' +
-      '- If the agent never moved towards conversion: conversion_focus MUST be 0-2.\n' +
+      /* 2026-04-29 — was "If never navigated despite having room mappings: 0-2".
+         That fired on Q&A-only sessions where the visitor never asked to be
+         shown a room (e.g. a 3-turn pool feature question), producing false
+         negatives. New rule only penalises missed navigation when the visitor
+         clearly requested it. Same change for conversion. */
+      '- NAVIGATION rule: only score navigation 0-2 if the visitor CLEARLY asked to be shown a room ("show me", "take me to", "can I see", "let me look at") AND the agent did NOT navigate. If navigation was never requested in this session, score navigation neutrally (5-7) based on whether navigation would have been a reasonable proactive offer.\n' +
+      '- CONVERSION rule: only score conversion_focus 0-2 if the visitor showed clear booking intent ("I want to book", "let\'s do it", "I\'ll take it") AND the agent did NOT fire trigger_conversion. If the visitor was browsing/exploring/asking factual questions, score conversion_focus neutrally (5-7) \u2014 pushing conversion early on a browsing guest is a NEGATIVE behaviour, not a positive one.\n' +
       '- A score of 8+ means the agent performed EXCEPTIONALLY well on that criterion across multiple turns. This is rare.\n' +
       '- A score of 5 means MEDIOCRE, not "average". Most sessions should score 3-6.\n' +
       '- Be honest: would a real hotel/real estate company pay for this agent? If not, ready_for_customers MUST be false.\n' +
