@@ -289,8 +289,22 @@ module.exports = function(pool) {
     var agentMessageCount = agentMessages.length;
 
     var latencyLog = session.latency_log || [];
+    /* 2026-04-29 — Scorer was blind to whether navigation/tools actually
+       fired because we only sent total_ms. Now we surface per-turn
+       navigation + tools_called arrays so the scorer can use them as
+       ground truth (alongside the [ACTION: ...] markers that some
+       transcripts carry). Without this the GPT scorer hallucinated
+       "did not navigate" even when the latency_log showed
+       navigation.triggered=true. */
     var latencyText = latencyLog.map(function(l, i) {
-      return 'Turn ' + (i+1) + ': total=' + (l.total_ms || l.latency && l.latency.total_ms || '?') + 'ms';
+      var totalMs = (l.latency && l.latency.total_ms) || l.total_ms || '?';
+      var nav = l.navigation || {};
+      var navStr = nav.triggered
+        ? 'navigated_to=' + (nav.room_label || '?') + (nav.sweep_id ? ' (sweep ' + nav.sweep_id + ')' : ' (NO sweepId)')
+        : 'no_nav';
+      var tools = (l.tools_called && l.tools_called.length > 0) ? 'tools=[' + l.tools_called.join(',') + ']' : 'tools=[]';
+      var userTxt = (l.user_transcript || '').slice(0, 60);
+      return 'Turn ' + (i+1) + ': "' + userTxt + '" → total=' + totalMs + 'ms | ' + navStr + ' | ' + tools;
     }).join('\n');
 
     var warningsArr = [];
@@ -317,7 +331,11 @@ module.exports = function(pool) {
     var criticalWarningsText = criticalWarnings.length > 0 ? '\n\n' + criticalWarnings.join('\n') : '';
 
     var systemPrompt = 'You are an extremely strict expert evaluator of AI voice agents designed to act as virtual employees in Matterport 3D tours. Your job is to evaluate conversations critically and honestly. You are known for being harsh but fair.\n\n' +
-      'TRANSCRIPT FORMAT:\nAssistant messages may contain "[ACTION: tool_name \u2192 arg]" markers BEFORE the spoken text. These are real tool calls the agent fired in that turn (like navigate_to_room, trigger_conversion, show_floorplan). Treat them as ground truth \u2014 they happened. The text AFTER the marker is what the visitor heard. Use both when scoring: the action AND the words.\n\n' +
+      'GROUND TRUTH SOURCES (in priority order):\n' +
+      '  1. LATENCY LOG \u2014 each turn shows what tools fired (tools=[...]) and whether navigation was triggered (navigated_to=ROOM or no_nav). Trust these over your reading of the transcript. If the log says navigated_to=Junior Suite, the agent navigated, even if the spoken text does not mention navigation.\n' +
+      '  2. [ACTION: tool_name \u2192 arg] markers \u2014 may appear before some assistant lines (legacy format). Also ground truth.\n' +
+      '  3. The transcript itself \u2014 use to judge HOW the agent spoke about the action.\n' +
+      'When the latency log shows a tool fired but the spoken text does not acknowledge it, that is a NATURAL_TONE issue (agent failed to verbalise the action), NOT a NAVIGATION/CONVERSION_FOCUS issue. Do not double-penalise.\n\n' +
       'The agent should behave like a warm, knowledgeable human employee \u2014 not like a chatbot or assistant. It should:\n' +
       '- Ask one question at a time\n- React to what the visitor says before moving on\n- Navigate the tour naturally\n- Never use corporate filler phrases\n- Move conversations towards booking\n- Sound completely natural\n\n' +
       'CRITICAL SCORING RULES:\n' +
