@@ -435,6 +435,278 @@ module.exports = function(pool) {
   /* ═══════════════════════════════════════
      REVENUE
      ═══════════════════════════════════════ */
+  /* ═══════════════════════════════════════
+     UNIT ECONOMICS — precise live numbers
+     ═══════════════════════════════════════
+     Replaces the imprecise /revenue endpoint. Pulls from real
+     tables only — no hardcoded $0.15/min or COUNT × $149.
+
+       Revenue:    SUM(paid_invoices.amount_paid_usd)
+       Stripe fees: SUM(paid_invoices.stripe_fee_usd) +
+                   SUM stripe transfer fees on paid affiliate
+                   commissions / bonuses (estimated from rate card)
+       COGS:       SUM(usage_log.total_cost_usd)
+       Affiliate:  SUM(affiliate_commissions.commission_amount,
+                       affiliate_bonuses.amount_usd) WHERE
+                       status IN ('pending','paid')
+       Infra:      INFRA_COST_USD_PER_MONTH env var
+       Net:        Revenue - Stripe - COGS - Affiliate - Infra
+
+     Three time slices: this month, last month, and rolling 12-month
+     chart so trends are visible. Scalability section reads
+     pg_stat + recent error rate so dashboard reflects live system
+     pressure.
+  ═══════════════════════════════════════ */
+  router.get('/unit-economics', async (req, res) => {
+    try {
+      /* Cost rates — keep in sync with eb-tour-agent's
+         services/costRates.js. We re-declare here because Admin-
+         Dashboard is a separate Railway service and importing across
+         repos isn't trivial. ENV overrides apply identically. */
+      const RATES = {
+        openai_input_per_1m:  parseFloat(process.env.COST_OPENAI_INPUT_PER_1M  || '3.00'),
+        openai_output_per_1m: parseFloat(process.env.COST_OPENAI_OUTPUT_PER_1M || '6.00'),
+        deepgram_per_min:     parseFloat(process.env.COST_DEEPGRAM_PER_MIN     || '0.0059'),
+        cartesia_per_min:     parseFloat(process.env.COST_CARTESIA_PER_MIN     || '0.12'),
+        stripe_card_pct:      parseFloat(process.env.COST_STRIPE_CARD_PCT      || '0.029'),
+        stripe_card_fixed:    parseFloat(process.env.COST_STRIPE_CARD_FIXED    || '0.30'),
+        stripe_transfer_pct:  parseFloat(process.env.COST_STRIPE_TRANSFER_PCT  || '0.0025'),
+        stripe_transfer_fixed:parseFloat(process.env.COST_STRIPE_TRANSFER_FIXED|| '0.25'),
+        infra_per_month:      parseFloat(process.env.INFRA_COST_USD_PER_MONTH  || '30')
+      };
+
+      /* Helper: aggregates for a date-range filter expression. */
+      async function block(rangeWhere) {
+        /* Revenue = SUM of paid invoices in range. Falls back to 0
+           if the table doesn't exist yet (pre-v51 deploy). */
+        let invoices = { revenue_usd: 0, stripe_fees_usd: 0, count: 0 };
+        try {
+          const r = await query(`
+            SELECT
+              COALESCE(SUM(amount_paid_usd), 0)::numeric AS revenue_usd,
+              COALESCE(SUM(stripe_fee_usd), 0)::numeric  AS stripe_fees_usd,
+              COUNT(*)::int                              AS count
+            FROM paid_invoices
+            WHERE ${rangeWhere}
+          `);
+          invoices = r.rows[0] || invoices;
+        } catch (e) {/* table missing pre-deploy — keep zeros */}
+
+        /* COGS = real measured per-call costs from usage_log. */
+        let cogs = { openai: 0, deepgram: 0, cartesia: 0, total: 0,
+                     llm_input_tokens: 0, llm_output_tokens: 0,
+                     stt_seconds: 0, tts_seconds: 0 };
+        try {
+          const r = await query(`
+            SELECT
+              COALESCE(SUM(openai_cost_usd), 0)::numeric    AS openai,
+              COALESCE(SUM(deepgram_cost_usd), 0)::numeric  AS deepgram,
+              COALESCE(SUM(cartesia_cost_usd), 0)::numeric  AS cartesia,
+              COALESCE(SUM(total_cost_usd), 0)::numeric     AS total,
+              COALESCE(SUM(llm_input_tokens), 0)::int       AS llm_input_tokens,
+              COALESCE(SUM(llm_output_tokens), 0)::int      AS llm_output_tokens,
+              COALESCE(SUM(stt_audio_seconds), 0)::numeric  AS stt_seconds,
+              COALESCE(SUM(tts_audio_seconds), 0)::numeric  AS tts_seconds
+            FROM usage_log
+            WHERE ${rangeWhere}
+          `);
+          cogs = r.rows[0] || cogs;
+        } catch (e) {/* pre-deploy */}
+
+        /* Affiliate outflow = pending + paid commissions and bonuses
+           that BECAME active in the range. Both are real obligations
+           we owe; pending is just delayed by the 30-day hold. */
+        const comm = await query(`
+          SELECT COALESCE(SUM(commission_amount), 0)::numeric AS total
+            FROM affiliate_commissions
+           WHERE status IN ('pending','paid') AND ${rangeWhere}
+        `);
+        let bonus = { total: 0 };
+        try {
+          const r = await query(`
+            SELECT COALESCE(SUM(amount_usd), 0)::numeric AS total
+              FROM affiliate_bonuses
+             WHERE status IN ('pending','paid')
+               AND ${rangeWhere.replace('created_at','awarded_at')}
+          `);
+          bonus = r.rows[0] || bonus;
+        } catch (e) {/* pre-v50 */}
+
+        const revenue = parseFloat(invoices.revenue_usd) || 0;
+        const stripe_card_fees = parseFloat(invoices.stripe_fees_usd) || 0;
+        const cogs_total = parseFloat(cogs.total) || 0;
+        const affiliate_total = (parseFloat(comm.rows[0].total) || 0)
+                              + (parseFloat(bonus.total) || 0);
+
+        /* Stripe transfer fees on affiliate payouts — estimated from
+           the count + total. Each payout is one transfer per affiliate
+           per month, so we approximate with: total × pct + N × fixed.
+           For precision later we could store the actual transfer fee
+           on each affiliate_commissions/bonuses row. */
+        const transferCount = await query(`
+          SELECT COUNT(DISTINCT affiliate_ref)::int AS n
+            FROM affiliate_commissions
+           WHERE status = 'paid' AND ${rangeWhere.replace('created_at','paid_at')}
+        `);
+        const tcount = parseInt(transferCount.rows[0]?.n || 0);
+        const stripe_transfer_fees = affiliate_total * RATES.stripe_transfer_pct
+                                   + tcount * RATES.stripe_transfer_fixed;
+
+        const stripe_fees_total = stripe_card_fees + stripe_transfer_fees;
+        const net = revenue - stripe_fees_total - cogs_total - affiliate_total - RATES.infra_per_month;
+        const margin_pct = revenue > 0 ? Math.round((net / revenue) * 1000) / 10 : 0;
+
+        return {
+          revenue_usd: Math.round(revenue * 100) / 100,
+          invoice_count: parseInt(invoices.count) || 0,
+          stripe_card_fees_usd: Math.round(stripe_card_fees * 100) / 100,
+          stripe_transfer_fees_usd: Math.round(stripe_transfer_fees * 100) / 100,
+          stripe_fees_total_usd: Math.round(stripe_fees_total * 100) / 100,
+          cogs_total_usd: Math.round(cogs_total * 10000) / 10000,
+          cogs_breakdown: {
+            openai_usd: Math.round(parseFloat(cogs.openai) * 10000) / 10000,
+            deepgram_usd: Math.round(parseFloat(cogs.deepgram) * 10000) / 10000,
+            cartesia_usd: Math.round(parseFloat(cogs.cartesia) * 10000) / 10000
+          },
+          usage: {
+            llm_input_tokens: parseInt(cogs.llm_input_tokens) || 0,
+            llm_output_tokens: parseInt(cogs.llm_output_tokens) || 0,
+            stt_minutes: Math.round((parseFloat(cogs.stt_seconds) / 60) * 100) / 100,
+            tts_minutes: Math.round((parseFloat(cogs.tts_seconds) / 60) * 100) / 100
+          },
+          affiliate_outflow_usd: Math.round(affiliate_total * 100) / 100,
+          infra_usd: RATES.infra_per_month,
+          net_usd: Math.round(net * 100) / 100,
+          margin_pct: margin_pct
+        };
+      }
+
+      const thisMonth = await block(`created_at >= DATE_TRUNC('month', NOW())`);
+      const lastMonth = await block(`created_at >= DATE_TRUNC('month', NOW()) - INTERVAL '1 month'
+                                       AND created_at <  DATE_TRUNC('month', NOW())`);
+      const last30d   = await block(`created_at >= NOW() - INTERVAL '30 days'`);
+      const allTime   = await block(`true`);
+
+      /* 12-month revenue chart from real paid_invoices. */
+      let chart = [];
+      try {
+        const r = await query(`
+          SELECT TO_CHAR(DATE_TRUNC('month', paid_at), 'YYYY-MM')      AS month,
+                 COALESCE(SUM(amount_paid_usd), 0)::numeric            AS revenue,
+                 COUNT(*)::int                                         AS invoices
+            FROM paid_invoices
+           WHERE paid_at > NOW() - INTERVAL '12 months'
+           GROUP BY DATE_TRUNC('month', paid_at)
+           ORDER BY month
+        `);
+        chart = r.rows;
+      } catch (e) {/* pre-deploy */}
+
+      /* Customer counts. paying_customers = unique users with ≥1
+         paid invoice in current month (real definition). */
+      const customers = await query(`
+        SELECT
+          (SELECT COUNT(*)::int FROM users WHERE plan_active = true) AS active_subscribers,
+          (SELECT COUNT(*)::int FROM users WHERE created_at > NOW() - INTERVAL '30 days') AS new_signups_30d,
+          (SELECT COUNT(*)::int FROM users) AS total_users
+      `);
+      let payingThisMonth = 0;
+      try {
+        const r = await query(`
+          SELECT COUNT(DISTINCT user_id)::int AS n
+            FROM paid_invoices
+           WHERE paid_at >= DATE_TRUNC('month', NOW())
+             AND user_id IS NOT NULL
+        `);
+        payingThisMonth = parseInt(r.rows[0]?.n || 0);
+      } catch (e) {}
+
+      /* Scalability live snapshot. Pulls real metrics from DB +
+         recent activity so the section reflects current pressure
+         instead of static estimates. */
+      const scalability = {};
+
+      /* DB pool — Postgres reports its own active backends. */
+      try {
+        const r = await query(`
+          SELECT
+            COUNT(*) FILTER (WHERE state = 'active')::int AS active,
+            COUNT(*) FILTER (WHERE state = 'idle')::int   AS idle,
+            COUNT(*)::int                                 AS total,
+            (SELECT setting::int FROM pg_settings WHERE name = 'max_connections') AS max_connections
+          FROM pg_stat_activity
+          WHERE pid <> pg_backend_pid()
+        `);
+        scalability.db_pool = r.rows[0] || {};
+      } catch (e) {
+        scalability.db_pool = { error: e.message };
+      }
+
+      /* Voice sessions — count active in last 5 minutes as proxy for
+         "currently running" since we don't have a session-tracking
+         table. Defined as conversations with messages in last 5 min. */
+      try {
+        const r = await query(`
+          SELECT COUNT(DISTINCT c.id)::int AS active_voice_sessions
+            FROM conversations c
+           WHERE c.updated_at > NOW() - INTERVAL '5 minutes'
+        `);
+        scalability.active_voice_sessions = parseInt(r.rows[0]?.active_voice_sessions || 0);
+      } catch (e) {
+        scalability.active_voice_sessions = 0;
+      }
+
+      /* Conversation drop-off rate (24h) — proxy for system errors. */
+      try {
+        const r = await query(`
+          SELECT
+            COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE duration_seconds < 5)::int AS drop_offs
+          FROM conversations
+          WHERE created_at > NOW() - INTERVAL '24 hours'
+        `);
+        const row = r.rows[0] || {};
+        scalability.recent_24h = {
+          total_conversations: parseInt(row.total) || 0,
+          drop_offs: parseInt(row.drop_offs) || 0,
+          drop_off_pct: row.total > 0 ? Math.round((row.drop_offs / row.total) * 100) : 0
+        };
+      } catch (e) {
+        scalability.recent_24h = { total_conversations: 0, drop_offs: 0, drop_off_pct: 0 };
+      }
+
+      /* Capacity reference values — these come from middleware/wsCapacity.js
+         in eb-tour-agent. Hard-coded here as documentation of the limits
+         the system enforces; adjust when those env vars change. */
+      scalability.capacity = {
+        ip_daily_minutes_cap: parseInt(process.env.IP_DAILY_MINUTES_CAP || '120'),
+        tenant_concurrent_cap: parseInt(process.env.TENANT_CONCURRENT_CAP || '100'),
+        ip_per_tenant_concurrent_cap: parseInt(process.env.IP_TENANT_CONCURRENT_CAP || '3')
+      };
+
+      res.json({
+        rates: RATES,
+        this_month: thisMonth,
+        last_month: lastMonth,
+        last_30d: last30d,
+        all_time: allTime,
+        chart: chart,
+        customers: {
+          active_subscribers: parseInt(customers.rows[0]?.active_subscribers || 0),
+          new_signups_30d: parseInt(customers.rows[0]?.new_signups_30d || 0),
+          total_users: parseInt(customers.rows[0]?.total_users || 0),
+          paying_this_month: payingThisMonth
+        },
+        scalability: scalability,
+        as_of: new Date().toISOString()
+      });
+    } catch (e) {
+      console.error('Unit economics error:', e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+
   router.get('/revenue', async (req, res) => {
     try {
       const activeUsers = await query("SELECT COUNT(*) as count FROM users WHERE plan_active = true");

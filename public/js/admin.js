@@ -70,6 +70,7 @@ function loadPage(page) {
     case 'conversations': loadConversations(); break;
     case 'affiliates': loadAffiliates(); break;
     case 'revenue': loadRevenue(); break;
+    case 'unit-economics': loadUnitEconomics(); break;
     case 'health': loadHealth(); break;
     case 'default-system': loadDefaultSystem(); break;
     case 'sandbox': loadSandbox(); break;
@@ -4727,6 +4728,161 @@ document.addEventListener('keydown', function(e) {
     document.querySelectorAll('.detail-overlay.open').forEach(function(d) { d.classList.remove('open'); });
   }
 });
+
+/* ═══════════════════════════════════════════════════════════════════
+   UNIT ECONOMICS PAGE
+   ═══════════════════════════════════════════════════════════════════
+   Reads /api/monitoring/unit-economics every 60s while visible. The
+   endpoint already does all the SQL aggregation; this just renders.
+   Replaces the older Revenue + Scalability Audit pages.
+   ═══════════════════════════════════════════════════════════════════ */
+var UE_REFRESH_INTERVAL = null;
+var UE_DATA_CACHE = null;
+var UE_CURRENT_PERIOD = 'this_month';
+
+function loadUnitEconomics() {
+  if (UE_REFRESH_INTERVAL) { clearInterval(UE_REFRESH_INTERVAL); UE_REFRESH_INTERVAL = null; }
+  /* Bind period-tab clicks once. */
+  var tabs = document.getElementById('uePeriodTabs');
+  if (tabs && !tabs.__bound) {
+    tabs.__bound = true;
+    tabs.querySelectorAll('button').forEach(function(b) {
+      b.addEventListener('click', function() {
+        UE_CURRENT_PERIOD = b.getAttribute('data-period');
+        tabs.querySelectorAll('button').forEach(function(x) { x.classList.remove('active'); });
+        b.classList.add('active');
+        if (UE_DATA_CACHE) ueRender(UE_DATA_CACHE);
+      });
+    });
+  }
+  ueFetch();
+  /* Auto-refresh every 60s — covers the case where new invoice/usage
+     events land while user has the page open. */
+  UE_REFRESH_INTERVAL = setInterval(ueFetch, 60 * 1000);
+}
+
+function ueFetch() {
+  var status = document.getElementById('ueStatus');
+  if (status) status.textContent = 'Loading…';
+  fetch('/api/monitoring/unit-economics', { credentials: 'include' })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d.error) { if (status) { status.textContent = 'Error: ' + d.error; status.className = 'ue-status warn'; } return; }
+      UE_DATA_CACHE = d;
+      ueRender(d);
+    })
+    .catch(function(err) {
+      if (status) { status.textContent = 'Failed to load: ' + err.message; status.className = 'ue-status warn'; }
+    });
+}
+
+function ueRender(d) {
+  var period = d[UE_CURRENT_PERIOD] || d.this_month;
+  var asOf = new Date(d.as_of).toLocaleString();
+  var status = document.getElementById('ueStatus');
+  if (status) {
+    status.className = 'ue-status';
+    status.textContent = 'Live · updated ' + asOf;
+  }
+
+  /* KPI cards. */
+  var cardsEl = document.getElementById('ueKpis');
+  var profitClass = period.net_usd > 0 ? 'positive' : (period.net_usd < 0 ? 'negative' : '');
+  cardsEl.innerHTML =
+    ueCard('Revenue', fmtUSD(period.revenue_usd), period.invoice_count + ' invoices') +
+    ueCard('Stripe fees', '−' + fmtUSD(period.stripe_fees_total_usd),
+           'Card: ' + fmtUSD(period.stripe_card_fees_usd) + ' · Transfers: ' + fmtUSD(period.stripe_transfer_fees_usd)) +
+    ueCard('COGS (voice APIs)', '−' + fmtUSD(period.cogs_total_usd), 'OpenAI + Deepgram + Cartesia') +
+    ueCard('Affiliate outflow', '−' + fmtUSD(period.affiliate_outflow_usd), 'Commissions + bonuses') +
+    ueCard('Infrastructure', '−' + fmtUSD(period.infra_usd), 'Railway + Cloudflare + Resend') +
+    ueCard('Net', fmtUSD(period.net_usd), period.margin_pct + '% margin', profitClass);
+
+  /* Cost breakdown table — splits the COGS line into providers. */
+  var br = period.cogs_breakdown || {};
+  document.getElementById('ueCostTable').innerHTML =
+    '<table><thead><tr><th>Provider</th><th style="text-align:right">Cost (USD)</th><th style="text-align:right">% of revenue</th></tr></thead><tbody>'
+    + ueCostRow('OpenAI (gpt-5.4-mini)', br.openai_usd, period.revenue_usd)
+    + ueCostRow('Deepgram (Nova-3 STT)', br.deepgram_usd, period.revenue_usd)
+    + ueCostRow('Cartesia (Sonic-2 TTS)', br.cartesia_usd, period.revenue_usd)
+    + ueCostRow('Stripe (card processing)', period.stripe_card_fees_usd, period.revenue_usd)
+    + ueCostRow('Stripe (Connect transfers)', period.stripe_transfer_fees_usd, period.revenue_usd)
+    + ueCostRow('Affiliate commissions + bonuses', period.affiliate_outflow_usd, period.revenue_usd)
+    + ueCostRow('Infrastructure (Railway, etc.)', period.infra_usd, period.revenue_usd)
+    + '</tbody></table>';
+
+  /* Usage volume — actual measurements. */
+  var u = period.usage || {};
+  document.getElementById('ueUsageTable').innerHTML =
+    '<table><thead><tr><th>Metric</th><th style="text-align:right">Volume</th></tr></thead><tbody>'
+    + '<tr><td>LLM input tokens</td><td style="text-align:right">' + fmtNum(u.llm_input_tokens) + '</td></tr>'
+    + '<tr><td>LLM output tokens</td><td style="text-align:right">' + fmtNum(u.llm_output_tokens) + '</td></tr>'
+    + '<tr><td>STT minutes (Deepgram)</td><td style="text-align:right">' + (u.stt_minutes || 0) + '</td></tr>'
+    + '<tr><td>TTS minutes (Cartesia)</td><td style="text-align:right">' + (u.tts_minutes || 0) + '</td></tr>'
+    + '</tbody></table>';
+
+  /* Customers. */
+  var c = d.customers || {};
+  document.getElementById('ueCustomers').innerHTML =
+    '<div class="ue-cards">'
+    + ueCard('Active subscribers', fmtNum(c.active_subscribers), 'plan_active = true')
+    + ueCard('Paying this month', fmtNum(c.paying_this_month), 'distinct user_id in paid_invoices')
+    + ueCard('New signups (30d)', fmtNum(c.new_signups_30d), '')
+    + ueCard('Total users', fmtNum(c.total_users), 'incl. trial / inactive')
+    + '</div>';
+
+  /* Scalability live snapshot. */
+  var s = d.scalability || {};
+  var pool = s.db_pool || {};
+  var r24 = s.recent_24h || {};
+  var cap = s.capacity || {};
+  var dropPill = r24.drop_off_pct < 10 ? 'green' : (r24.drop_off_pct < 25 ? 'amber' : 'red');
+  document.getElementById('ueScalability').innerHTML =
+    '<table><thead><tr><th>Metric</th><th style="text-align:right">Current</th><th style="text-align:right">Limit</th></tr></thead><tbody>'
+    + '<tr><td>DB connections (active / total)</td><td style="text-align:right">' + (pool.active || 0) + ' / ' + (pool.total || 0) + '</td><td style="text-align:right">' + (pool.max_connections || '–') + '</td></tr>'
+    + '<tr><td>Active voice sessions (last 5 min)</td><td style="text-align:right">' + (s.active_voice_sessions || 0) + '</td><td style="text-align:right">' + (cap.tenant_concurrent_cap || '–') + ' / tenant</td></tr>'
+    + '<tr><td>Conversations (24h)</td><td style="text-align:right">' + (r24.total_conversations || 0) + '</td><td style="text-align:right">–</td></tr>'
+    + '<tr><td>Drop-off rate (24h)</td><td style="text-align:right"><span class="ue-pill ' + dropPill + '">' + (r24.drop_off_pct || 0) + '%</span></td><td style="text-align:right">' + (r24.drop_offs || 0) + ' of ' + (r24.total_conversations || 0) + '</td></tr>'
+    + '<tr><td>IP daily TTS minutes cap</td><td style="text-align:right">–</td><td style="text-align:right">' + (cap.ip_daily_minutes_cap || '–') + '</td></tr>'
+    + '<tr><td>IP-per-tenant concurrent cap</td><td style="text-align:right">–</td><td style="text-align:right">' + (cap.ip_per_tenant_concurrent_cap || '–') + '</td></tr>'
+    + '</tbody></table>';
+
+  /* 12-month chart (table form for now — could become bars later). */
+  var chartEl = document.getElementById('ueChart');
+  if (!d.chart || d.chart.length === 0) {
+    chartEl.innerHTML = '<div class="ue-empty">No paid invoices yet. The chart will populate as customers come in.</div>';
+  } else {
+    var rows = d.chart.map(function(row) {
+      return '<tr><td>' + row.month + '</td><td style="text-align:right">' + fmtUSD(parseFloat(row.revenue)) + '</td><td style="text-align:right">' + row.invoices + '</td></tr>';
+    }).join('');
+    chartEl.innerHTML = '<table><thead><tr><th>Month</th><th style="text-align:right">Revenue</th><th style="text-align:right">Invoices</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  /* Rate-card footer — proves what numbers we computed against. */
+  var rt = d.rates || {};
+  document.getElementById('ueRates').innerHTML =
+    '<strong>Rate card</strong><br>'
+    + 'OpenAI: <code>$' + rt.openai_input_per_1m + ' input / $' + rt.openai_output_per_1m + ' output per 1M tokens</code> · '
+    + 'Deepgram: <code>$' + rt.deepgram_per_min + '/min</code> · '
+    + 'Cartesia: <code>$' + rt.cartesia_per_min + '/min</code> · '
+    + 'Stripe card: <code>' + (rt.stripe_card_pct * 100).toFixed(1) + '% + $' + rt.stripe_card_fixed.toFixed(2) + '</code> · '
+    + 'Stripe transfer: <code>' + (rt.stripe_transfer_pct * 100).toFixed(2) + '% + $' + rt.stripe_transfer_fixed.toFixed(2) + '</code> · '
+    + 'Infra: <code>$' + rt.infra_per_month + '/mo</code><br>'
+    + '<em style="font-size:11px">Tune via Railway env vars: COST_OPENAI_INPUT_PER_1M, COST_DEEPGRAM_PER_MIN, COST_CARTESIA_PER_MIN, INFRA_COST_USD_PER_MONTH, etc.</em>';
+}
+
+function ueCard(label, value, sub, cls) {
+  return '<div class="ue-card' + (cls ? ' ' + cls : '') + '">'
+    + '<div class="ue-card-label">' + esc(label) + '</div>'
+    + '<div class="ue-card-value">' + esc(String(value)) + '</div>'
+    + (sub ? '<div class="ue-card-sub">' + esc(sub) + '</div>' : '')
+    + '</div>';
+}
+function ueCostRow(label, cost, revenue) {
+  var c = parseFloat(cost) || 0;
+  var r = parseFloat(revenue) || 0;
+  var pct = r > 0 ? ((c / r) * 100).toFixed(1) + '%' : '—';
+  return '<tr><td>' + esc(label) + '</td><td style="text-align:right">' + fmtUSD(c) + '</td><td style="text-align:right">' + pct + '</td></tr>';
+}
 
 /* ── INIT ── */
 var initPage = window.location.hash ? window.location.hash.replace('#', '') : 'overview';
