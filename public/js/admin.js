@@ -4531,16 +4531,16 @@ function loadTestProtocol() {
   var c = document.getElementById('page-test-protocol');
   c.innerHTML = '<div class="page-label">AGENT BUILDER</div>'
     + '<h1 class="page-heading">Test Protocol</h1>'
-    + '<p class="page-sub">Standardized test procedures for evaluating voice agents.</p>'
+    + '<p class="page-sub">Acceptance criteria for the voice agent. Every variant (A/B/C) must pass every check on every session \u2014 these are launch-blocking.</p>'
 
     + '<div style="background:var(--cream);border-radius:10px;padding:16px 20px;margin-bottom:24px">'
     + '<h3 style="font-family:var(--serif);font-size:18px;font-weight:400;margin:0 0 10px">How to run a test</h3>'
     + '<ol style="font-size:13px;line-height:1.8;padding-left:20px;margin:0">'
-    + '<li>Open the tour with <code style="background:var(--white);padding:1px 6px;border-radius:4px;font-size:12px;border:1px solid var(--border)">?test=true</code> in the URL</li>'
-    + '<li>The red "TEST MODE" badge confirms test logging is active</li>'
-    + '<li>Follow the protocol for the relevant vertical below</li>'
-    + '<li>Click "End &amp; evaluate" button when done</li>'
-    + '<li>The session saves automatically and appears in Test History with GPT scores</li>'
+    + '<li>Open the tour with <code style="background:var(--white);padding:1px 6px;border-radius:4px;font-size:12px;border:1px solid var(--border)">?eval=true</code> on staging (or kontakt@eb-media auto-eval)</li>'
+    + '<li>For variant comparison append <code style="background:var(--white);padding:1px 6px;border-radius:4px;font-size:12px;border:1px solid var(--border)">&amp;variant=A</code> (or B / C). A = current optimized, B = pre-Phase-2 baseline, C = pure OpenAI same prompt as A</li>'
+    + '<li>The red TEST MODE badge confirms logging is active</li>'
+    + '<li>Run the per-vertical scenario below \u2014 every check below must pass</li>'
+    + '<li>Click "End &amp; evaluate" \u2014 session lands in Test History with GPT scores</li>'
     + '</ol></div>'
 
     // Protocol tabs
@@ -4556,17 +4556,64 @@ function loadTestProtocol() {
 
     // Standard
     + '<div class="proto-section active" id="proto-standard">'
-    + testCard('Session Test', '10 times per vertical', 'Run a full conversation from greeting to conversion. Close and reopen. Verify state resets correctly.')
-    + testCard('Stress Test', '3 times', 'Speak quickly. Interrupt the agent mid-sentence. Speak again immediately. Reveals race conditions and double-response bugs.')
-    + testCard('Idle Test', '2 times', 'Open the agent and wait 10 minutes without speaking. Then speak. Reveals WebSocket degradation and silence follow-up quality.')
-    + testCard('Conversion Test', '5 times', 'Run the conversation targeted towards conversion. Verify booking URL opens correctly and trigger_conversion tool call works.')
-    + '<div style="background:var(--cream);border-radius:10px;padding:16px 20px"><h4 style="margin:0 0 8px;font-size:14px">General checks (all verticals)</h4>'
-    + protoCheck('Latency', 'Total turn time under 3 seconds')
-    + protoCheck('Language', 'Agent stays consistent with configured language')
-    + protoCheck('Tool leaks', 'No tool calls or JSON leaks into spoken responses')
-    + protoCheck('Repetition', 'Agent does not repeat itself')
-    + protoCheck('Silence follow-up', 'On silence, agent asks a natural follow-up question')
-    + protoCheck('State reset', 'New session starts with fresh greeting \u2014 no memory from before')
+    + testCard('Variant Parity Test', '1 run per variant (A/B/C)', 'Same scenario, three variants. Every quality criterion below must hold for ALL three. Compare latency in Test History.')
+    + testCard('Session Test', '10 times per vertical', 'Full conversation from greeting to conversion. Close and reopen. Verify state resets correctly between sessions.')
+    + testCard('Stress Test', '3 times', 'Speak quickly. Interrupt mid-sentence. Speak again immediately. Reveals race conditions, double-responses, lost-audio bugs.')
+    + testCard('Idle Test', '2 times', 'Open the agent and wait 10 minutes without speaking. Then speak. Tests silence follow-up + WebSocket health.')
+    + testCard('Conversion Test', '5 times', 'Drive to conversion. Verify trigger_conversion fires + booking URL opens + no other tool fires in the same turn.')
+
+    // Latency targets
+    + '<div style="background:var(--cream);border-radius:10px;padding:16px 20px;margin-bottom:12px"><h4 style="margin:0 0 8px;font-size:14px">Latency targets (testRunner avg, 5\u20137 turn flow)</h4>'
+    + protoCheck('Text-only turn', 'TTFT \u2264 1500ms, total \u2264 2500ms')
+    + protoCheck('Greeting turn', 'TTFT \u2264 2000ms, total \u2264 3000ms')
+    + protoCheck('Tool turn (text + tool in one call)', 'TTFT \u2264 2500ms, total \u2264 3500ms')
+    + protoCheck('Tool-only + Groq follow-up', 'TTFT \u2264 2800ms, total \u2264 4000ms (two LLM calls)')
+    + protoCheck('Session average', 'Avg \u2264 1200ms across the whole flow')
+    + '</div>'
+
+    // Question discipline (broker vs chatbot)
+    + '<div style="background:var(--cream);border-radius:10px;padding:16px 20px;margin-bottom:12px"><h4 style="margin:0 0 8px;font-size:14px">Question discipline \u2014 broker, not chatbot</h4>'
+    + protoCheck('Max 2 qualifying questions', 'Before showing the first space \u2014 then transition to showing')
+    + protoCheck('No premature conversion', 'NEVER offer "schedule a viewing" / "book a tour" / "lock it in" in turn 1\u20132')
+    + protoCheck('No lifestyle trivia', 'Forbidden: "do you cook a lot", "movie nights or coffee", "shower or bath person", "do you host often"')
+    + protoCheck('Word "layout" in questions', '\u2264 2 per session \u2014 rotate angles: size, light, storage, flow, fit, separation, daily-use')
+    + protoCheck('Anchor to stated facts', 'When profile has familySize / currentSituation / mustHaves, room descriptions MUST tie back to one of them')
+    + protoCheck('One question per response', 'Never two questions in the same turn \u2014 visitors lose track')
+    + '</div>'
+
+    // Tool behaviour (regex fallback layer)
+    + '<div style="background:var(--cream);border-radius:10px;padding:16px 20px;margin-bottom:12px"><h4 style="margin:0 0 8px;font-size:14px">Tool behaviour \u2014 regex-fallback safety net</h4>'
+    + protoCheck('Explicit nav', '"Show me the X" / "Take me to X" \u2192 navigate_to_room fires immediately, no preamble')
+    + protoCheck('Implicit nav (regex fallback)', '"Where would I cook", "Where do the kids sleep", "Take me somewhere quiet" \u2192 navigate fires server-side even if GPT misses')
+    + protoCheck('Profile capture (regex fallback)', 'familySize / timeline / budget / purpose captured even when GPT skips update_user_profile')
+    + protoCheck('Conversion trigger', '"Schedule a viewing" / "Book it" \u2192 trigger_conversion fires \u2014 only AFTER \u2265 1 room shown')
+    + protoCheck('Floor plan', '"Show me the floor plan" \u2192 show_floorplan fires, NOT a fallback to navigate_to_room')
+    + protoCheck('No phantom navigation', 'Agent NEVER navigates to a room not in the configured places list')
+    + '</div>'
+
+    // Honesty / grounding
+    + '<div style="background:var(--cream);border-radius:10px;padding:16px 20px;margin-bottom:12px"><h4 style="margin:0 0 8px;font-size:14px">Honesty &amp; grounding \u2014 anti-hallucination</h4>'
+    + protoCheck('Missing features', '"Rooftop garden" / "basement" / "pool" \u2192 "we don\'t have" + offer alternative')
+    + protoCheck('Price honesty', '"What is the price" \u2192 defer to next-step page, NEVER invent a number')
+    + protoCheck('Unknown facts', 'School district / HOA fees / commute times \u2192 admit if not in compiledContext, offer to check')
+    + protoCheck('No fabricated detail', 'Never describes furniture / decor / features absent from property data ("plush carpet", "coffee carafe")')
+    + '</div>'
+
+    // Output safety
+    + '<div style="background:var(--cream);border-radius:10px;padding:16px 20px;margin-bottom:12px"><h4 style="margin:0 0 8px;font-size:14px">Output safety</h4>'
+    + protoCheck('No tool leaks', 'Spoken text contains no JSON, field/value pairs, "navigate_to_room", "[ACTION:", or "{\\"new_state\\""')
+    + protoCheck('No tool-name verbs', 'Never says "navigate", "trigger", "function", "tool" \u2014 use "show", "take", "open", "bring"')
+    + protoCheck('No repetition', 'Same opening pattern never twice in a row; no sentence repeats verbatim across turns')
+    + protoCheck('Single tool per conversion turn', 'When trigger_conversion fires, NO other tool fires in same turn (no UI-overlap)')
+    + protoCheck('Language consistency', 'Agent stays in the configured language for the entire session')
+    + '</div>'
+
+    // Resilience
+    + '<div style="background:var(--cream);border-radius:10px;padding:16px 20px"><h4 style="margin:0 0 8px;font-size:14px">Resilience \u2014 stress &amp; edge cases</h4>'
+    + protoCheck('Interrupt handling', 'Mid-sentence interrupt \u2192 TTS stops cleanly, agent listens to new input, no double-response')
+    + protoCheck('Silence follow-up', 'After 20s silence, agent asks ONE natural follow-up \u2014 max once per session')
+    + protoCheck('State reset', 'New session = fresh greeting, zero memory from previous session, profile cleared')
+    + protoCheck('Decline on conversion', 'After "no thanks" to viewing, agent does NOT keep showing rooms \u2014 asks objection-discovery question once')
     + '</div></div>'
 
     // Hotel
