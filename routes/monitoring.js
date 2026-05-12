@@ -778,6 +778,84 @@ module.exports = function(pool) {
     }
   });
 
+  /* ═══════════════════════════════════════════════════════════════
+     VISITOR RELIABILITY — embed.js telemetry surfacing
+     Reads from client_events table (populated by visitor browsers
+     POSTing to /api/client-event on the main October AI service).
+     Returns: 24h + 7d aggregates of:
+       · sessions_started     (consent_accepted + consent_cached)
+       · reliability fail-rate (readiness_watchdog_fired / sessions_started)
+       · top-5 failure event types by count
+       · mic-blocked count (visitor stuck at gate)
+       · audio-output-silent count (visitor heard nothing)
+     Single endpoint serves both 24h and 7d to avoid two round-trips
+     for the System Health page render.
+     ═══════════════════════════════════════════════════════════════ */
+  router.get('/visitor-reliability', async (req, res) => {
+    try {
+      /* Run all aggregates in parallel — same shape for 24h and 7d
+         so the UI can render them side-by-side without re-shaping. */
+      const SESSION_EVENTS = "('consent_accepted','consent_cached')";
+      const FAIL_EVENTS = "('readiness_watchdog_fired','ws_onerror','token_refresh_failed','visibility_resume_failed','mic_permission_blocked','audio_output_silent','audioworklet_unsupported','on_accept_threw','getusermedia_rejected','ws_abnormal_close','deadman_fired','audio_resume_failed','cold_start_slow')";
+
+      const windowSummary = async (interval) => {
+        const [sessions, fails, micBlocked, audioSilent, watchdog, recovered, slowCold, topFails] = await Promise.all([
+          query(`SELECT COUNT(*) c FROM client_events WHERE type IN ${SESSION_EVENTS} AND received_at > NOW() - INTERVAL '${interval}'`),
+          query(`SELECT COUNT(*) c FROM client_events WHERE type IN ${FAIL_EVENTS} AND received_at > NOW() - INTERVAL '${interval}'`),
+          query(`SELECT COUNT(*) c FROM client_events WHERE type = 'mic_permission_blocked' AND received_at > NOW() - INTERVAL '${interval}'`),
+          query(`SELECT COUNT(*) c FROM client_events WHERE type = 'audio_output_silent' AND received_at > NOW() - INTERVAL '${interval}'`),
+          query(`SELECT COUNT(*) c FROM client_events WHERE type = 'readiness_watchdog_fired' AND received_at > NOW() - INTERVAL '${interval}'`),
+          query(`SELECT COUNT(*) c FROM client_events WHERE type = 'audio_output_recovered' AND received_at > NOW() - INTERVAL '${interval}'`),
+          query(`SELECT COUNT(*) c FROM client_events WHERE type = 'cold_start_slow' AND received_at > NOW() - INTERVAL '${interval}'`),
+          query(`SELECT type, COUNT(*) c FROM client_events WHERE type IN ${FAIL_EVENTS} AND received_at > NOW() - INTERVAL '${interval}' GROUP BY type ORDER BY c DESC LIMIT 5`)
+        ]);
+        const s = parseInt(sessions.rows[0]?.c || 0);
+        const f = parseInt(fails.rows[0]?.c || 0);
+        const failRate = s > 0 ? Math.round((f / s) * 100) : 0;
+        return {
+          sessions_started: s,
+          fails_total: f,
+          fail_rate_pct: failRate,
+          mic_blocked: parseInt(micBlocked.rows[0]?.c || 0),
+          audio_output_silent: parseInt(audioSilent.rows[0]?.c || 0),
+          audio_output_recovered: parseInt(recovered.rows[0]?.c || 0),
+          readiness_watchdog_fired: parseInt(watchdog.rows[0]?.c || 0),
+          cold_start_slow: parseInt(slowCold.rows[0]?.c || 0),
+          top_failure_types: topFails.rows.map(r => ({ type: r.type, count: parseInt(r.c) }))
+        };
+      };
+
+      const [last24h, last7d, recent] = await Promise.all([
+        windowSummary('24 hours'),
+        windowSummary('7 days'),
+        /* Recent stream of failure events for the live log table.
+           Joined with tenants to show agent name when available. */
+        query(`
+          SELECT e.received_at, e.type, e.msg, e.code, e.url_path,
+                 e.tenant_id, e.ua_brief, t.agent_name, t.name as tenant_name
+          FROM client_events e
+          LEFT JOIN tenants t ON t.id::text = e.tenant_id
+          WHERE e.type IN ${FAIL_EVENTS}
+          ORDER BY e.received_at DESC
+          LIMIT 25
+        `)
+      ]);
+
+      res.json({
+        last24h,
+        last7d,
+        recent: recent.rows
+      });
+    } catch (e) {
+      console.error('Visitor reliability query failed:', e);
+      res.json({
+        last24h: { sessions_started: 0, fails_total: 0, fail_rate_pct: 0, mic_blocked: 0, audio_output_silent: 0, audio_output_recovered: 0, readiness_watchdog_fired: 0, cold_start_slow: 0, top_failure_types: [] },
+        last7d: { sessions_started: 0, fails_total: 0, fail_rate_pct: 0, mic_blocked: 0, audio_output_silent: 0, audio_output_recovered: 0, readiness_watchdog_fired: 0, cold_start_slow: 0, top_failure_types: [] },
+        recent: []
+      });
+    }
+  });
+
   /* ═══════════════════════════════════════
      TENANTS LIST — for sandbox "Load from tenant"
      ═══════════════════════════════════════ */

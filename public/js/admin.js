@@ -806,6 +806,12 @@ function loadHealth() {
     + healthCard('Deepgram API', 'checking', 'deepgram')
     + healthCard('Cartesia API', 'checking', 'cartesia')
     + '</div>'
+    /* 2026-05-12 — visitor reliability section, fed by embed.js
+       telemetry POSTs to /api/client-event on the main service.
+       Reads 24h + 7d aggregates from client_events. */
+    + '<div class="section-title">Visitor Reliability</div>'
+    + '<p style="color:var(--muted);font-size:12px;margin:-4px 0 14px;">First-load success on visitor side. Tracks the consent &rarr; first audio chain.</p>'
+    + '<div id="visitorReliability">Loading...</div>'
     + '<div class="section-title">Recent Errors</div>'
     + '<div id="errorLog">Loading...</div>';
   c.innerHTML = html;
@@ -823,6 +829,44 @@ function loadHealth() {
     });
   });
 
+  /* Visitor reliability — 24h + 7d cards side-by-side, then a recent
+     failure events table. Single endpoint returns both windows. */
+  api('/api/monitoring/visitor-reliability').then(function(data) {
+    var el = document.getElementById('visitorReliability');
+    if (!el) return;
+    if (!data || !data.last24h) {
+      el.innerHTML = '<p style="color:var(--muted);font-size:13px">No telemetry yet.</p>';
+      return;
+    }
+    var html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">'
+      + visitorReliabilityCard('Last 24 hours', data.last24h)
+      + visitorReliabilityCard('Last 7 days', data.last7d)
+      + '</div>';
+
+    if (data.recent && data.recent.length > 0) {
+      html += '<div style="font-size:12px;letter-spacing:0.04em;text-transform:uppercase;color:var(--muted);font-weight:600;margin:0 0 8px;">Recent failure events</div>';
+      html += '<table class="data-table"><thead><tr><th>Time</th><th>Event</th><th>Agent</th><th>Detail</th><th>Browser</th></tr></thead><tbody>';
+      data.recent.forEach(function(r) {
+        var detail = r.msg ? esc(r.msg) : (r.code ? esc(r.code) : '-');
+        var browser = r.ua_brief ? esc(String(r.ua_brief).split(' ').slice(-3).join(' ')) : '-';
+        html += '<tr>'
+          + '<td>' + fmtDate(r.received_at) + '</td>'
+          + '<td><span style="font-family:monospace;font-size:11px;background:#f5f0e8;padding:2px 6px;border-radius:3px;">' + esc(r.type) + '</span></td>'
+          + '<td>' + esc(r.agent_name || r.tenant_name || '-') + '</td>'
+          + '<td style="font-size:12px;color:#666;">' + detail + '</td>'
+          + '<td style="font-size:11px;color:#888;">' + browser + '</td>'
+          + '</tr>';
+      });
+      html += '</tbody></table>';
+    } else {
+      html += '<p style="color:var(--muted);font-size:13px">No failure events recorded.</p>';
+    }
+    el.innerHTML = html;
+  }).catch(function() {
+    var el = document.getElementById('visitorReliability');
+    if (el) el.innerHTML = '<p style="color:var(--muted);font-size:13px">Unable to load visitor reliability data.</p>';
+  });
+
   api('/api/monitoring/errors').then(function(errors) {
     var el = document.getElementById('errorLog');
     if (errors.length === 0) {
@@ -836,6 +880,44 @@ function loadHealth() {
     html += '</tbody></table>';
     el.innerHTML = html;
   });
+}
+
+/* 2026-05-12 — Visitor reliability summary card (used for both 24h
+   and 7d windows). Health-color of fail-rate value:
+     · <5%  green (good)
+     · 5-15% amber (watch)
+     · >15% red (act) */
+function visitorReliabilityCard(label, d) {
+  var rate = d.fail_rate_pct || 0;
+  var color = rate < 5 ? '#16a34a' : (rate < 15 ? '#d97706' : '#991b1b');
+  var topList = '';
+  if (d.top_failure_types && d.top_failure_types.length > 0) {
+    topList = '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">'
+      + '<div style="font-size:10px;letter-spacing:0.05em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:6px;">Top failure types</div>';
+    d.top_failure_types.forEach(function(t) {
+      topList += '<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;">'
+        + '<span style="font-family:monospace;color:#444;">' + esc(t.type) + '</span>'
+        + '<span style="color:#666;font-weight:600;">' + t.count + '</span>'
+        + '</div>';
+    });
+    topList += '</div>';
+  } else {
+    topList = '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;color:var(--muted);">No failures recorded.</div>';
+  }
+
+  return '<div style="background:var(--white);border:1px solid var(--border);border-radius:10px;padding:18px;">'
+    + '<div style="font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:10px;">' + label + '</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">'
+    + '  <div><div style="font-size:11px;color:var(--muted);">Sessions</div><div style="font-family:var(--serif);font-size:26px;font-weight:300;line-height:1.1;">' + d.sessions_started + '</div></div>'
+    + '  <div><div style="font-size:11px;color:var(--muted);">Fail rate</div><div style="font-family:var(--serif);font-size:26px;font-weight:300;line-height:1.1;color:' + color + ';">' + rate + '%</div></div>'
+    + '</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:14px;font-size:12px;">'
+    + '  <div title="Visitors who hit the consent gate with already-blocked microphone permission"><span style="color:var(--muted);">Mic blocked</span><div style="font-weight:600;">' + d.mic_blocked + '</div></div>'
+    + '  <div title="Visitors who saw the readiness watchdog popup fire \u2014 15s of silence after consent"><span style="color:var(--muted);">Watchdog</span><div style="font-weight:600;">' + d.readiness_watchdog_fired + '</div></div>'
+    + '  <div title="Visitors who saw the &quot;hear nothing?&quot; output hint"><span style="color:var(--muted);">Silent out</span><div style="font-weight:600;">' + d.audio_output_silent + '</div></div>'
+    + '</div>'
+    + topList
+    + '</div>';
 }
 
 function healthCard(name, status, id) {
