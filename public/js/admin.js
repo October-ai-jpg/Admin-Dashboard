@@ -81,8 +81,196 @@ function loadPage(page) {
     case 'test-protocol': loadTestProtocol(); break;
     case 'client-portal': window.open('/client/demo/agent', '_blank'); break;
     case 'meta-lp': loadMetaLp(); break;
+    case 'voice-telemetry': loadVoiceTelemetry(); break;
   }
 }
+
+/* ── Voice Telemetry page (2026-05-12) ──
+   Reads from eb-tour-agent's /api/admin/voice-telemetry/* endpoints.
+   We use the platform's www.october-ai.com origin since the admin
+   dashboard runs on a separate host but the telemetry API allows
+   cross-origin with x-admin-key auth. */
+var VT_API_BASE = "https://www.october-ai.com/api/admin/voice-telemetry";
+var VT_ADMIN_KEY = (typeof window !== 'undefined' && window.__ADMIN_KEY) || 'october-admin-2026';
+var _vtLastSessionData = null;
+
+function vtFetch(path) {
+  return fetch(VT_API_BASE + path, {
+    method: 'GET',
+    headers: { 'x-admin-key': VT_ADMIN_KEY }
+  }).then(function(r){
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  });
+}
+
+function vtFmtTime(iso) {
+  if (!iso) return '—';
+  var d = new Date(iso);
+  return d.toLocaleString('en-GB', { hour12: false }).replace(/,/g,'');
+}
+
+function vtBadge(status) {
+  var cls = 'incomplete';
+  if (status === 'OK') cls = 'ok';
+  else if (status === 'CONVERTED') cls = 'conv';
+  return '<span class="vt-badge ' + cls + '">' + (status || '—') + '</span>';
+}
+
+function loadVoiceTelemetry() {
+  /* Bind filter handlers once */
+  var reload = document.getElementById('vtReload');
+  if (reload && !reload.__bound) {
+    reload.addEventListener('click', loadVoiceTelemetry);
+    reload.__bound = true;
+  }
+  ['vtFilterStatus','vtFilterVertical','vtFilterTenant'].forEach(function(id){
+    var el = document.getElementById(id);
+    if (el && !el.__bound) {
+      el.addEventListener('change', loadVoiceTelemetry);
+      el.__bound = true;
+    }
+  });
+
+  /* Stats cards */
+  vtFetch('/stats?hours=24').then(function(d){
+    var sessions = d.sessions || [];
+    var byCode = {};
+    var totalSessions = 0;
+    sessions.forEach(function(r){
+      byCode[r.code] = parseInt(r.n || 0);
+      totalSessions += parseInt(r.n || 0);
+    });
+    var errors = (d.errors || []).reduce(function(s, r){ return s + parseInt(r.n || 0); }, 0);
+    var turns = d.turns || {};
+    document.getElementById('vtStatSessions').textContent = totalSessions;
+    document.getElementById('vtStatConv').textContent = (byCode.CONVERTED || 0);
+    document.getElementById('vtStatIncomplete').textContent = (byCode.INCOMPLETE || 0);
+    document.getElementById('vtStatErrors').textContent = errors;
+    document.getElementById('vtStatAvgMs').textContent = turns.avg_total_ms || '—';
+    document.getElementById('vtStatAvgLLM').textContent = turns.avg_llm_ms || '—';
+  }).catch(function(e){
+    console.warn('[VT] stats:', e.message);
+  });
+
+  /* Sessions list */
+  var qs = [];
+  var statusVal = (document.getElementById('vtFilterStatus') || {}).value;
+  var verticalVal = (document.getElementById('vtFilterVertical') || {}).value;
+  var tenantVal = (document.getElementById('vtFilterTenant') || {}).value;
+  if (statusVal) qs.push('status=' + encodeURIComponent(statusVal));
+  if (verticalVal) qs.push('vertical=' + encodeURIComponent(verticalVal));
+  if (tenantVal) qs.push('tenant_id=' + encodeURIComponent(tenantVal.trim()));
+  qs.push('limit=100');
+
+  vtFetch('/sessions?' + qs.join('&')).then(function(d){
+    var tbody = document.getElementById('vtSessionsBody');
+    if (!tbody) return;
+    if (!d.sessions || !d.sessions.length) {
+      tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:30px">No sessions yet</td></tr>';
+      return;
+    }
+    tbody.innerHTML = d.sessions.map(function(s){
+      var p = s.payload || {};
+      return '<tr class="row-click" onclick="vtOpenSession(\'' + s.session_id + '\')">' +
+        '<td>' + vtFmtTime(s.received_at) + '</td>' +
+        '<td>' + vtBadge(s.status) + '</td>' +
+        '<td>' + (p.vertical || '—') + '</td>' +
+        '<td style="font-family:Menlo,monospace;font-size:11px">' + (s.tenant_id ? s.tenant_id.slice(0,8) : '—') + '</td>' +
+        '<td>' + (p.total_turns || 0) + '</td>' +
+        '<td>' + (p.duration_s || 0) + 's</td>' +
+        '<td>' + (p.avg_total_ms || 0) + '</td>' +
+        '<td>' + (p.p95_total_ms || 0) + '</td>' +
+        '<td>' + (p.total_errors > 0 ? '<span class="vt-badge err">' + p.total_errors + '</span>' : '0') + '</td>' +
+        '<td>' + (p.conversion_fired ? '✓' : '') + '</td>' +
+      '</tr>';
+    }).join('');
+  }).catch(function(e){
+    var tbody = document.getElementById('vtSessionsBody');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#b91c1c;padding:30px">Failed to load: ' + e.message + '</td></tr>';
+  });
+
+  /* Errors list */
+  vtFetch('/errors?limit=30').then(function(d){
+    var tbody = document.getElementById('vtErrorsBody');
+    if (!tbody) return;
+    if (!d.errors || !d.errors.length) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:24px">No errors — good!</td></tr>';
+      return;
+    }
+    tbody.innerHTML = d.errors.map(function(e){
+      return '<tr>' +
+        '<td>' + vtFmtTime(e.received_at) + '</td>' +
+        '<td><span class="vt-badge err">' + e.type.replace('voice_','') + '</span></td>' +
+        '<td style="font-family:Menlo,monospace;font-size:11px">' + (e.code || '—') + '</td>' +
+        '<td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (e.msg || '').replace(/"/g,'&quot;') + '">' + (e.msg || '—') + '</td>' +
+        '<td><a href="#" onclick="vtOpenSession(\'' + (e.session_id || '') + '\');return false" style="font-family:Menlo,monospace;font-size:11px">' + (e.session_id ? e.session_id.slice(0,8) : '—') + '</a></td>' +
+      '</tr>';
+    }).join('');
+  }).catch(function(e){
+    var tbody = document.getElementById('vtErrorsBody');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#b91c1c;padding:24px">Failed: ' + e.message + '</td></tr>';
+  });
+}
+
+window.vtOpenSession = function(sessionId) {
+  if (!sessionId) return;
+  vtFetch('/session/' + encodeURIComponent(sessionId)).then(function(d){
+    _vtLastSessionData = d;
+    var summary = d.summary && d.summary.payload || {};
+    document.getElementById('vtModalSummary').innerHTML =
+      '<b>Session:</b> <code>' + sessionId + '</code><br>' +
+      '<b>Status:</b> ' + (d.summary && d.summary.code || '—') + ' · ' +
+      '<b>Duration:</b> ' + (summary.duration_s || 0) + 's · ' +
+      '<b>Turns:</b> ' + (summary.total_turns || 0) + ' · ' +
+      '<b>Errors:</b> ' + (summary.total_errors || 0) + ' · ' +
+      '<b>Conversion:</b> ' + (summary.conversion_fired ? 'YES' : 'no');
+    document.getElementById('vtModalDownload').href = VT_API_BASE + '/export.json?session_id=' + encodeURIComponent(sessionId) + '&_k=' + encodeURIComponent(VT_ADMIN_KEY);
+    /* download URL won't authenticate without header — set click handler to fetch+blob instead */
+    document.getElementById('vtModalDownload').onclick = function(ev){
+      ev.preventDefault();
+      fetch(VT_API_BASE + '/export.json?session_id=' + encodeURIComponent(sessionId), {
+        headers: { 'x-admin-key': VT_ADMIN_KEY }
+      }).then(function(r){ return r.blob(); }).then(function(blob){
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'voice-telemetry-' + sessionId + '.ndjson';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+      });
+    };
+    var events = d.events || [];
+    document.getElementById('vtModalEvents').innerHTML = events.map(function(e){
+      return '<div class="vt-event">' +
+        '<span class="vt-event-type">' + e.type.replace('voice_','') + '</span>' +
+        '<span class="vt-event-meta">' + vtFmtTime(e.received_at) + (e.code ? ' · ' + e.code : '') + '</span>' +
+        (e.msg ? '<div style="font-size:12px;color:#444;margin:2px 0">' + e.msg + '</div>' : '') +
+        '<pre class="vt-pre">' + JSON.stringify(e.payload, null, 2) + '</pre>' +
+      '</div>';
+    }).join('') || '<div style="color:var(--muted);padding:20px;text-align:center">No events for this session</div>';
+    document.getElementById('vtModal').classList.add('open');
+  }).catch(function(e){
+    alert('Failed to load session: ' + e.message);
+  });
+};
+
+window.vtCloseModal = function() {
+  document.getElementById('vtModal').classList.remove('open');
+};
+
+window.vtCopyToClipboard = function() {
+  if (!_vtLastSessionData) return;
+  navigator.clipboard.writeText(JSON.stringify(_vtLastSessionData, null, 2)).then(function(){
+    /* tiny visual feedback */
+    var btn = document.querySelector('.vt-modal.open .vt-btn-secondary');
+    if (btn) {
+      var orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(function(){ btn.textContent = orig; }, 1500);
+    }
+  });
+};
 
 /* ── /lp/meta analytics page ── */
 function loadMetaLp() {

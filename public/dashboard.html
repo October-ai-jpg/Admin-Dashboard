@@ -55,6 +55,10 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 12c0-5.52-4.48-10-10-10S2 6.48 2 12s4.48 10 10 10 10-4.48 10-10z"/><path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
     <span>Meta Landing Page</span>
   </a>
+  <a class="sidebar-link" data-page="voice-telemetry">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2v6m0 0a3 3 0 100 6 3 3 0 000-6zm0 6v8m-6-4h12"/></svg>
+    <span>Voice Telemetry</span>
+  </a>
 
   <div class="sidebar-section-label">Agent Builder</div>
   <a class="sidebar-link" data-page="default-system">
@@ -240,6 +244,106 @@
     <h2>Recent events</h2>
     <div id="metaLpRecent"></div>
   </div>
+
+  <!-- ═══ VOICE TELEMETRY (2026-05-12) ═══
+       Server-side technical session monitoring. Reads from eb-tour-agent's
+       /api/admin/voice-telemetry/* endpoints. NO transcripts, NO PII —
+       only latencies, error codes, tool calls per session. -->
+  <div class="page-container" id="page-voice-telemetry">
+    <style>
+      #page-voice-telemetry{padding:32px}
+      #page-voice-telemetry h1{font-family:var(--serif);font-size:32px;font-weight:400;margin:0 0 6px}
+      #page-voice-telemetry .vt-sub{color:var(--muted);font-size:14px;margin-bottom:24px}
+      #page-voice-telemetry h2{font-family:var(--serif);font-size:22px;font-weight:400;margin:28px 0 12px}
+      #page-voice-telemetry .vt-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:8px 0 24px}
+      #page-voice-telemetry .vt-card{background:var(--white);border:1px solid var(--border);border-radius:10px;padding:16px}
+      #page-voice-telemetry .vt-card-label{font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:6px}
+      #page-voice-telemetry .vt-card-value{font-family:var(--serif);font-size:28px;font-weight:300;line-height:1;color:var(--black)}
+      #page-voice-telemetry .vt-card-value.err{color:#b91c1c}
+      #page-voice-telemetry .vt-filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+      #page-voice-telemetry select,#page-voice-telemetry input{background:#fff;border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:13px;font-family:inherit}
+      #page-voice-telemetry table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--border);border-radius:10px;overflow:hidden}
+      #page-voice-telemetry th{text-align:left;padding:10px 14px;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;font-weight:600;color:var(--muted);background:#fafafa;border-bottom:1px solid var(--border)}
+      #page-voice-telemetry td{padding:10px 14px;font-size:13px;border-bottom:1px solid #f5f5f5;vertical-align:top}
+      #page-voice-telemetry tr.row-click{cursor:pointer}
+      #page-voice-telemetry tr.row-click:hover{background:#fafafa}
+      #page-voice-telemetry .vt-badge{display:inline-block;padding:3px 9px;border-radius:99px;font-size:11px;font-weight:600;letter-spacing:0.04em}
+      #page-voice-telemetry .vt-badge.ok{background:#dcfce7;color:#166534}
+      #page-voice-telemetry .vt-badge.conv{background:#dbeafe;color:#1e40af}
+      #page-voice-telemetry .vt-badge.incomplete{background:#fef9c3;color:#854d0e}
+      #page-voice-telemetry .vt-badge.err{background:#fee2e2;color:#991b1b}
+      #page-voice-telemetry .vt-modal{position:fixed;inset:0;background:rgba(0,0,0,0.5);display:none;align-items:center;justify-content:center;z-index:1000}
+      #page-voice-telemetry .vt-modal.open{display:flex}
+      #page-voice-telemetry .vt-modal-inner{background:#fff;border-radius:12px;max-width:900px;width:92%;max-height:88vh;overflow:auto;padding:24px;position:relative}
+      #page-voice-telemetry .vt-modal-close{position:absolute;top:14px;right:14px;background:none;border:none;font-size:24px;cursor:pointer;color:var(--muted)}
+      #page-voice-telemetry .vt-event{padding:10px 0;border-bottom:1px solid #f5f5f5;font-size:13px}
+      #page-voice-telemetry .vt-event-type{font-weight:600;margin-right:8px}
+      #page-voice-telemetry .vt-event-meta{color:var(--muted);font-size:11px;margin-bottom:4px}
+      #page-voice-telemetry pre.vt-pre{font-family:Menlo,monospace;font-size:11px;background:#fafafa;padding:8px;border-radius:6px;overflow-x:auto;margin:4px 0 0}
+      #page-voice-telemetry .vt-actions{display:flex;gap:8px;margin-top:14px}
+      #page-voice-telemetry .vt-btn{padding:8px 14px;background:#1a1611;color:#faf6f1;border:none;border-radius:8px;font-size:13px;cursor:pointer;text-decoration:none;display:inline-block;font-family:inherit}
+      #page-voice-telemetry .vt-btn-secondary{background:#fff;color:#1a1611;border:1px solid var(--border)}
+    </style>
+
+    <h1>Voice Telemetry</h1>
+    <p class="vt-sub">Server-side technical health of every voice session. No transcripts, no PII — only latencies, errors, tool calls. Click any row to see the full event timeline. Hourly auto-refresh.</p>
+
+    <h2>Last 24 hours</h2>
+    <div id="vtStatsCards" class="vt-cards">
+      <div class="vt-card"><div class="vt-card-label">Sessions</div><div class="vt-card-value" id="vtStatSessions">—</div></div>
+      <div class="vt-card"><div class="vt-card-label">Conversions</div><div class="vt-card-value" id="vtStatConv">—</div></div>
+      <div class="vt-card"><div class="vt-card-label">Incomplete</div><div class="vt-card-value" id="vtStatIncomplete">—</div></div>
+      <div class="vt-card"><div class="vt-card-label">Total errors</div><div class="vt-card-value err" id="vtStatErrors">—</div></div>
+      <div class="vt-card"><div class="vt-card-label">Avg turn (ms)</div><div class="vt-card-value" id="vtStatAvgMs">—</div></div>
+      <div class="vt-card"><div class="vt-card-label">Avg LLM (ms)</div><div class="vt-card-value" id="vtStatAvgLLM">—</div></div>
+    </div>
+
+    <h2>Recent sessions</h2>
+    <div class="vt-filters">
+      <select id="vtFilterStatus">
+        <option value="">All statuses</option>
+        <option value="OK">OK</option>
+        <option value="CONVERTED">Converted</option>
+        <option value="INCOMPLETE">Incomplete</option>
+      </select>
+      <select id="vtFilterVertical">
+        <option value="">All verticals</option>
+        <option value="real_estate">Real estate</option>
+        <option value="hospitality">Hospitality</option>
+        <option value="other">Other</option>
+      </select>
+      <input id="vtFilterTenant" placeholder="Tenant ID (optional)" style="min-width:280px"/>
+      <button class="vt-btn" id="vtReload">Reload</button>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Time</th><th>Status</th><th>Vertical</th><th>Tenant</th>
+        <th>Turns</th><th>Duration</th><th>Avg ms</th><th>P95 ms</th><th>Errors</th><th>Conv</th>
+      </tr></thead>
+      <tbody id="vtSessionsBody"><tr><td colspan="10" style="text-align:center;color:var(--muted);padding:30px">Loading…</td></tr></tbody>
+    </table>
+
+    <h2>Recent errors</h2>
+    <table>
+      <thead><tr><th>Time</th><th>Type</th><th>Code</th><th>Message</th><th>Session</th></tr></thead>
+      <tbody id="vtErrorsBody"><tr><td colspan="5" style="text-align:center;color:var(--muted);padding:24px">Loading…</td></tr></tbody>
+    </table>
+
+    <!-- session timeline modal -->
+    <div class="vt-modal" id="vtModal">
+      <div class="vt-modal-inner">
+        <button class="vt-modal-close" onclick="vtCloseModal()">×</button>
+        <h2 style="margin-top:0">Session timeline</h2>
+        <div id="vtModalSummary" style="font-size:13px;color:var(--muted);margin-bottom:14px"></div>
+        <div class="vt-actions">
+          <a class="vt-btn" id="vtModalDownload" target="_blank">Download NDJSON</a>
+          <button class="vt-btn vt-btn-secondary" onclick="vtCopyToClipboard()">Copy JSON</button>
+        </div>
+        <div id="vtModalEvents" style="margin-top:14px"></div>
+      </div>
+    </div>
+  </div>
+
   <div class="page-container" id="page-default-system"></div>
   <div class="page-container" id="page-sandbox"></div>
   <div class="page-container" id="page-sdk-sandbox"></div>
