@@ -84,8 +84,108 @@ function loadPage(page) {
     case 'voice-telemetry': loadVoiceTelemetry(); break;
     case 'affiliate-bonuses': loadAffiliateBonuses(); break;
     case 'canary': loadCanary(); break;
+    case 'live-sessions': loadLiveSessions(); break;
   }
 }
+
+/* ── Live Sessions (2026-05-13) ──
+   Real-time view of in-progress voice sessions. Auto-refreshes every 5s
+   while the page is visible. Reads from eb-tour-agent's
+   /api/admin/sessions/* endpoints. */
+var LS_API_BASE = "https://www.october-ai.com/api/admin/sessions";
+var LS_ADMIN_KEY = (typeof window !== 'undefined' && window.__ADMIN_KEY) || 'october-admin-2026';
+var _lsRefreshTimer = null;
+
+function lsFetch(path, opts) {
+  opts = opts || {};
+  return fetch(LS_API_BASE + path, {
+    method: opts.method || 'GET',
+    headers: { 'Authorization': 'Bearer ' + LS_ADMIN_KEY }
+  }).then(function(r){
+    return r.json().then(function(j){
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      return j;
+    });
+  });
+}
+
+function lsHealthClass(score) {
+  if (score >= 80) return 'good';
+  if (score >= 50) return 'mid';
+  return 'bad';
+}
+
+function lsFmtDuration(s) {
+  if (!s || s < 1) return '0s';
+  if (s < 60) return s + 's';
+  return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+}
+
+function loadLiveSessions() {
+  /* Stop any existing refresh loop so we don't double-poll if user
+     navigates away and back. */
+  if (_lsRefreshTimer) clearInterval(_lsRefreshTimer);
+
+  function tick() {
+    var pageActive = document.getElementById('page-live-sessions');
+    if (!pageActive || pageActive.style.display === 'none') {
+      if (_lsRefreshTimer) { clearInterval(_lsRefreshTimer); _lsRefreshTimer = null; }
+      return;
+    }
+    lsFetch('/stats').then(function(d){
+      document.getElementById('lsStatActive').textContent = d.active;
+      var stuckEl = document.getElementById('lsStatStuck');
+      stuckEl.textContent = d.stuck;
+      stuckEl.className = 'ls-card-rate' + (d.stuck > 0 ? ' alert' : '');
+      var degEl = document.getElementById('lsStatDegraded');
+      degEl.textContent = d.degraded_latency;
+      degEl.className = 'ls-card-rate' + (d.degraded_latency > 0 ? ' warn' : '');
+      var errEl = document.getElementById('lsStatErrors');
+      errEl.textContent = d.error_recent;
+      errEl.className = 'ls-card-rate' + (d.error_recent > 0 ? ' alert' : '');
+      document.getElementById('lsStatAvgLatency').textContent = (d.avg_latency_ms || 0) + 'ms';
+      document.getElementById('lsStatTotal').textContent = d.total_tracked;
+    }).catch(function(){});
+
+    lsFetch('/').then(function(d){
+      var tbody = document.getElementById('lsBody');
+      if (!d.sessions || !d.sessions.length) {
+        tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--muted);padding:30px">No active sessions — wait for someone to start a tour</td></tr>';
+        return;
+      }
+      tbody.innerHTML = d.sessions.map(function(s){
+        var flagsHtml = Object.keys(s.flags || {}).filter(function(k){ return s.flags[k]; }).map(function(k){ return '<span class="ls-flag">' + k.replace(/_/g,' ') + '</span>'; }).join('');
+        var ended = s.ended_at ? ' (ended)' : '';
+        var killBtn = !s.ended_at ? '<button class="ls-btn-kill" onclick="lsKillSession(\'' + s.id + '\')">Kill</button>' : '';
+        return '<tr>' +
+          '<td style="font-family:Menlo,monospace;font-size:11px">' + s.id.slice(0,8) + ended + '</td>' +
+          '<td style="font-family:Menlo,monospace;font-size:11px">' + (s.tenant_id ? s.tenant_id.slice(0,8) : '—') + '</td>' +
+          '<td><span class="ls-state ' + s.state + '">' + s.state + '</span></td>' +
+          '<td><span class="ls-health ' + lsHealthClass(s.health_score) + '">' + s.health_score + '</span></td>' +
+          '<td>' + s.turn_count + '</td>' +
+          '<td>' + (s.avg_latency_ms || '—') + '</td>' +
+          '<td>' + (s.avg_stt_confidence != null ? s.avg_stt_confidence.toFixed(2) : '—') + '</td>' +
+          '<td>' + s.idle_s + 's</td>' +
+          '<td>' + lsFmtDuration(s.duration_s) + '</td>' +
+          '<td>' + (flagsHtml || '—') + '</td>' +
+          '<td>' + killBtn + '</td>' +
+        '</tr>';
+      }).join('');
+    }).catch(function(e){
+      document.getElementById('lsBody').innerHTML = '<tr><td colspan="11" style="text-align:center;color:#b91c1c;padding:20px">Failed: ' + e.message + '</td></tr>';
+    });
+  }
+
+  tick();
+  _lsRefreshTimer = setInterval(tick, 5000);
+}
+
+window.lsKillSession = function(id) {
+  if (!confirm('Kill session ' + id.slice(0,8) + '? The WebSocket will be closed and the visitor will see "Connection lost".')) return;
+  lsFetch('/' + id + '/kill', { method: 'POST' }).then(function(){
+    loadLiveSessions();
+  }).catch(function(e){ alert('Kill failed: ' + e.message); });
+};
 
 /* ── Browser Canary (2026-05-13) ──
    Reads from eb-tour-agent's /api/admin/canary/* endpoints. */

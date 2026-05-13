@@ -67,6 +67,10 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
     <span>Browser Canary</span>
   </a>
+  <a class="sidebar-link" data-page="live-sessions">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3" fill="currentColor"/><path d="M12 5a7 7 0 017 7M12 2a10 10 0 0110 10"/></svg>
+    <span>Live Sessions</span>
+  </a>
 
   <div class="sidebar-section-label">Agent Builder</div>
   <a class="sidebar-link" data-page="default-system">
@@ -480,6 +484,58 @@
     <table>
       <thead><tr><th>Time</th><th>Browser</th><th>Viewport</th><th>Scenario</th><th>Status</th><th>Duration</th><th>Failure step</th></tr></thead>
       <tbody id="cnRecentBody"><tr><td colspan="7" style="text-align:center;color:var(--muted);padding:30px">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- ═══ LIVE SESSIONS (2026-05-13) ═══
+       Real-time view of currently-active voice sessions. Auto-refreshes
+       every 5s. Backed by services/liveSessions.js in-memory registry. -->
+  <div class="page-container" id="page-live-sessions">
+    <style>
+      #page-live-sessions{padding:32px}
+      #page-live-sessions h1{font-family:var(--serif);font-size:32px;font-weight:400;margin:0 0 6px}
+      #page-live-sessions .ls-sub{color:var(--muted);font-size:14px;margin-bottom:24px}
+      #page-live-sessions .ls-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:24px}
+      #page-live-sessions .ls-card{background:#fff;border:1px solid var(--border);border-radius:10px;padding:14px 16px}
+      #page-live-sessions .ls-card-label{font-size:11px;color:var(--muted);letter-spacing:0.05em;text-transform:uppercase;font-weight:600;margin-bottom:6px}
+      #page-live-sessions .ls-card-rate{font-family:var(--serif);font-size:28px;font-weight:300;line-height:1}
+      #page-live-sessions .ls-card-rate.alert{color:#b91c1c}
+      #page-live-sessions .ls-card-rate.warn{color:#a16207}
+      #page-live-sessions table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--border);border-radius:10px;overflow:hidden}
+      #page-live-sessions th{text-align:left;padding:10px 14px;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;font-weight:600;color:var(--muted);background:#fafafa;border-bottom:1px solid var(--border)}
+      #page-live-sessions td{padding:10px 14px;font-size:13px;border-bottom:1px solid #f5f5f5}
+      #page-live-sessions .ls-health{display:inline-block;padding:3px 9px;border-radius:99px;font-size:11px;font-weight:700}
+      #page-live-sessions .ls-health.good{background:#dcfce7;color:#166534}
+      #page-live-sessions .ls-health.mid{background:#fef9c3;color:#854d0e}
+      #page-live-sessions .ls-health.bad{background:#fee2e2;color:#991b1b}
+      #page-live-sessions .ls-flag{display:inline-block;padding:2px 6px;border-radius:4px;font-size:10px;background:#fef2f2;color:#991b1b;margin-right:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em}
+      #page-live-sessions .ls-state{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;background:#dbeafe;color:#1e40af}
+      #page-live-sessions .ls-state.idle{background:#f3f4f6;color:#52525b}
+      #page-live-sessions .ls-state.killed{background:#fee2e2;color:#991b1b}
+      #page-live-sessions .ls-pulse{display:inline-block;width:6px;height:6px;border-radius:99px;background:#16a34a;margin-right:6px;animation:lsPulse 1.5s ease-in-out infinite}
+      @keyframes lsPulse{0%,100%{opacity:1}50%{opacity:0.3}}
+      #page-live-sessions .ls-btn-kill{padding:4px 10px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:6px;font-size:11px;cursor:pointer;font-family:inherit}
+      #page-live-sessions .ls-btn-kill:hover{background:#fecaca}
+    </style>
+
+    <h1><span class="ls-pulse"></span>Live Sessions</h1>
+    <p class="ls-sub">Currently-active voice sessions, refreshed every 5 seconds. Stuck-session watchdog runs server-side every 10s and flags inactive sessions. Health score: latency + STT confidence + tool success + errors. Just-ended sessions stay visible for 2 minutes.</p>
+
+    <div id="lsCards" class="ls-cards">
+      <div class="ls-card"><div class="ls-card-label">Active right now</div><div class="ls-card-rate" id="lsStatActive">—</div></div>
+      <div class="ls-card"><div class="ls-card-label">Stuck</div><div class="ls-card-rate" id="lsStatStuck">—</div></div>
+      <div class="ls-card"><div class="ls-card-label">Degraded latency</div><div class="ls-card-rate" id="lsStatDegraded">—</div></div>
+      <div class="ls-card"><div class="ls-card-label">Errors recent</div><div class="ls-card-rate" id="lsStatErrors">—</div></div>
+      <div class="ls-card"><div class="ls-card-label">Avg latency</div><div class="ls-card-rate" id="lsStatAvgLatency">—</div></div>
+      <div class="ls-card"><div class="ls-card-label">Tracked total</div><div class="ls-card-rate" id="lsStatTotal">—</div></div>
+    </div>
+
+    <table>
+      <thead><tr>
+        <th>Session</th><th>Tenant</th><th>State</th><th>Health</th><th>Turns</th>
+        <th>Avg ms</th><th>Conf</th><th>Idle</th><th>Duration</th><th>Flags</th><th></th>
+      </tr></thead>
+      <tbody id="lsBody"><tr><td colspan="11" style="text-align:center;color:var(--muted);padding:30px">Loading…</td></tr></tbody>
     </table>
   </div>
 
