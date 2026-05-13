@@ -83,7 +83,88 @@ function loadPage(page) {
     case 'meta-lp': loadMetaLp(); break;
     case 'voice-telemetry': loadVoiceTelemetry(); break;
     case 'affiliate-bonuses': loadAffiliateBonuses(); break;
+    case 'canary': loadCanary(); break;
   }
+}
+
+/* ── Browser Canary (2026-05-13) ──
+   Reads from eb-tour-agent's /api/admin/canary/* endpoints. */
+var CN_API_BASE = "https://www.october-ai.com/api/admin/canary";
+var CN_ADMIN_KEY = (typeof window !== 'undefined' && window.__ADMIN_KEY) || 'october-admin-2026';
+
+function cnFetch(path) {
+  return fetch(CN_API_BASE + path, {
+    method: 'GET',
+    headers: { 'Authorization': 'Bearer ' + CN_ADMIN_KEY }
+  }).then(function(r){
+    return r.json().then(function(j){
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      return j;
+    });
+  });
+}
+
+function cnFmtTime(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('en-GB', { hour12: false }).replace(/,/g,'');
+}
+
+function loadCanary() {
+  cnFetch('/stats?hours=168').then(function(d){
+    var rows = d.by_combo || [];
+    var matrix = document.getElementById('cnMatrix');
+    if (!rows.length) {
+      matrix.innerHTML = '<div style="color:var(--muted);padding:20px">No canary runs yet. First scheduled run will appear on the next cron tick (within 1h).</div>';
+    } else {
+      matrix.innerHTML = rows.map(function(r){
+        var rate = r.total > 0 ? Math.round((r.passed / r.total) * 100) : 0;
+        var color = rate >= 95 ? 'green' : rate >= 80 ? 'yellow' : 'red';
+        return '<div class="cn-cell">' +
+          '<div class="cn-cell-head">' + (r.browser || '?') + ' · ' + (r.viewport || '?') + ' · ' + (r.scenario || '?') + '</div>' +
+          '<div class="cn-cell-rate ' + color + '">' + rate + '%</div>' +
+          '<div class="cn-cell-meta">' + r.passed + ' pass · ' + r.failed + ' fail · ' + r.total + ' total · avg ' + (r.avg_duration_ms || 0) + 'ms</div>' +
+          '<div class="cn-cell-meta">last: ' + cnFmtTime(r.last_at) + '</div>' +
+        '</div>';
+      }).join('');
+    }
+    var fail = d.latest_failure;
+    var failEl = document.getElementById('cnLatestFailure');
+    if (!fail) {
+      failEl.innerHTML = '<div style="color:#166534;padding:14px;background:#dcfce7;border-radius:10px;font-size:14px">No failures in the last 7 days — all green.</div>';
+    } else {
+      var p = fail.payload || {};
+      failEl.innerHTML = '<div class="cn-failure">' +
+        '<div class="cn-failure-head">' + cnFmtTime(fail.received_at) + ' — ' + (p.browser || '?') + '/' + (p.viewport || '?') + '/' + (p.scenario || '?') + '</div>' +
+        '<div><b>Step:</b> ' + (p.failure_step || '—') + '</div>' +
+        '<div><b>Error:</b> ' + (p.error || '—') + '</div>' +
+        (p.metrics ? '<pre>' + JSON.stringify(p.metrics, null, 2) + '</pre>' : '') +
+      '</div>';
+    }
+  }).catch(function(e){
+    document.getElementById('cnMatrix').innerHTML = '<div style="color:#b91c1c;padding:20px">Failed to load: ' + e.message + '</div>';
+  });
+
+  cnFetch('/recent?limit=50').then(function(d){
+    var tbody = document.getElementById('cnRecentBody');
+    if (!d.results || !d.results.length) {
+      tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:30px">No runs yet</td></tr>';
+      return;
+    }
+    tbody.innerHTML = d.results.map(function(r){
+      var p = r.payload || {};
+      return '<tr>' +
+        '<td>' + cnFmtTime(r.received_at) + '</td>' +
+        '<td>' + (p.browser || '—') + '</td>' +
+        '<td>' + (p.viewport || '—') + '</td>' +
+        '<td>' + (p.scenario || '—') + '</td>' +
+        '<td><span class="cn-badge ' + r.code + '">' + r.code + '</span></td>' +
+        '<td>' + (p.duration_ms || 0) + 'ms</td>' +
+        '<td style="font-size:11px;color:var(--muted)">' + (p.failure_step || (r.code === 'PASS' ? '' : '—')) + '</td>' +
+      '</tr>';
+    }).join('');
+  }).catch(function(e){
+    document.getElementById('cnRecentBody').innerHTML = '<tr><td colspan="7" style="color:#b91c1c;padding:20px">Failed: ' + e.message + '</td></tr>';
+  });
 }
 
 /* ── Affiliate Bonuses (2026-05-13) ──

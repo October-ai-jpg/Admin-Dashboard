@@ -63,6 +63,10 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2l3 6 6 1-4.5 4 1 6L12 16l-5.5 3 1-6L3 9l6-1 3-6z"/></svg>
     <span>Affiliate Bonuses</span>
   </a>
+  <a class="sidebar-link" data-page="canary">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+    <span>Browser Canary</span>
+  </a>
 
   <div class="sidebar-section-label">Agent Builder</div>
   <a class="sidebar-link" data-page="default-system">
@@ -433,6 +437,50 @@
         <div id="abModalBody">Loading…</div>
       </div>
     </div>
+  </div>
+
+  <!-- ═══ BROWSER CANARY (2026-05-13) ═══
+       Cross-browser synthetic canary results. Posted by GitHub
+       Actions running platform/scripts/browser-canary.js on a schedule. -->
+  <div class="page-container" id="page-canary">
+    <style>
+      #page-canary{padding:32px}
+      #page-canary h1{font-family:var(--serif);font-size:32px;font-weight:400;margin:0 0 6px}
+      #page-canary .cn-sub{color:var(--muted);font-size:14px;margin-bottom:24px}
+      #page-canary h2{font-family:var(--serif);font-size:22px;font-weight:400;margin:28px 0 12px}
+      #page-canary .cn-matrix{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+      #page-canary .cn-cell{background:#fff;border:1px solid var(--border);border-radius:10px;padding:14px 16px}
+      #page-canary .cn-cell-head{font-size:12px;color:var(--muted);letter-spacing:0.05em;text-transform:uppercase;font-weight:600;margin-bottom:6px}
+      #page-canary .cn-cell-rate{font-family:var(--serif);font-size:28px;font-weight:300;line-height:1}
+      #page-canary .cn-cell-rate.green{color:#16a34a}
+      #page-canary .cn-cell-rate.yellow{color:#a16207}
+      #page-canary .cn-cell-rate.red{color:#b91c1c}
+      #page-canary .cn-cell-meta{font-size:11px;color:var(--muted);margin-top:6px}
+      #page-canary table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--border);border-radius:10px;overflow:hidden}
+      #page-canary th{text-align:left;padding:10px 14px;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;font-weight:600;color:var(--muted);background:#fafafa;border-bottom:1px solid var(--border)}
+      #page-canary td{padding:10px 14px;font-size:13px;border-bottom:1px solid #f5f5f5}
+      #page-canary .cn-badge{display:inline-block;padding:3px 9px;border-radius:99px;font-size:11px;font-weight:600;letter-spacing:0.04em}
+      #page-canary .cn-badge.PASS{background:#dcfce7;color:#166534}
+      #page-canary .cn-badge.FAIL{background:#fee2e2;color:#991b1b}
+      #page-canary .cn-failure{background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:14px 16px;margin:0 0 18px}
+      #page-canary .cn-failure-head{font-size:13px;color:#991b1b;font-weight:600;margin-bottom:6px}
+      #page-canary .cn-failure pre{font-family:Menlo,monospace;font-size:11px;background:#fff;padding:8px;border-radius:6px;margin:6px 0 0;overflow-x:auto}
+    </style>
+
+    <h1>Browser Canary</h1>
+    <p class="cn-sub">Real-browser synthetic checks. GitHub Actions runs Playwright against Chromium + WebKit (Safari engine) on desktop + mobile viewports every hour. Concurrent / network / long-session / CSP scenarios run daily or weekly. Failures here mean a real customer would see something break.</p>
+
+    <h2>Last 7 days — pass rate per combo</h2>
+    <div id="cnMatrix" class="cn-matrix">Loading…</div>
+
+    <h2 style="margin-top:36px">Latest failure</h2>
+    <div id="cnLatestFailure">Loading…</div>
+
+    <h2>Recent runs</h2>
+    <table>
+      <thead><tr><th>Time</th><th>Browser</th><th>Viewport</th><th>Scenario</th><th>Status</th><th>Duration</th><th>Failure step</th></tr></thead>
+      <tbody id="cnRecentBody"><tr><td colspan="7" style="text-align:center;color:var(--muted);padding:30px">Loading…</td></tr></tbody>
+    </table>
   </div>
 
   <div class="page-container" id="page-default-system"></div>
