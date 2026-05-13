@@ -82,8 +82,171 @@ function loadPage(page) {
     case 'client-portal': window.open('/client/demo/agent', '_blank'); break;
     case 'meta-lp': loadMetaLp(); break;
     case 'voice-telemetry': loadVoiceTelemetry(); break;
+    case 'affiliate-bonuses': loadAffiliateBonuses(); break;
   }
 }
+
+/* ── Affiliate Bonuses (2026-05-13) ──
+   Admin approval queue. Reads from eb-tour-agent's
+   /api/admin/affiliate-bonuses/* endpoints. */
+var AB_API_BASE = "https://www.october-ai.com/api/admin/affiliate-bonuses";
+var AB_ADMIN_KEY = (typeof window !== 'undefined' && window.__ADMIN_KEY) || 'october-admin-2026';
+
+function abFetch(path, opts) {
+  opts = opts || {};
+  return fetch(AB_API_BASE + path, {
+    method: opts.method || 'GET',
+    headers: Object.assign({
+      'Authorization': 'Bearer ' + AB_ADMIN_KEY,
+      'x-admin-id': (typeof window !== 'undefined' && window.__ADMIN_EMAIL) || 'admin'
+    }, opts.body ? { 'Content-Type': 'application/json' } : {}),
+    body: opts.body ? JSON.stringify(opts.body) : undefined
+  }).then(function(r){
+    return r.json().then(function(j){
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      return j;
+    });
+  });
+}
+
+function abFmtTime(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('en-GB', { hour12: false }).replace(/,/g,'');
+}
+
+function abFmtUsd(n) {
+  if (n == null) return '—';
+  return '$' + Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
+}
+
+function loadAffiliateBonuses() {
+  var reload = document.getElementById('abReload');
+  if (reload && !reload.__bound) {
+    reload.addEventListener('click', loadAffiliateBonuses);
+    reload.__bound = true;
+  }
+  ['abFilterStatus','abFilterRef'].forEach(function(id){
+    var el = document.getElementById(id);
+    if (el && !el.__bound) {
+      el.addEventListener('change', loadAffiliateBonuses);
+      el.__bound = true;
+    }
+  });
+
+  abFetch('/admin/stats').then(function(d){
+    var byStatus = {};
+    (d.by_status || []).forEach(function(r){ byStatus[r.status] = r; });
+    function getN(s){ return (byStatus[s] || {}).n || 0; }
+    function getT(s){ return (byStatus[s] || {}).total_usd || 0; }
+    document.getElementById('abStatPendingApproval').textContent = getN('pending_approval');
+    document.getElementById('abStatPending').textContent = getN('pending');
+    document.getElementById('abStatPaid').textContent = getN('paid');
+    document.getElementById('abStatCancelled').textContent = getN('cancelled');
+    document.getElementById('abStatFailed').textContent = getN('payout_failed');
+    document.getElementById('abStatTotalUsd').textContent = abFmtUsd(Number(getT('pending')) + Number(getT('paid')));
+  }).catch(function(e){ console.warn('[AB] stats:', e.message); });
+
+  var statusVal = (document.getElementById('abFilterStatus') || {}).value;
+  var refVal = (document.getElementById('abFilterRef') || {}).value;
+  var qs = ['limit=200'];
+  if (statusVal) qs.push('status=' + encodeURIComponent(statusVal));
+  if (refVal) qs.push('ref_code=' + encodeURIComponent(refVal.trim()));
+
+  abFetch('/list?' + qs.join('&')).then(function(d){
+    var tbody = document.getElementById('abBody');
+    if (!tbody) return;
+    if (!d.bonuses || !d.bonuses.length) {
+      tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:30px">No bonuses match — nice and clean</td></tr>';
+      return;
+    }
+    tbody.innerHTML = d.bonuses.map(function(b){
+      var actions = '';
+      if (b.status === 'pending_approval') {
+        actions = '<button class="ab-btn ab-btn-primary" onclick="abApprove(' + b.id + ',event)">Approve</button> ' +
+                  '<button class="ab-btn ab-btn-danger" onclick="abReject(' + b.id + ',event)">Reject</button>';
+      } else {
+        actions = '<button class="ab-btn" onclick="abOpenDetail(' + b.id + ')">Details</button>';
+      }
+      return '<tr style="cursor:pointer" onclick="abOpenDetail(' + b.id + ')">' +
+        '<td>' + abFmtTime(b.awarded_at) + '</td>' +
+        '<td style="font-family:Menlo,monospace;font-size:12px">' + b.affiliate_ref + '</td>' +
+        '<td>' + b.tier_threshold + ' customers</td>' +
+        '<td class="ab-amount">' + abFmtUsd(b.amount_usd) + '</td>' +
+        '<td><span class="ab-score ' + (b.fraud_score || 'green') + '"></span>' + (b.fraud_score || 'n/a') + '</td>' +
+        '<td><span class="ab-badge ' + b.status + '">' + b.status.replace(/_/g,' ') + '</span></td>' +
+        '<td onclick="event.stopPropagation()">' + actions + '</td>' +
+      '</tr>';
+    }).join('');
+  }).catch(function(e){
+    var tbody = document.getElementById('abBody');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#b91c1c;padding:30px">Failed: ' + e.message + '</td></tr>';
+  });
+}
+
+window.abApprove = function(id, ev) {
+  if (ev) ev.stopPropagation();
+  if (!confirm('Approve bonus #' + id + '? This starts the 30-day Stripe payout hold.')) return;
+  abFetch('/' + id + '/approve', { method: 'POST' }).then(function(){
+    loadAffiliateBonuses();
+  }).catch(function(e){ alert('Approve failed: ' + e.message); });
+};
+
+window.abReject = function(id, ev) {
+  if (ev) ev.stopPropagation();
+  var reason = prompt('Reject bonus #' + id + ' — reason?');
+  if (reason === null) return;
+  abFetch('/' + id + '/reject', { method: 'POST', body: { reason: reason || 'admin rejection' } }).then(function(){
+    loadAffiliateBonuses();
+  }).catch(function(e){ alert('Reject failed: ' + e.message); });
+};
+
+window.abOpenDetail = function(id) {
+  document.getElementById('abModalBody').innerHTML = 'Loading…';
+  document.getElementById('abModal').classList.add('open');
+  abFetch('/' + id).then(function(d){
+    var b = d.bonus || {};
+    var a = d.affiliate || {};
+    var customers = d.customers || [];
+    var sig = b.fraud_signals || {};
+    var signalsHtml = ['total_customers','customer_count_7d','distinct_domains','distinct_countries','customers_under_30d','avg_days_between_signups'].map(function(k){
+      return '<div class="ab-signal"><div class="ab-signal-label">' + k.replace(/_/g,' ') + '</div><div class="ab-signal-value">' + (sig[k] != null ? sig[k] : '—') + '</div></div>';
+    }).join('');
+    var actionsBlock = '';
+    if (b.status === 'pending_approval') {
+      actionsBlock = '<div style="margin-top:16px;display:flex;gap:8px">' +
+        '<button class="ab-btn ab-btn-primary" onclick="abApprove(' + b.id + ',event);abCloseModal()">Approve</button>' +
+        '<button class="ab-btn ab-btn-danger" onclick="abReject(' + b.id + ',event);abCloseModal()">Reject</button>' +
+      '</div>';
+    }
+    var customerRows = customers.map(function(c){
+      return '<tr><td>' + (c.email || '') + '</td><td>' + (c.country || '') + '</td><td>' + abFmtTime(c.created_at) + '</td><td>' + c.commission_count + '</td></tr>';
+    }).join('');
+    document.getElementById('abModalBody').innerHTML =
+      '<div style="font-size:13px;line-height:1.7">' +
+        '<b>Bonus #</b> ' + b.id + ' · <span class="ab-badge ' + b.status + '">' + b.status.replace(/_/g,' ') + '</span><br>' +
+        '<b>Affiliate:</b> ' + (a.name || '—') + ' (<code>' + (a.ref_code || '?') + '</code>) · ' + (a.email || '') + ' · ' + (a.country || '') + '<br>' +
+        '<b>Tier:</b> ' + b.tier_threshold + ' customers · <b>Amount:</b> ' + abFmtUsd(b.amount_usd) + '<br>' +
+        '<b>Fraud score:</b> <span class="ab-score ' + (b.fraud_score || 'green') + '"></span> ' + (b.fraud_score || 'n/a') + '<br>' +
+        '<b>Awarded:</b> ' + abFmtTime(b.awarded_at) + ' · <b>Eligible:</b> ' + abFmtTime(b.eligible_for_payout_at) + '<br>' +
+        (b.approved_at ? '<b>Approved:</b> ' + abFmtTime(b.approved_at) + ' by ' + (b.approved_by || '—') + '<br>' : '') +
+        (b.rejected_at ? '<b>Rejected:</b> ' + abFmtTime(b.rejected_at) + ' by ' + (b.rejected_by || '—') + ' — ' + (b.rejected_reason || 'no reason') + '<br>' : '') +
+        (b.paid_at ? '<b>Paid:</b> ' + abFmtTime(b.paid_at) + ' · transfer=' + (b.stripe_transfer_id || '—') + '<br>' : '') +
+      '</div>' +
+      '<h2 style="font-family:var(--serif);font-size:18px;font-weight:400;margin:20px 0 8px">Fraud signals</h2>' +
+      '<div class="ab-signals">' + signalsHtml + '</div>' +
+      '<h2 style="font-family:var(--serif);font-size:18px;font-weight:400;margin:20px 0 8px">Sample customers (last 20)</h2>' +
+      (customers.length
+        ? '<table style="width:100%"><thead><tr><th>Email</th><th>Country</th><th>Signed up</th><th>Comm #</th></tr></thead><tbody>' + customerRows + '</tbody></table>'
+        : '<div style="color:var(--muted);font-size:13px">No customer rows</div>') +
+      actionsBlock;
+  }).catch(function(e){
+    document.getElementById('abModalBody').innerHTML = '<div style="color:#b91c1c">Failed to load: ' + e.message + '</div>';
+  });
+};
+
+window.abCloseModal = function() {
+  document.getElementById('abModal').classList.remove('open');
+};
 
 /* ── Voice Telemetry page (2026-05-12) ──
    Reads from eb-tour-agent's /api/admin/voice-telemetry/* endpoints.
