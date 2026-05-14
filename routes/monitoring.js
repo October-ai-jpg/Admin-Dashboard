@@ -463,16 +463,34 @@ module.exports = function(pool) {
          services/costRates.js. We re-declare here because Admin-
          Dashboard is a separate Railway service and importing across
          repos isn't trivial. ENV overrides apply identically. */
+      /* Defaults mirror eb-tour-agent/services/costRates.js — verified
+         2026-05-14 from each vendor's public pricing page. Source URLs:
+           OpenAI gpt-5.4-mini:  openai.com/api/pricing
+           Deepgram Nova-3 PAYG: deepgram.com/pricing
+           Cartesia Sonic:        cartesia.ai/pricing
+           Stripe card / Connect: stripe.com/pricing, stripe.com/connect/pricing
+         Override via Railway env vars to track real invoices, not list price. */
       const RATES = {
-        openai_input_per_1m:  parseFloat(process.env.COST_OPENAI_INPUT_PER_1M  || '3.00'),
-        openai_output_per_1m: parseFloat(process.env.COST_OPENAI_OUTPUT_PER_1M || '6.00'),
-        deepgram_per_min:     parseFloat(process.env.COST_DEEPGRAM_PER_MIN     || '0.0059'),
-        cartesia_per_min:     parseFloat(process.env.COST_CARTESIA_PER_MIN     || '0.12'),
+        openai_input_per_1m:  parseFloat(process.env.COST_OPENAI_INPUT_PER_1M  || '0.75'),
+        openai_output_per_1m: parseFloat(process.env.COST_OPENAI_OUTPUT_PER_1M || '4.50'),
+        deepgram_per_min:     parseFloat(process.env.COST_DEEPGRAM_PER_MIN     || '0.0077'),
+        cartesia_per_min:     parseFloat(process.env.COST_CARTESIA_PER_MIN     || '0.03'),
         stripe_card_pct:      parseFloat(process.env.COST_STRIPE_CARD_PCT      || '0.029'),
         stripe_card_fixed:    parseFloat(process.env.COST_STRIPE_CARD_FIXED    || '0.30'),
         stripe_transfer_pct:  parseFloat(process.env.COST_STRIPE_TRANSFER_PCT  || '0.0025'),
         stripe_transfer_fixed:parseFloat(process.env.COST_STRIPE_TRANSFER_FIXED|| '0.25'),
         infra_per_month:      parseFloat(process.env.INFRA_COST_USD_PER_MONTH  || '30')
+      };
+      /* Tier breakpoints — what each provider charges at higher volume
+         tiers. Used by the scaling-projection card to show realistic
+         cost-per-conversation if we 10x or 100x usage. Numbers from
+         each vendor's pricing page on 2026-05-14. */
+      const TIERS = {
+        deepgram_growth_per_min:   0.0065,  /* Growth tier, ~$4k/yr commit (~16% off PAYG) */
+        deepgram_enterprise_per_min: 0.0045,/* Enterprise typical (~40% off PAYG) */
+        cartesia_scale_per_min:    0.0225,  /* Scale tier with credit pool (~25% off Starter) */
+        cartesia_enterprise_per_min: 0.018, /* Enterprise typical (~40% off Starter) */
+        openai_flat:               true     /* No volume discount until Enterprise contract */
       };
 
       /* Helper: aggregates for a date-range filter expression. */
@@ -684,8 +702,123 @@ module.exports = function(pool) {
         ip_per_tenant_concurrent_cap: parseInt(process.env.IP_TENANT_CONCURRENT_CAP || '3')
       };
 
+      /* ── Scaling projections ──────────────────────────────────────
+         Take last-30d real measured volumes (LLM tokens, STT min, TTS
+         min, paying customers) and project what cost-per-conversation
+         looks like at 1x / 10x / 100x scale, applying each provider's
+         next-tier discount. This shows owner what margin headroom we
+         get when usage grows AND when we cross the commitment
+         thresholds that unlock cheaper per-unit rates. */
+      function projectAt(multiplier, useNextTier) {
+        const u = last30d.usage || {};
+        const llmIn  = (u.llm_input_tokens || 0)  * multiplier;
+        const llmOut = (u.llm_output_tokens || 0) * multiplier;
+        const sttMin = (u.stt_minutes || 0)       * multiplier;
+        const ttsMin = (u.tts_minutes || 0)       * multiplier;
+        /* OpenAI: flat (no volume discount until Enterprise). */
+        const openaiCost   = (llmIn / 1_000_000) * RATES.openai_input_per_1m
+                           + (llmOut / 1_000_000) * RATES.openai_output_per_1m;
+        const deepgramRate = useNextTier ? TIERS.deepgram_growth_per_min : RATES.deepgram_per_min;
+        const cartesiaRate = useNextTier ? TIERS.cartesia_scale_per_min : RATES.cartesia_per_min;
+        const deepgramCost = sttMin * deepgramRate;
+        const cartesiaCost = ttsMin * cartesiaRate;
+        const cogs         = openaiCost + deepgramCost + cartesiaCost;
+        const conversations = parseInt(last30d.invoice_count || 0) * multiplier;
+        /* Use actual conversation count from scalability.recent_24h × 30
+           as a better denominator than invoice_count. */
+        const convCount30d = (scalability.recent_24h?.total_conversations || 0) * 30 * multiplier;
+        const costPerConv  = convCount30d > 0 ? cogs / convCount30d : 0;
+        /* Approximate revenue: paying customers scale linearly with the
+           multiplier, at the current $149 plan price. */
+        const projRevenue  = (last30d.revenue_usd || 0) * multiplier;
+        const projInfra    = RATES.infra_per_month * Math.max(1, Math.sqrt(multiplier));
+        const projAffiliate= (last30d.affiliate_outflow_usd || 0) * multiplier;
+        const projStripe   = projRevenue * RATES.stripe_card_pct
+                           + (parseInt(last30d.invoice_count || 0) * multiplier) * RATES.stripe_card_fixed;
+        const projNet      = projRevenue - projStripe - cogs - projAffiliate - projInfra;
+        const projMargin   = projRevenue > 0 ? Math.round((projNet / projRevenue) * 1000) / 10 : 0;
+        return {
+          multiplier: multiplier,
+          tier_used: useNextTier ? 'volume_discount' : 'payg',
+          deepgram_per_min: Math.round(deepgramRate * 100000) / 100000,
+          cartesia_per_min: Math.round(cartesiaRate * 10000) / 10000,
+          cogs_usd: Math.round(cogs * 100) / 100,
+          revenue_usd: Math.round(projRevenue * 100) / 100,
+          stripe_fees_usd: Math.round(projStripe * 100) / 100,
+          affiliate_outflow_usd: Math.round(projAffiliate * 100) / 100,
+          infra_usd: Math.round(projInfra * 100) / 100,
+          net_usd: Math.round(projNet * 100) / 100,
+          margin_pct: projMargin,
+          cost_per_conversation_usd: Math.round(costPerConv * 10000) / 10000,
+          projected_conversations_30d: Math.round(convCount30d)
+        };
+      }
+      const projections = {
+        current: projectAt(1, false),
+        ten_x:   projectAt(10, true),    /* 10x = enough volume to hit Deepgram Growth + Cartesia Scale */
+        hundred_x: projectAt(100, true)  /* 100x = clear of all commitment thresholds */
+      };
+
+      /* ── 3-month marketing budget tracker ─────────────────────────
+         Budget envelope + planned line items are configured via env
+         vars on Railway. Actual paid-to-date is also an env var the
+         owner updates when invoices are paid. Keep this simple — no
+         DB table — so the owner controls the data without admin UI
+         friction. DKK → USD conversion uses the platform's existing
+         fx-rates table when reachable, else falls back to 7.0. */
+      let dkkToUsd = parseFloat(process.env.MARKETING_FX_DKK_PER_USD || '7.0');
+      try {
+        const r = await query(`
+          SELECT rate_per_usd FROM fx_rates
+           WHERE currency = 'DKK' ORDER BY fetched_at DESC LIMIT 1
+        `);
+        if (r.rows[0]?.rate_per_usd) dkkToUsd = parseFloat(r.rows[0].rate_per_usd);
+      } catch (e) { /* fx_rates table missing — keep fallback */ }
+      const marketingBudgetDkk = parseFloat(process.env.MARKETING_BUDGET_DKK || '50000');
+      const marketingSpentDkk  = parseFloat(process.env.MARKETING_SPENT_DKK  || '3500');
+      /* Planned line items — adjust env vars or these defaults when
+         the marketing plan changes. Defaults reflect the WGAN +
+         SDR 3-month plan documented in our memory. */
+      const planItems = [
+        { label: 'WGAN Silver Tier',  vendor: 'WGAN',      months: 3, monthly_usd: parseFloat(process.env.MKT_WGAN_SILVER_MONTHLY_USD || '199'),  one_time_usd: 0 },
+        { label: 'WGAN Email Blast',  vendor: 'WGAN',      months: 0, monthly_usd: 0,                                                              one_time_usd: parseFloat(process.env.MKT_WGAN_EMAIL_BLAST_USD || '999') },
+        { label: 'SDR Work (outbound)', vendor: 'SDR vendor', months: 3, monthly_usd: parseFloat(process.env.MKT_SDR_MONTHLY_USD || '625'),         one_time_usd: 0 }
+      ];
+      const plannedItems = planItems.map(it => {
+        const total_usd = it.monthly_usd * it.months + it.one_time_usd;
+        return { ...it, total_usd: Math.round(total_usd * 100) / 100,
+                          total_dkk: Math.round(total_usd * dkkToUsd) };
+      });
+      const plannedTotalUsd = plannedItems.reduce((s, it) => s + it.total_usd, 0);
+      const plannedTotalDkk = Math.round(plannedTotalUsd * dkkToUsd);
+      const remainingDkk    = marketingBudgetDkk - marketingSpentDkk;
+      const utilisationPct  = marketingBudgetDkk > 0
+        ? Math.round((marketingSpentDkk / marketingBudgetDkk) * 1000) / 10 : 0;
+      const marketingBudget = {
+        budget_dkk: marketingBudgetDkk,
+        budget_usd: Math.round(marketingBudgetDkk / dkkToUsd * 100) / 100,
+        spent_dkk: marketingSpentDkk,
+        spent_usd: Math.round(marketingSpentDkk / dkkToUsd * 100) / 100,
+        remaining_dkk: remainingDkk,
+        remaining_usd: Math.round(remainingDkk / dkkToUsd * 100) / 100,
+        utilisation_pct: utilisationPct,
+        planned_items: plannedItems,
+        planned_total_usd: Math.round(plannedTotalUsd * 100) / 100,
+        planned_total_dkk: plannedTotalDkk,
+        unallocated_dkk: Math.max(0, marketingBudgetDkk - plannedTotalDkk),
+        fx_dkk_per_usd: dkkToUsd,
+        env_var_hints: {
+          budget:  'MARKETING_BUDGET_DKK',
+          spent:   'MARKETING_SPENT_DKK',
+          wgan_silver: 'MKT_WGAN_SILVER_MONTHLY_USD',
+          wgan_email_blast: 'MKT_WGAN_EMAIL_BLAST_USD',
+          sdr:     'MKT_SDR_MONTHLY_USD'
+        }
+      };
+
       res.json({
         rates: RATES,
+        tier_breakpoints: TIERS,
         this_month: thisMonth,
         last_month: lastMonth,
         last_30d: last30d,
@@ -698,6 +831,8 @@ module.exports = function(pool) {
           paying_this_month: payingThisMonth
         },
         scalability: scalability,
+        projections: projections,
+        marketing_budget: marketingBudget,
         as_of: new Date().toISOString()
       });
     } catch (e) {

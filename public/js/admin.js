@@ -725,6 +725,22 @@ function esc(s) { if (!s) return ''; var d = document.createElement('div'); d.te
 /* ── Format numbers ── */
 function fmtNum(n) { return (n || 0).toLocaleString(); }
 function fmtMoney(n) { return '$' + (n || 0).toLocaleString(); }
+/* Currency formatter used by Unit Economics page — handles small
+   fractional amounts (e.g. $0.0123 for COGS per call) without
+   losing precision, and falls back to thousand-separator format
+   for larger amounts. */
+function fmtUSD(n) {
+  var v = parseFloat(n);
+  if (!isFinite(v)) return '$0';
+  if (Math.abs(v) > 0 && Math.abs(v) < 1)  return '$' + v.toFixed(4);
+  if (Math.abs(v) < 100) return '$' + v.toFixed(2);
+  return '$' + Math.round(v).toLocaleString();
+}
+function fmtDKK(n) {
+  var v = parseFloat(n);
+  if (!isFinite(v)) return 'kr 0';
+  return 'kr ' + Math.round(v).toLocaleString('da-DK');
+}
 function fmtDuration(s) {
   if (!s || s <= 0) return '0s';
   var m = Math.floor(s / 60), r = Math.round(s % 60);
@@ -5518,17 +5534,116 @@ function ueRender(d) {
     chartEl.innerHTML = '<table><thead><tr><th>Month</th><th style="text-align:right">Revenue</th><th style="text-align:right">Invoices</th></tr></thead><tbody>' + rows + '</tbody></table>';
   }
 
+  /* Scaling projections — current vs 10x vs 100x, with provider
+     tier discounts at the higher tiers. Shows the owner what
+     cost-per-conversation AND total monthly net look like as volume
+     grows past the commitment thresholds that unlock cheaper rates. */
+  var projEl = document.getElementById('ueProjections');
+  if (projEl) {
+    var p = d.projections || {};
+    if (!p.current) {
+      projEl.innerHTML = '<div class="ue-empty">No recent usage data yet — scaling projections appear once we have last-30d telemetry.</div>';
+    } else {
+      projEl.innerHTML =
+        '<table><thead><tr>'
+        + '<th>Scale</th>'
+        + '<th style="text-align:right">Conversations / 30d</th>'
+        + '<th style="text-align:right">Provider tier</th>'
+        + '<th style="text-align:right">COGS</th>'
+        + '<th style="text-align:right">Cost / convo</th>'
+        + '<th style="text-align:right">Revenue</th>'
+        + '<th style="text-align:right">Net</th>'
+        + '<th style="text-align:right">Margin</th>'
+        + '</tr></thead><tbody>'
+        + ueProjRow('Current (1x)',  p.current)
+        + ueProjRow('10x volume',    p.ten_x)
+        + ueProjRow('100x volume',   p.hundred_x)
+        + '</tbody></table>'
+        + '<div style="font-size:11px;color:var(--muted);margin-top:8px;line-height:1.6">'
+        + '10x and 100x assume we hit Deepgram <strong>Growth</strong> tier ($' + (d.tier_breakpoints?.deepgram_growth_per_min || '–') + '/min, ~$4k/yr commit) '
+        + 'and Cartesia <strong>Scale</strong> tier ($' + (d.tier_breakpoints?.cartesia_scale_per_min || '–') + '/min credit pool). '
+        + 'OpenAI has no volume discount below Enterprise contract. Infra scales sub-linearly (√).'
+        + '</div>';
+    }
+  }
+
+  /* Marketing budget — 3-month envelope, planned line items, spent. */
+  var mbEl = document.getElementById('ueMarketing');
+  if (mbEl) {
+    var mb = d.marketing_budget || {};
+    if (!mb.budget_dkk) {
+      mbEl.innerHTML = '<div class="ue-empty">Marketing budget not configured. Set MARKETING_BUDGET_DKK on Railway.</div>';
+    } else {
+      var pctClass = mb.utilisation_pct < 70 ? 'green' : (mb.utilisation_pct < 100 ? 'amber' : 'red');
+      mbEl.innerHTML =
+        '<div class="ue-cards">'
+        + ueCard('3-month budget', fmtDKK(mb.budget_dkk), '≈ ' + fmtUSD(mb.budget_usd))
+        + ueCard('Spent to date',  fmtDKK(mb.spent_dkk), '≈ ' + fmtUSD(mb.spent_usd))
+        + ueCard('Remaining',      fmtDKK(mb.remaining_dkk), '≈ ' + fmtUSD(mb.remaining_usd))
+        + ueCard('Utilisation',    mb.utilisation_pct + '%', (mb.utilisation_pct < 70 ? 'on track' : (mb.utilisation_pct < 100 ? 'watch — > 70%' : 'over budget')), (mb.utilisation_pct < 70 ? 'positive' : (mb.utilisation_pct < 100 ? '' : 'negative')))
+        + '</div>'
+        + '<h3 style="font-family:var(--serif);font-size:17px;font-weight:400;margin:24px 0 8px">Planned line items</h3>'
+        + '<table><thead><tr>'
+        + '<th>Item</th><th>Vendor</th>'
+        + '<th style="text-align:right">Monthly</th>'
+        + '<th style="text-align:right">One-time</th>'
+        + '<th style="text-align:right">3-mo total</th>'
+        + '<th style="text-align:right">DKK</th>'
+        + '</tr></thead><tbody>'
+        + (mb.planned_items || []).map(ueMbRow).join('')
+        + '<tr style="font-weight:600;background:var(--cream-dark)">'
+        + '<td colspan="4">Total planned</td>'
+        + '<td style="text-align:right">' + fmtUSD(mb.planned_total_usd) + '</td>'
+        + '<td style="text-align:right">' + fmtDKK(mb.planned_total_dkk) + '</td>'
+        + '</tr>'
+        + '<tr><td colspan="5">Unallocated headroom (budget − planned)</td>'
+        + '<td style="text-align:right">' + fmtDKK(mb.unallocated_dkk) + '</td></tr>'
+        + '</tbody></table>'
+        + '<div style="font-size:11px;color:var(--muted);margin-top:8px;line-height:1.6">'
+        + 'Update spent on Railway: <code>' + (mb.env_var_hints?.spent || 'MARKETING_SPENT_DKK') + '</code>. '
+        + 'FX: 1 USD = ' + mb.fx_dkk_per_usd + ' DKK (from fx_rates if available).'
+        + '</div>';
+    }
+  }
+
   /* Rate-card footer — proves what numbers we computed against. */
   var rt = d.rates || {};
   document.getElementById('ueRates').innerHTML =
-    '<strong>Rate card</strong><br>'
-    + 'OpenAI: <code>$' + rt.openai_input_per_1m + ' input / $' + rt.openai_output_per_1m + ' output per 1M tokens</code> · '
-    + 'Deepgram: <code>$' + rt.deepgram_per_min + '/min</code> · '
-    + 'Cartesia: <code>$' + rt.cartesia_per_min + '/min</code> · '
+    '<strong>Rate card</strong> <span style="color:var(--muted)">— verified 2026-05-14 from each vendor\'s public pricing page</span><br>'
+    + 'OpenAI gpt-5.4-mini: <code>$' + rt.openai_input_per_1m + ' input / $' + rt.openai_output_per_1m + ' output per 1M tokens</code> · '
+    + 'Deepgram Nova-3: <code>$' + rt.deepgram_per_min + '/min</code> · '
+    + 'Cartesia Sonic: <code>$' + rt.cartesia_per_min + '/min</code> · '
     + 'Stripe card: <code>' + (rt.stripe_card_pct * 100).toFixed(1) + '% + $' + rt.stripe_card_fixed.toFixed(2) + '</code> · '
     + 'Stripe transfer: <code>' + (rt.stripe_transfer_pct * 100).toFixed(2) + '% + $' + rt.stripe_transfer_fixed.toFixed(2) + '</code> · '
     + 'Infra: <code>$' + rt.infra_per_month + '/mo</code><br>'
     + '<em style="font-size:11px">Tune via Railway env vars: COST_OPENAI_INPUT_PER_1M, COST_DEEPGRAM_PER_MIN, COST_CARTESIA_PER_MIN, INFRA_COST_USD_PER_MONTH, etc.</em>';
+}
+
+function ueProjRow(label, p) {
+  if (!p) return '';
+  var marginClass = p.margin_pct > 30 ? 'green' : (p.margin_pct > 0 ? 'amber' : 'red');
+  return '<tr>'
+    + '<td><strong>' + esc(label) + '</strong></td>'
+    + '<td style="text-align:right">' + fmtNum(p.projected_conversations_30d) + '</td>'
+    + '<td style="text-align:right" style="font-size:11px;color:var(--muted)">'
+    +   'DG $' + p.deepgram_per_min + ' · CT $' + p.cartesia_per_min
+    + '</td>'
+    + '<td style="text-align:right">' + fmtUSD(p.cogs_usd) + '</td>'
+    + '<td style="text-align:right">' + fmtUSD(p.cost_per_conversation_usd) + '</td>'
+    + '<td style="text-align:right">' + fmtUSD(p.revenue_usd) + '</td>'
+    + '<td style="text-align:right">' + fmtUSD(p.net_usd) + '</td>'
+    + '<td style="text-align:right"><span class="ue-pill ' + marginClass + '">' + p.margin_pct + '%</span></td>'
+    + '</tr>';
+}
+function ueMbRow(it) {
+  return '<tr>'
+    + '<td>' + esc(it.label) + '</td>'
+    + '<td>' + esc(it.vendor) + '</td>'
+    + '<td style="text-align:right">' + (it.monthly_usd > 0 ? fmtUSD(it.monthly_usd) + '/mo × ' + it.months : '—') + '</td>'
+    + '<td style="text-align:right">' + (it.one_time_usd > 0 ? fmtUSD(it.one_time_usd) : '—') + '</td>'
+    + '<td style="text-align:right">' + fmtUSD(it.total_usd) + '</td>'
+    + '<td style="text-align:right">' + fmtDKK(it.total_dkk) + '</td>'
+    + '</tr>';
 }
 
 function ueCard(label, value, sub, cls) {
