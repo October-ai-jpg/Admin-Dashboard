@@ -473,6 +473,8 @@ module.exports = function(pool) {
       const RATES = {
         openai_input_per_1m:  parseFloat(process.env.COST_OPENAI_INPUT_PER_1M  || '0.75'),
         openai_output_per_1m: parseFloat(process.env.COST_OPENAI_OUTPUT_PER_1M || '4.50'),
+        anthropic_input_per_1m:  parseFloat(process.env.COST_ANTHROPIC_INPUT_PER_1M  || '1.00'),
+        anthropic_output_per_1m: parseFloat(process.env.COST_ANTHROPIC_OUTPUT_PER_1M || '5.00'),
         deepgram_per_min:     parseFloat(process.env.COST_DEEPGRAM_PER_MIN     || '0.0077'),
         cartesia_per_min:     parseFloat(process.env.COST_CARTESIA_PER_MIN     || '0.03'),
         stripe_card_pct:      parseFloat(process.env.COST_STRIPE_CARD_PCT      || '0.029'),
@@ -510,14 +512,21 @@ module.exports = function(pool) {
           invoices = r.rows[0] || invoices;
         } catch (e) {/* table missing pre-deploy — keep zeros */}
 
-        /* COGS = real measured per-call costs from usage_log. */
-        let cogs = { openai: 0, deepgram: 0, cartesia: 0, total: 0,
+        /* COGS = real measured per-call costs from usage_log. As of
+           migration v61 each row carries a `feature` discriminator
+           ('voice' for the voice pipeline, 'insights' for the LLM-
+           generated weekly dashboard insights) and a separate
+           anthropic_cost_usd column. The SUM of total_cost_usd is
+           still the grand-total because insightGenerator writes its
+           cost into BOTH anthropic_cost_usd AND total_cost_usd. */
+        let cogs = { openai: 0, anthropic: 0, deepgram: 0, cartesia: 0, total: 0,
                      llm_input_tokens: 0, llm_output_tokens: 0,
                      stt_seconds: 0, tts_seconds: 0 };
         try {
           const r = await query(`
             SELECT
               COALESCE(SUM(openai_cost_usd), 0)::numeric    AS openai,
+              COALESCE(SUM(anthropic_cost_usd), 0)::numeric AS anthropic,
               COALESCE(SUM(deepgram_cost_usd), 0)::numeric  AS deepgram,
               COALESCE(SUM(cartesia_cost_usd), 0)::numeric  AS cartesia,
               COALESCE(SUM(total_cost_usd), 0)::numeric     AS total,
@@ -530,6 +539,22 @@ module.exports = function(pool) {
           `);
           cogs = r.rows[0] || cogs;
         } catch (e) {/* pre-deploy */}
+        // Per-feature breakdown so the UI can show 'insights' separately.
+        // Soft-fail when usage_log doesn't yet have the `feature` column
+        // (pre-v61 deploys / fresh tenants).
+        let cogsByFeature = [];
+        try {
+          const r = await query(`
+            SELECT feature,
+                   COALESCE(SUM(total_cost_usd), 0)::numeric AS total,
+                   COUNT(*)::int                             AS calls
+              FROM usage_log
+             WHERE ${rangeWhere}
+             GROUP BY feature
+             ORDER BY total DESC
+          `);
+          cogsByFeature = r.rows || [];
+        } catch (e) {/* pre-v61 */}
 
         /* Affiliate outflow = pending + paid commissions and bonuses
            that BECAME active in the range. Both are real obligations
@@ -583,9 +608,15 @@ module.exports = function(pool) {
           cogs_total_usd: Math.round(cogs_total * 10000) / 10000,
           cogs_breakdown: {
             openai_usd: Math.round(parseFloat(cogs.openai) * 10000) / 10000,
+            anthropic_usd: Math.round(parseFloat(cogs.anthropic) * 10000) / 10000,
             deepgram_usd: Math.round(parseFloat(cogs.deepgram) * 10000) / 10000,
             cartesia_usd: Math.round(parseFloat(cogs.cartesia) * 10000) / 10000
           },
+          cogs_by_feature: (cogsByFeature || []).map(r => ({
+            feature: r.feature,
+            calls: parseInt(r.calls) || 0,
+            cost_usd: Math.round(parseFloat(r.total) * 10000) / 10000
+          })),
           usage: {
             llm_input_tokens: parseInt(cogs.llm_input_tokens) || 0,
             llm_output_tokens: parseInt(cogs.llm_output_tokens) || 0,

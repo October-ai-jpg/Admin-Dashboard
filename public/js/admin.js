@@ -5469,23 +5469,37 @@ function ueRender(d) {
     ueCard('Revenue', fmtUSD(period.revenue_usd), period.invoice_count + ' invoices') +
     ueCard('Stripe fees', '−' + fmtUSD(period.stripe_fees_total_usd),
            'Card: ' + fmtUSD(period.stripe_card_fees_usd) + ' · Transfers: ' + fmtUSD(period.stripe_transfer_fees_usd)) +
-    ueCard('COGS (voice APIs)', '−' + fmtUSD(period.cogs_total_usd), 'OpenAI + Deepgram + Cartesia') +
+    ueCard('COGS (LLM + voice APIs)', '−' + fmtUSD(period.cogs_total_usd), 'OpenAI + Anthropic + Deepgram + Cartesia') +
     ueCard('Affiliate outflow', '−' + fmtUSD(period.affiliate_outflow_usd), 'Commissions + bonuses') +
     ueCard('Infrastructure', '−' + fmtUSD(period.infra_usd), 'Railway + Cloudflare + Resend') +
     ueCard('Net', fmtUSD(period.net_usd), period.margin_pct + '% margin', profitClass);
 
   /* Cost breakdown table — splits the COGS line into providers. */
   var br = period.cogs_breakdown || {};
+  /* Per-feature breakdown — extracted from cogs_by_feature so the
+     'insights' line shows alongside 'voice' even when voice rows have
+     the column set to 0. */
+  var byFeat = {};
+  (period.cogs_by_feature || []).forEach(function(r) { byFeat[r.feature] = r; });
+  var voiceFeat = byFeat.voice || { calls: 0, cost_usd: 0 };
+  var insightsFeat = byFeat.insights || { calls: 0, cost_usd: 0 };
+
   document.getElementById('ueCostTable').innerHTML =
     '<table><thead><tr><th>Provider</th><th style="text-align:right">Cost (USD)</th><th style="text-align:right">% of revenue</th></tr></thead><tbody>'
-    + ueCostRow('OpenAI (gpt-5.4-mini)', br.openai_usd, period.revenue_usd)
+    + ueCostRow('OpenAI (gpt-5.4-mini, voice)', br.openai_usd, period.revenue_usd)
+    + ueCostRow('Anthropic (Claude Haiku, weekly insights)', br.anthropic_usd, period.revenue_usd)
     + ueCostRow('Deepgram (Nova-3 STT)', br.deepgram_usd, period.revenue_usd)
     + ueCostRow('Cartesia (Sonic-2 TTS)', br.cartesia_usd, period.revenue_usd)
     + ueCostRow('Stripe (card processing)', period.stripe_card_fees_usd, period.revenue_usd)
     + ueCostRow('Stripe (Connect transfers)', period.stripe_transfer_fees_usd, period.revenue_usd)
     + ueCostRow('Affiliate commissions + bonuses', period.affiliate_outflow_usd, period.revenue_usd)
     + ueCostRow('Infrastructure (Railway, etc.)', period.infra_usd, period.revenue_usd)
-    + '</tbody></table>';
+    + '</tbody></table>'
+    + '<div style="font-size:11px;color:var(--muted);margin-top:8px;line-height:1.6">'
+    + 'Per-feature LLM spend: '
+    + '<strong>voice</strong> ' + fmtUSD(voiceFeat.cost_usd) + ' (' + voiceFeat.calls + ' calls) · '
+    + '<strong>insights</strong> ' + fmtUSD(insightsFeat.cost_usd) + ' (' + insightsFeat.calls + ' calls, weekly per tenant).'
+    + '</div>';
 
   /* Usage volume — actual measurements. */
   var u = period.usage || {};
@@ -5609,14 +5623,15 @@ function ueRender(d) {
   /* Rate-card footer — proves what numbers we computed against. */
   var rt = d.rates || {};
   document.getElementById('ueRates').innerHTML =
-    '<strong>Rate card</strong> <span style="color:var(--muted)">— verified 2026-05-14 from each vendor\'s public pricing page</span><br>'
+    '<strong>Rate card</strong> <span style="color:var(--muted)">— verified 2026-05-17 from each vendor\'s public pricing page</span><br>'
     + 'OpenAI gpt-5.4-mini: <code>$' + rt.openai_input_per_1m + ' input / $' + rt.openai_output_per_1m + ' output per 1M tokens</code> · '
+    + 'Anthropic Haiku 4.5: <code>$' + (rt.anthropic_input_per_1m || '–') + ' input / $' + (rt.anthropic_output_per_1m || '–') + ' output per 1M tokens</code> · '
     + 'Deepgram Nova-3: <code>$' + rt.deepgram_per_min + '/min</code> · '
     + 'Cartesia Sonic: <code>$' + rt.cartesia_per_min + '/min</code> · '
     + 'Stripe card: <code>' + (rt.stripe_card_pct * 100).toFixed(1) + '% + $' + rt.stripe_card_fixed.toFixed(2) + '</code> · '
     + 'Stripe transfer: <code>' + (rt.stripe_transfer_pct * 100).toFixed(2) + '% + $' + rt.stripe_transfer_fixed.toFixed(2) + '</code> · '
     + 'Infra: <code>$' + rt.infra_per_month + '/mo</code><br>'
-    + '<em style="font-size:11px">Tune via Railway env vars: COST_OPENAI_INPUT_PER_1M, COST_DEEPGRAM_PER_MIN, COST_CARTESIA_PER_MIN, INFRA_COST_USD_PER_MONTH, etc.</em>';
+    + '<em style="font-size:11px">Tune via Railway env vars: COST_OPENAI_INPUT_PER_1M, COST_ANTHROPIC_INPUT_PER_1M, COST_DEEPGRAM_PER_MIN, COST_CARTESIA_PER_MIN, INFRA_COST_USD_PER_MONTH, etc.</em>';
 }
 
 function ueProjRow(label, p) {
