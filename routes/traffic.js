@@ -119,8 +119,22 @@ module.exports = function(pool) {
            FROM traffic_events
           WHERE ts >= CURRENT_DATE`
       );
-      const rows = past.rows.slice();
-      if (today.rows[0] && today.rows[0].pageviews > 0) rows.push(today.rows[0]);
+      /* Zero-fill the entire range so the chart shows the full period
+         instead of looking "cut" on days with no traffic. The aggregator
+         only writes rows on days that had events, so without this we'd
+         skip empty days entirely. */
+      const byDay = new Map();
+      past.rows.forEach(r => byDay.set(r.day, r));
+      if (today.rows[0]) byDay.set(today.rows[0].day, today.rows[0]);
+      const rows = [];
+      const now = new Date();
+      const start = new Date(now.getTime() - (days - 1) * 86400000);
+      for (let i = 0; i < days; i++) {
+        const d = new Date(start.getTime() + i * 86400000);
+        const key = d.toISOString().slice(0, 10);
+        const r = byDay.get(key);
+        rows.push(r || { day: key, pageviews: 0, sessions: 0, visitors: 0 });
+      }
       res.json({ days, series: rows });
     } catch (e) {
       res.status(500).json({ error: e.message });
