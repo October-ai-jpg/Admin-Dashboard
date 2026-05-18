@@ -71,6 +71,10 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3" fill="currentColor"/><path d="M12 5a7 7 0 017 7M12 2a10 10 0 0110 10"/></svg>
     <span>Live Sessions</span>
   </a>
+  <a class="sidebar-link" data-page="traffic">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 4 5-7"/></svg>
+    <span>Traffic</span>
+  </a>
 
   <div class="sidebar-section-label">Agent Builder</div>
   <a class="sidebar-link" data-page="default-system">
@@ -543,6 +547,117 @@
       </tr></thead>
       <tbody id="lsBody"><tr><td colspan="11" style="text-align:center;color:var(--muted);padding:30px">Loading…</td></tr></tbody>
     </table>
+  </div>
+
+  <!-- ═══ TRAFFIC (2026-05-18) ═══
+       First-party analytics for www.october-ai.com. Reads from
+       traffic_events + traffic_daily_pages (migration v62). Updates
+       daily via the aggregator on -october-ai; today's row is
+       computed live from raw events. -->
+  <div class="page-container" id="page-traffic">
+    <style>
+      #page-traffic{padding:32px}
+      #page-traffic .tf-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;flex-wrap:wrap;gap:16px}
+      #page-traffic h1{font-family:var(--serif);font-size:32px;font-weight:400;margin:0}
+      #page-traffic .tf-sub{color:var(--muted);font-size:14px;margin:6px 0 0}
+      #page-traffic .tf-range select{padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--white);font-size:13px;font-family:inherit}
+      #page-traffic .tf-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:28px}
+      #page-traffic .tf-card{background:var(--white);border:1px solid var(--border);border-radius:10px;padding:16px 18px}
+      #page-traffic .tf-card-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:600;margin-bottom:8px}
+      #page-traffic .tf-card-value{font-family:var(--serif);font-size:32px;font-weight:300;line-height:1;color:var(--black)}
+      #page-traffic .tf-card-sub{font-size:12px;color:var(--muted);margin-top:5px}
+      #page-traffic h2{font-family:var(--serif);font-size:22px;font-weight:400;margin:28px 0 12px}
+      #page-traffic .tf-chart-wrap{background:#fff;border:1px solid var(--border);border-radius:10px;padding:18px;margin-bottom:24px}
+      #page-traffic canvas{max-height:280px}
+      #page-traffic table{width:100%;border-collapse:collapse;background:var(--white);border:1px solid var(--border);border-radius:10px;overflow:hidden;font-size:13px}
+      #page-traffic th{text-align:left;padding:10px 14px;background:#fafafa;color:var(--muted);font-weight:600;font-size:11px;letter-spacing:0.05em;text-transform:uppercase;border-bottom:1px solid var(--border)}
+      #page-traffic td{padding:10px 14px;border-bottom:1px solid #f5f5f5}
+      #page-traffic tr.row-click{cursor:pointer}
+      #page-traffic tr.row-click:hover{background:#fafafa}
+      #page-traffic .tf-num{font-variant-numeric:tabular-nums;text-align:right;font-feature-settings:"tnum"}
+      #page-traffic .tf-bar{display:inline-block;height:6px;background:#1a1611;border-radius:3px;vertical-align:middle;margin-right:6px}
+      #page-traffic .tf-bar-wrap{display:inline-block;width:120px;background:#f0ebe4;height:6px;border-radius:3px;vertical-align:middle;margin-right:8px}
+      #page-traffic .tf-empty{padding:36px;text-align:center;color:var(--muted);background:var(--white);border:1px dashed var(--border);border-radius:10px}
+      #page-traffic .tf-cols{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+      @media (max-width:900px){#page-traffic .tf-cols{grid-template-columns:1fr}}
+      #page-traffic .tf-modal{position:fixed;inset:0;background:rgba(0,0,0,0.5);display:none;align-items:center;justify-content:center;z-index:1000}
+      #page-traffic .tf-modal.open{display:flex}
+      #page-traffic .tf-modal-inner{background:#fff;border-radius:12px;max-width:760px;width:92%;max-height:88vh;overflow:auto;padding:28px;position:relative}
+      #page-traffic .tf-modal-close{position:absolute;top:14px;right:14px;background:none;border:none;font-size:22px;cursor:pointer;color:var(--muted)}
+      #page-traffic .tf-meter{display:flex;align-items:center;gap:10px;margin:8px 0;font-size:13px}
+      #page-traffic .tf-meter-bar-wrap{flex:1;background:#f0ebe4;height:10px;border-radius:5px;overflow:hidden}
+      #page-traffic .tf-meter-bar{height:100%;background:#1a1611}
+      #page-traffic .tf-meter-label{width:60px;color:var(--muted);font-size:12px}
+      #page-traffic .tf-meter-val{width:60px;text-align:right;font-variant-numeric:tabular-nums}
+    </style>
+
+    <div class="tf-header">
+      <div>
+        <h1>Traffic</h1>
+        <p class="tf-sub">First-party 1:1 analytics for every page on www.october-ai.com. No sampling, no ad-blocker loss. Updates daily; today's row is live from raw events.</p>
+      </div>
+      <div class="tf-range">
+        <label style="font-size:12px;color:var(--muted);margin-right:8px">Range</label>
+        <select id="tfRange">
+          <option value="7">Last 7 days</option>
+          <option value="30" selected>Last 30 days</option>
+          <option value="90">Last 90 days</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="tf-cards" id="tfCards">
+      <div class="tf-card"><div class="tf-card-label">Visitors</div><div class="tf-card-value" id="tfVisitors">—</div></div>
+      <div class="tf-card"><div class="tf-card-label">Sessions</div><div class="tf-card-value" id="tfSessions">—</div></div>
+      <div class="tf-card"><div class="tf-card-label">Pageviews</div><div class="tf-card-value" id="tfPageviews">—</div></div>
+      <div class="tf-card"><div class="tf-card-label">Avg engaged</div><div class="tf-card-value" id="tfEngaged">—</div></div>
+      <div class="tf-card"><div class="tf-card-label">Bounce rate</div><div class="tf-card-value" id="tfBounce">—</div></div>
+    </div>
+
+    <div class="tf-chart-wrap">
+      <canvas id="tfChart"></canvas>
+    </div>
+
+    <h2>Top pages</h2>
+    <table>
+      <thead><tr>
+        <th>Path</th>
+        <th class="tf-num">Pageviews</th>
+        <th class="tf-num">Visitors</th>
+        <th class="tf-num">Sessions</th>
+        <th class="tf-num">Avg engaged</th>
+        <th class="tf-num">Scroll 100%</th>
+        <th class="tf-num">Bounce</th>
+        <th class="tf-num">Exit</th>
+      </tr></thead>
+      <tbody id="tfPages"><tr><td colspan="8" style="text-align:center;color:var(--muted);padding:30px">Loading…</td></tr></tbody>
+    </table>
+
+    <div class="tf-cols" style="margin-top:24px">
+      <div>
+        <h2>Traffic sources</h2>
+        <table>
+          <thead><tr><th>Source</th><th>Medium</th><th class="tf-num">Sessions</th><th class="tf-num">Visitors</th></tr></thead>
+          <tbody id="tfSources"><tr><td colspan="4" style="text-align:center;color:var(--muted);padding:24px">—</td></tr></tbody>
+        </table>
+      </div>
+      <div>
+        <h2>Where they drop off</h2>
+        <table>
+          <thead><tr><th>Exit page</th><th class="tf-num">Exits</th><th class="tf-num">Exit %</th></tr></thead>
+          <tbody id="tfExits"><tr><td colspan="3" style="text-align:center;color:var(--muted);padding:24px">—</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Drill-down modal -->
+    <div class="tf-modal" id="tfModal" onclick="if(event.target===this)this.classList.remove('open')">
+      <div class="tf-modal-inner">
+        <button class="tf-modal-close" onclick="document.getElementById('tfModal').classList.remove('open')">×</button>
+        <h2 id="tfModalTitle" style="margin-top:0">Page detail</h2>
+        <div id="tfModalBody">Loading…</div>
+      </div>
+    </div>
   </div>
 
   <div class="page-container" id="page-default-system"></div>

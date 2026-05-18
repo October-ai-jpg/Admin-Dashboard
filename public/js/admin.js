@@ -85,7 +85,178 @@ function loadPage(page) {
     case 'affiliate-bonuses': loadAffiliateBonuses(); break;
     case 'canary': loadCanary(); break;
     case 'live-sessions': loadLiveSessions(); break;
+    case 'traffic': loadTraffic(); break;
   }
+}
+
+/* ── Traffic analytics (2026-05-18) ──
+   First-party 1:1 page-traffic dashboard. Reads from /api/traffic/*
+   (which read traffic_events + traffic_daily_pages on the shared
+   Postgres written by -october-ai's /js/track.js + nightly
+   aggregator). */
+var _tfChart = null;
+var _tfRange = 30;
+
+function tfFmtInt(n) {
+  if (n == null || isNaN(n)) return '—';
+  return Number(n).toLocaleString();
+}
+function tfFmtMs(ms) {
+  if (!ms || ms < 0) return '0s';
+  if (ms < 1000) return ms + 'ms';
+  var s = Math.round(ms / 1000);
+  if (s < 60) return s + 's';
+  var m = Math.floor(s / 60);
+  return m + 'm ' + (s % 60) + 's';
+}
+function tfPct(n) { return (n == null) ? '—' : (Number(n).toFixed(1) + '%'); }
+function tfEscape(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+    return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+  });
+}
+
+function tfFetch(path) {
+  return fetch('/api/traffic' + path, {
+    headers: { 'x-admin-token': localStorage.getItem('admin_token') || 'october-admin-2026' }
+  }).then(function(r){ return r.json().then(function(j){ if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status)); return j; }); });
+}
+
+function loadTraffic() {
+  var sel = document.getElementById('tfRange');
+  if (sel) {
+    sel.value = String(_tfRange);
+    sel.onchange = function() { _tfRange = parseInt(this.value, 10) || 30; tfRefresh(); };
+  }
+  tfRefresh();
+}
+
+function tfRefresh() {
+  var d = _tfRange;
+  // KPIs
+  tfFetch('/overview?days=' + d).then(function(o){
+    document.getElementById('tfVisitors').textContent  = tfFmtInt(o.visitors);
+    document.getElementById('tfSessions').textContent  = tfFmtInt(o.sessions);
+    document.getElementById('tfPageviews').textContent = tfFmtInt(o.pageviews);
+    document.getElementById('tfEngaged').textContent   = tfFmtMs(o.avg_engaged_ms);
+    document.getElementById('tfBounce').textContent    = tfPct(o.bounce_rate);
+  }).catch(function(e){ console.error('[traffic/overview]', e); });
+
+  // Timeseries chart
+  tfFetch('/timeseries?days=' + d).then(function(s){
+    var ctx = document.getElementById('tfChart');
+    if (!ctx || !window.Chart) return;
+    if (_tfChart) { _tfChart.destroy(); _tfChart = null; }
+    var labels   = s.series.map(function(r){ return r.day; });
+    var pv       = s.series.map(function(r){ return r.pageviews || 0; });
+    var sessions = s.series.map(function(r){ return r.sessions || 0; });
+    _tfChart = new Chart(ctx, {
+      type: 'line',
+      data: { labels: labels, datasets: [
+        { label: 'Pageviews', data: pv,       borderColor: '#1a1611', backgroundColor: 'rgba(26,22,17,0.08)', fill: true, tension: 0.25, pointRadius: 2 },
+        { label: 'Sessions',  data: sessions, borderColor: '#c87f3a', backgroundColor: 'rgba(200,127,58,0.08)', fill: false, tension: 0.25, pointRadius: 2 }
+      ]},
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { font: { size: 12 } } } },
+        scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
+      }
+    });
+  }).catch(function(e){ console.error('[traffic/timeseries]', e); });
+
+  // Top pages
+  tfFetch('/pages?days=' + d + '&limit=50').then(function(p){
+    var tbody = document.getElementById('tfPages');
+    if (!p.pages.length) { tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:30px">No traffic yet for this period.</td></tr>'; return; }
+    tbody.innerHTML = p.pages.map(function(r){
+      var bar = function(pct) {
+        var w = Math.max(0, Math.min(100, pct)) * 1.2;
+        return '<span class="tf-bar-wrap"><span class="tf-bar" style="width:' + w + 'px"></span></span>';
+      };
+      return '<tr class="row-click" onclick="tfOpenDetail(\'' + tfEscape(r.path).replace(/'/g, "\\'") + '\')">'
+        + '<td>' + tfEscape(r.path) + '</td>'
+        + '<td class="tf-num">' + tfFmtInt(r.pageviews) + '</td>'
+        + '<td class="tf-num">' + tfFmtInt(r.unique_visitors) + '</td>'
+        + '<td class="tf-num">' + tfFmtInt(r.unique_sessions) + '</td>'
+        + '<td class="tf-num">' + tfFmtMs(r.avg_engaged_ms) + '</td>'
+        + '<td class="tf-num">' + bar(r.scroll_100_pct) + tfPct(r.scroll_100_pct) + '</td>'
+        + '<td class="tf-num">' + tfPct(r.bounce_pct) + '</td>'
+        + '<td class="tf-num">' + tfPct(r.exit_pct) + '</td>'
+        + '</tr>';
+    }).join('');
+
+    // Exit ranking (Where they drop off)
+    var exits = p.pages.slice().filter(function(r){ return (r.exits || 0) > 0; })
+      .sort(function(a,b){ return (b.exits || 0) - (a.exits || 0); }).slice(0, 10);
+    var tbE = document.getElementById('tfExits');
+    if (!exits.length) tbE.innerHTML = '<tr><td colspan="3" style="text-align:center;color:var(--muted);padding:24px">—</td></tr>';
+    else tbE.innerHTML = exits.map(function(r){
+      return '<tr><td>' + tfEscape(r.path) + '</td><td class="tf-num">' + tfFmtInt(r.exits) + '</td><td class="tf-num">' + tfPct(r.exit_pct) + '</td></tr>';
+    }).join('');
+  }).catch(function(e){ console.error('[traffic/pages]', e); });
+
+  // Sources
+  tfFetch('/sources?days=' + d).then(function(s){
+    var tbody = document.getElementById('tfSources');
+    if (!s.sources.length) { tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:24px">—</td></tr>'; return; }
+    tbody.innerHTML = s.sources.slice(0, 20).map(function(r){
+      return '<tr>'
+        + '<td>' + tfEscape(r.source) + (r.campaign ? ' <span style="color:var(--muted);font-size:11px">/ ' + tfEscape(r.campaign) + '</span>' : '') + '</td>'
+        + '<td>' + tfEscape(r.medium) + '</td>'
+        + '<td class="tf-num">' + tfFmtInt(r.sessions) + '</td>'
+        + '<td class="tf-num">' + tfFmtInt(r.visitors) + '</td>'
+        + '</tr>';
+    }).join('');
+  }).catch(function(e){ console.error('[traffic/sources]', e); });
+}
+
+function tfOpenDetail(path) {
+  var modal = document.getElementById('tfModal');
+  document.getElementById('tfModalTitle').textContent = path;
+  document.getElementById('tfModalBody').innerHTML = '<p style="color:var(--muted)">Loading…</p>';
+  modal.classList.add('open');
+  tfFetch('/page-detail?days=' + _tfRange + '&path=' + encodeURIComponent(path)).then(function(d){
+    var sd = d.scroll_distribution || [];
+    var sdMap = {};
+    sd.forEach(function(r){ sdMap[r.pct] = r.n; });
+    var maxSd = Math.max(1, sdMap[25]||0, sdMap[50]||0, sdMap[75]||0, sdMap[100]||0);
+    function meter(label, n) {
+      var w = Math.round((n / maxSd) * 100);
+      return '<div class="tf-meter"><div class="tf-meter-label">' + label + '</div>'
+        + '<div class="tf-meter-bar-wrap"><div class="tf-meter-bar" style="width:' + w + '%"></div></div>'
+        + '<div class="tf-meter-val">' + tfFmtInt(n) + '</div></div>';
+    }
+    var html = '<h3 style="margin:0 0 8px;font-family:var(--serif);font-weight:400">Scroll distribution</h3>';
+    html += meter('25%',  sdMap[25]  || 0);
+    html += meter('50%',  sdMap[50]  || 0);
+    html += meter('75%',  sdMap[75]  || 0);
+    html += meter('100%', sdMap[100] || 0);
+
+    if (d.top_ctas && d.top_ctas.length) {
+      html += '<h3 style="margin:18px 0 8px;font-family:var(--serif);font-weight:400">Top CTA clicks</h3>';
+      html += '<table style="width:100%;font-size:13px"><tbody>'
+        + d.top_ctas.map(function(c){ return '<tr><td>' + tfEscape(c.label) + '</td><td class="tf-num" style="text-align:right">' + tfFmtInt(c.n) + '</td></tr>'; }).join('')
+        + '</tbody></table>';
+    }
+
+    if (d.top_outbounds && d.top_outbounds.length) {
+      html += '<h3 style="margin:18px 0 8px;font-family:var(--serif);font-weight:400">Top outbound destinations</h3>';
+      html += '<table style="width:100%;font-size:13px"><tbody>'
+        + d.top_outbounds.map(function(c){ return '<tr><td>' + tfEscape(c.host) + '</td><td class="tf-num" style="text-align:right">' + tfFmtInt(c.n) + '</td></tr>'; }).join('')
+        + '</tbody></table>';
+    }
+
+    if (d.top_sources && d.top_sources.length) {
+      html += '<h3 style="margin:18px 0 8px;font-family:var(--serif);font-weight:400">Top sources to this page</h3>';
+      html += '<table style="width:100%;font-size:13px"><tbody>'
+        + d.top_sources.map(function(c){ return '<tr><td>' + tfEscape(c.source) + '</td><td class="tf-num" style="text-align:right">' + tfFmtInt(c.sessions) + '</td></tr>'; }).join('')
+        + '</tbody></table>';
+    }
+
+    document.getElementById('tfModalBody').innerHTML = html;
+  }).catch(function(e){
+    document.getElementById('tfModalBody').innerHTML = '<p style="color:#b91c1c">Failed: ' + tfEscape(e.message) + '</p>';
+  });
 }
 
 /* ── Live Sessions (2026-05-13) ──

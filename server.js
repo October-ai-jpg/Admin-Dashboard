@@ -84,6 +84,12 @@ app.get('/auth/verify', (req, res) => {
 const monitoringRoutes = require('./routes/monitoring');
 app.use('/api/monitoring', requireAuth, monitoringRoutes(pool));
 
+/* 2026-05-18 — First-party traffic-analytics endpoints. Reads same
+   Postgres as -october-ai (traffic_events + traffic_daily_pages from
+   migration v62). Powers the "Traffic" sidebar page. */
+const trafficRoutes = require('./routes/traffic');
+app.use('/api/traffic', requireAuth, trafficRoutes(pool));
+
 /* ══════════════════════════════════════════
    PROMPTS & CONFIGURATIONS API
    ══════════════════════════════════════════ */
