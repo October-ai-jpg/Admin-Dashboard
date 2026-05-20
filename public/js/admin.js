@@ -947,22 +947,28 @@ function loadOverview() {
   var c = document.getElementById('page-overview');
 
   api('/api/monitoring/overview').then(function(data) {
+    // Show "Conversations (30d)" as meaningful + filtered ghost count
+    // so we never mistake bot traffic for engagement again.
+    var convoLabel = fmtNum(data.conversations);
+    if (data.conversationsBrief && data.conversationsBrief > 0) {
+      convoLabel += ' <span style="font-size:11px;color:#9aa3ab;font-weight:400">(+' + fmtNum(data.conversationsBrief) + ' brief)</span>';
+    }
     var html = '<div class="page-label">PLATFORM OVERVIEW</div>'
       + '<h1 class="page-heading">October AI — Live Dashboard</h1>'
-      + '<p class="page-sub">Auto-refreshes every 60 seconds</p>'
+      + '<p class="page-sub">Auto-refreshes every 60 seconds · MRR from paid_invoices · Conversations are meaningful (≥5s & ≥2 msgs)</p>'
       + '<div class="kpi-grid">'
       + kpiCard('Total Customers', fmtNum(data.customers))
       + kpiCard('Active Agents', fmtNum(data.agents))
-      + kpiCard('Conversations (30d)', fmtNum(data.conversations))
+      + kpiCard('Conversations (30d)', convoLabel)
       + kpiCard('Active Affiliates', fmtNum(data.affiliates))
-      + kpiCard('MRR', fmtMoney(data.mrr))
+      + kpiCard('MRR (30d)', fmtMoney(data.mrr))
       + kpiCard('Minutes Used', fmtNum(data.minutesUsed))
       + kpiCard('Conversion Rate', data.conversionRate + '%')
       + kpiCard('Avg Session', fmtDuration(data.avgSessionDuration))
       + '</div>'
       + '<div class="chart-grid">'
       + '<div class="chart-card"><h3>Conversations (30 days)</h3><canvas id="chartConvos"></canvas></div>'
-      + '<div class="chart-card"><h3>MRR Over Time</h3><canvas id="chartMRR"></canvas></div>'
+      + '<div class="chart-card"><h3>Revenue (12 months)</h3><canvas id="chartMRR"></canvas></div>'
       + '<div class="chart-card"><h3>Conversion Rate (30 days)</h3><canvas id="chartConvRate"></canvas></div>'
       + '</div>';
     c.innerHTML = html;
@@ -974,10 +980,13 @@ function loadOverview() {
         charts.conversationsPerDay.map(function(r) { return parseInt(r.count); }),
         'Conversations'
       );
+      // Revenue chart now reads actual paid_invoices.amount_paid_usd per
+      // month (returned as r.revenue from the API). Previously this
+      // computed new_users × $149 which had no relationship to real cash.
       renderChart('chartMRR', 'bar',
         charts.mrrOverTime.map(function(r) { return r.month; }),
-        charts.mrrOverTime.map(function(r) { return parseInt(r.new_users) * 149; }),
-        'MRR ($)'
+        charts.mrrOverTime.map(function(r) { return parseFloat(r.revenue || 0); }),
+        'Revenue ($)'
       );
       renderChart('chartConvRate', 'line',
         charts.conversionRatePerDay.map(function(r) { return fmtDateShort(r.day); }),

@@ -16,41 +16,57 @@ module.exports = function(pool) {
 
   /* ═══════════════════════════════════════
      OVERVIEW — key metrics
-     ═══════════════════════════════════════ */
+     ═══════════════════════════════════════
+     2026-05-20 — rewritten so numbers match reality:
+       • customers   → real customers only (role='customer', NOT sandbox)
+       • agents      → non-sandbox tenants
+       • conversations → MEANINGFUL only (dur≥5s & msgs≥2). Brief sessions
+                       returned as conversationsBrief so UI can show the
+                       filtered count without inflating engagement KPIs.
+       • mrr         → actual revenue from paid_invoices (last 30d, USD).
+                       Stripe is the source of truth, not plan_active flag.
+       • minutesUsed → non-sandbox tenants only
+       • conversionRate → converted / meaningful (denominator was ghost-
+                       inflated before, dragging real funnel down 3-4×).
+       • avgSessionDuration → meaningful conversations only.            */
   router.get('/overview', async (req, res) => {
     try {
-      const [customers, agents, conversations, affiliates, minutes, conversions] = await Promise.all([
-        query('SELECT COUNT(*) as count FROM users'),
-        query('SELECT COUNT(*) as count FROM tenants'),
-        query("SELECT COUNT(*) as count FROM conversations WHERE created_at > NOW() - INTERVAL '30 days'"),
-        query('SELECT COUNT(*) as count FROM affiliates'),
-        query('SELECT COALESCE(SUM(minutes_used_this_month), 0) as total FROM tenants'),
-        query("SELECT COUNT(*) as count FROM conversations WHERE created_at > NOW() - INTERVAL '30 days' AND (had_booking_click = true OR conversion_stage = 'converted')")
+      const [customers, agents, convosAll, convosMeaningful, affiliates, minutes, conversions] = await Promise.all([
+        query("SELECT COUNT(*) as count FROM users WHERE role='customer' AND is_sandbox=false"),
+        query("SELECT COUNT(*) as count FROM tenants WHERE is_sandbox=false"),
+        query("SELECT COUNT(*) as count FROM conversations WHERE created_at > NOW() - INTERVAL '30 days' AND is_sandbox=false"),
+        query("SELECT COUNT(*) as count FROM conversations WHERE created_at > NOW() - INTERVAL '30 days' AND is_sandbox=false AND duration_seconds>=5 AND messages_count>=2"),
+        query("SELECT COUNT(*) as count FROM affiliates WHERE status IN ('active','review')"),
+        query("SELECT COALESCE(SUM(minutes_used_this_month),0) as total FROM tenants WHERE is_sandbox=false"),
+        query("SELECT COUNT(*) as count FROM conversations WHERE created_at > NOW() - INTERVAL '30 days' AND is_sandbox=false AND duration_seconds>=5 AND messages_count>=2 AND (had_booking_click=true OR conversion_stage='converted')")
       ]);
 
-      const totalConvos = parseInt(conversations.rows[0]?.count || 0);
+      const totalAll = parseInt(convosAll.rows[0]?.count || 0);
+      const totalMeaningful = parseInt(convosMeaningful.rows[0]?.count || 0);
       const totalConversions = parseInt(conversions.rows[0]?.count || 0);
 
-      // MRR from active paying users
-      const mrr = await query("SELECT COUNT(*) as count FROM users WHERE plan_active = true");
-      const mrrVal = parseInt(mrr.rows[0]?.count || 0) * 149;
+      // MRR — actual paid invoices over the last 30 days (in USD). This is
+      // real cash collected, not a projection from plan_active × $149.
+      const mrr = await query("SELECT COALESCE(SUM(amount_paid_usd),0) as total FROM paid_invoices WHERE paid_at > NOW() - INTERVAL '30 days'");
+      const mrrVal = Math.round(parseFloat(mrr.rows[0]?.total || 0));
 
-      // Avg session duration
-      const avgDuration = await query("SELECT COALESCE(AVG(duration_seconds), 0) as avg FROM conversations WHERE created_at > NOW() - INTERVAL '30 days' AND duration_seconds > 0");
+      // Avg duration — meaningful sessions only so it reflects real engagement
+      const avgDuration = await query("SELECT COALESCE(AVG(duration_seconds),0) as avg FROM conversations WHERE created_at > NOW() - INTERVAL '30 days' AND is_sandbox=false AND duration_seconds>=5 AND messages_count>=2");
 
       res.json({
         customers: parseInt(customers.rows[0]?.count || 0),
         agents: parseInt(agents.rows[0]?.count || 0),
-        conversations: totalConvos,
+        conversations: totalMeaningful,
+        conversationsBrief: totalAll - totalMeaningful, // ghost sessions filtered (transparency)
         affiliates: parseInt(affiliates.rows[0]?.count || 0),
         mrr: mrrVal,
         minutesUsed: parseInt(minutes.rows[0]?.total || 0),
-        conversionRate: totalConvos > 0 ? Math.round((totalConversions / totalConvos) * 100) : 0,
+        conversionRate: totalMeaningful > 0 ? Math.round((totalConversions / totalMeaningful) * 100) : 0,
         avgSessionDuration: Math.round(parseFloat(avgDuration.rows[0]?.avg || 0))
       });
     } catch(e) {
       console.error('Overview error:', e);
-      res.json({ customers: 0, agents: 0, conversations: 0, affiliates: 0, mrr: 0, minutesUsed: 0, conversionRate: 0, avgSessionDuration: 0 });
+      res.json({ customers: 0, agents: 0, conversations: 0, conversationsBrief: 0, affiliates: 0, mrr: 0, minutesUsed: 0, conversionRate: 0, avgSessionDuration: 0 });
     }
   });
 
@@ -59,32 +75,40 @@ module.exports = function(pool) {
      ═══════════════════════════════════════ */
   router.get('/overview/charts', async (req, res) => {
     try {
-      // Conversations per day (30 days)
+      // Conversations per day (30d) — MEANINGFUL only so the chart doesn't
+      // spike from bot/scanner storms. Sandbox tenants filtered too.
       const convosPerDay = await query(`
         SELECT DATE(created_at) as day, COUNT(*) as count
         FROM conversations
         WHERE created_at > NOW() - INTERVAL '30 days'
+          AND is_sandbox=false
+          AND duration_seconds>=5 AND messages_count>=2
         GROUP BY DATE(created_at)
         ORDER BY day
       `);
 
-      // MRR over time (12 months) — approximate from user signups
+      // MRR over time (12 months) — actual revenue from paid_invoices.
+      // Previously this counted new_users × $149 which was meaningless
+      // (a free signup is not revenue, an enterprise customer who paid
+      // $1000 was lost). Now reads cash actually collected per month.
       const mrrOverTime = await query(`
-        SELECT TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') as month,
-               COUNT(*) as new_users
-        FROM users
-        WHERE created_at > NOW() - INTERVAL '12 months'
-        GROUP BY DATE_TRUNC('month', created_at)
+        SELECT TO_CHAR(DATE_TRUNC('month', paid_at), 'YYYY-MM') as month,
+               COALESCE(SUM(amount_paid_usd), 0)::int as revenue
+        FROM paid_invoices
+        WHERE paid_at > NOW() - INTERVAL '12 months'
+        GROUP BY DATE_TRUNC('month', paid_at)
         ORDER BY month
       `);
 
-      // Conversion rate per day (30 days)
+      // Conversion rate per day (30d) — denominator = meaningful only
       const convRatePerDay = await query(`
         SELECT DATE(created_at) as day,
                COUNT(*) as total,
-               SUM(CASE WHEN had_booking_click = true OR conversion_stage = 'converted' THEN 1 ELSE 0 END) as converted
+               SUM(CASE WHEN had_booking_click=true OR conversion_stage='converted' THEN 1 ELSE 0 END) as converted
         FROM conversations
         WHERE created_at > NOW() - INTERVAL '30 days'
+          AND is_sandbox=false
+          AND duration_seconds>=5 AND messages_count>=2
         GROUP BY DATE(created_at)
         ORDER BY day
       `);
@@ -110,7 +134,10 @@ module.exports = function(pool) {
     const { search, filter, page = 1, limit = 25 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    let where = 'WHERE 1=1';
+    // 2026-05-20 — customers = paying-customer role only; exclude admin
+    // accounts and sandbox fixtures. Previously these inflated counts +
+    // showed up in the table itself.
+    let where = "WHERE u.role='customer' AND u.is_sandbox=false";
     const params = [];
     let paramIdx = 1;
 
@@ -126,6 +153,8 @@ module.exports = function(pool) {
       const countResult = await query(`SELECT COUNT(DISTINCT u.id) as count FROM users u ${where}`, params);
       const total = parseInt(countResult.rows[0]?.count || 0);
 
+      // Agent + conversation counts exclude sandbox + ghost sessions so
+      // a customer's row reflects their real footprint, not noise.
       const result = await query(`
         SELECT u.id, u.name, u.email, u.plan_active, u.plan, u.created_at, u.affiliate_ref,
                u.company_name, u.account_type, u.agent_package,
@@ -133,8 +162,12 @@ module.exports = function(pool) {
                COUNT(DISTINCT c.id) as conversation_count,
                COALESCE(SUM(DISTINCT t.minutes_used_this_month), 0) as minutes_used
         FROM users u
-        LEFT JOIN tenants t ON t.user_id = u.id
-        LEFT JOIN conversations c ON c.tenant_id = t.id AND c.created_at > NOW() - INTERVAL '30 days'
+        LEFT JOIN tenants t ON t.user_id = u.id AND t.is_sandbox=false
+        LEFT JOIN conversations c
+          ON c.tenant_id = t.id
+         AND c.created_at > NOW() - INTERVAL '30 days'
+         AND c.is_sandbox=false
+         AND c.duration_seconds>=5 AND c.messages_count>=2
         ${where}
         GROUP BY u.id
         ORDER BY u.created_at DESC
@@ -238,7 +271,9 @@ module.exports = function(pool) {
     const { search, filter, page = 1, limit = 25 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    let where = 'WHERE 1=1';
+    // 2026-05-20 — exclude sandbox tenants by default so the agent
+    // count matches real customer-facing agents.
+    let where = "WHERE t.is_sandbox=false";
     const params = [];
     let paramIdx = 1;
 
@@ -262,6 +297,9 @@ module.exports = function(pool) {
       `, params);
       const total = parseInt(countResult.rows[0]?.count || 0);
 
+      // Conversation count is MEANINGFUL only (dur≥5s & msgs≥2). Without
+      // this filter Marstalsgade looks like 711 convs when only 223 were
+      // real engagements; rest are ghost mic-rejects/scanners.
       const result = await query(`
         SELECT t.id, t.name, t.agent_name, t.minutes_used_this_month,
                t.created_at, t.user_id, t.active,
@@ -273,7 +311,11 @@ module.exports = function(pool) {
         FROM tenants t
         LEFT JOIN clients cl ON cl.id = t.client_id
         LEFT JOIN users u ON u.id = t.user_id
-        LEFT JOIN conversations c ON c.tenant_id = t.id AND c.created_at > NOW() - INTERVAL '30 days'
+        LEFT JOIN conversations c
+          ON c.tenant_id = t.id
+         AND c.created_at > NOW() - INTERVAL '30 days'
+         AND c.is_sandbox=false
+         AND c.duration_seconds>=5 AND c.messages_count>=2
         ${where}
         GROUP BY t.id, cl.vertical, u.name, u.email
         ORDER BY t.created_at DESC
@@ -317,10 +359,17 @@ module.exports = function(pool) {
      CONVERSATIONS
      ═══════════════════════════════════════ */
   router.get('/conversations', async (req, res) => {
-    const { agent, date_from, date_to, converted, page = 1, limit = 25 } = req.query;
+    const { agent, date_from, date_to, converted, include_brief, page = 1, limit = 25 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    let where = 'WHERE 1=1';
+    // 2026-05-20 — default to MEANINGFUL conversations only (dur≥5s &
+    // msgs≥2 & not sandbox). Pass include_brief=1 to also see ghosts
+    // for debugging. Without this filter ~60-70% of Marstalsgade rows
+    // were 1-msg/<5s mic-bounces that drowned out real conversations.
+    let where = 'WHERE c.is_sandbox=false';
+    if (include_brief !== '1') {
+      where += ' AND c.duration_seconds>=5 AND c.messages_count>=2';
+    }
     const params = [];
     let paramIdx = 1;
 
@@ -874,42 +923,48 @@ module.exports = function(pool) {
 
 
   router.get('/revenue', async (req, res) => {
+    /* 2026-05-20 — rewritten to read from real tables:
+         • subscriptionRevenue ← paid_invoices.amount_paid_usd (this calendar month)
+         • apiCosts            ← usage_log.total_cost_usd (this calendar month)
+         • affiliateCommissions ← commission_amount for commissions earned this
+                                  month (pending+paid+payout_failed; excludes
+                                  refunded/cancelled which were already reversed)
+         • chart               ← actual revenue per month from paid_invoices
+       Previous version hard-coded $149/user × plan_active count and $0.15/min
+       infra cost — both wildly inaccurate against real Stripe + telemetry data. */
     try {
-      const activeUsers = await query("SELECT COUNT(*) as count FROM users WHERE plan_active = true");
-      const subscriptionRevenue = parseInt(activeUsers.rows[0]?.count || 0) * 149;
+      const [rev, costs, comms, chart] = await Promise.all([
+        query("SELECT COALESCE(SUM(amount_paid_usd),0) as total FROM paid_invoices WHERE paid_at > DATE_TRUNC('month', NOW())"),
+        query("SELECT COALESCE(SUM(total_cost_usd),0) as total FROM usage_log WHERE created_at > DATE_TRUNC('month', NOW())"),
+        query(`SELECT COALESCE(SUM(commission_amount),0) as total
+               FROM affiliate_commissions
+               WHERE created_at > DATE_TRUNC('month', NOW())
+                 AND status IN ('pending','paid','payout_failed')`),
+        query(`SELECT TO_CHAR(DATE_TRUNC('month', paid_at), 'YYYY-MM') as month,
+                      COALESCE(SUM(amount_paid_usd),0)::numeric(12,2) as revenue
+               FROM paid_invoices
+               WHERE paid_at > NOW() - INTERVAL '12 months'
+               GROUP BY DATE_TRUNC('month', paid_at)
+               ORDER BY month`)
+      ]);
 
-      const minutesUsed = await query('SELECT COALESCE(SUM(minutes_used_this_month), 0) as total FROM tenants');
-      const totalMinutes = parseInt(minutesUsed.rows[0]?.total || 0);
-      const apiCost = Math.round(totalMinutes * 0.15 * 100) / 100;
-
-      const commissions = await query(`
-        SELECT COALESCE(SUM(commission_amount), 0) as total
-        FROM affiliate_commissions
-        WHERE created_at > DATE_TRUNC('month', NOW())
-      `);
-
-      const monthlyCommissions = parseFloat(commissions.rows[0]?.total || 0);
-
-      // 12-month revenue chart
-      const revenueChart = await query(`
-        SELECT TO_CHAR(DATE_TRUNC('month', u.created_at), 'YYYY-MM') as month,
-               COUNT(*) * 149 as revenue
-        FROM users u
-        WHERE u.plan_active = true AND u.created_at > NOW() - INTERVAL '12 months'
-        GROUP BY DATE_TRUNC('month', u.created_at)
-        ORDER BY month
-      `);
+      const subscriptionRevenue = Math.round(parseFloat(rev.rows[0]?.total || 0));
+      const apiCosts = Math.round(parseFloat(costs.rows[0]?.total || 0) * 100) / 100;
+      const affiliateCommissions = Math.round(parseFloat(comms.rows[0]?.total || 0) * 100) / 100;
+      const infrastructure = parseFloat(process.env.INFRA_COST_MONTHLY_USD || '50');
+      const profit = Math.round((subscriptionRevenue - apiCosts - affiliateCommissions - infrastructure) * 100) / 100;
+      const margin = subscriptionRevenue > 0 ? Math.round((profit / subscriptionRevenue) * 100) : 0;
 
       res.json({
         subscriptionRevenue,
         overageRevenue: 0,
         totalRevenue: subscriptionRevenue,
-        apiCosts: apiCost,
-        affiliateCommissions: monthlyCommissions,
-        infrastructure: 50,
-        profit: subscriptionRevenue - apiCost - monthlyCommissions - 50,
-        margin: subscriptionRevenue > 0 ? Math.round(((subscriptionRevenue - apiCost - monthlyCommissions - 50) / subscriptionRevenue) * 100) : 0,
-        chart: revenueChart.rows
+        apiCosts,
+        affiliateCommissions,
+        infrastructure,
+        profit,
+        margin,
+        chart: chart.rows
       });
     } catch(e) {
       console.error('Revenue error:', e);
@@ -919,13 +974,14 @@ module.exports = function(pool) {
 
   /* ═══════════════════════════════════════
      ERROR LOG (for System Health)
-     Conversations don't have error_message column,
-     so we look for failed conversion stages or short sessions
+     We don't have an error_message column on conversations, so this
+     surfaces "<5s + ≥1 msg" sessions as a drop-off proxy. These are
+     mostly mic-permission rejections + scanner bots, not real backend
+     errors, but it's the best signal we have without explicit logging.
+     Sandbox filter prevents test fixtures from showing up.
      ═══════════════════════════════════════ */
   router.get('/errors', async (req, res) => {
     try {
-      // Since there's no error_message column, show conversations
-      // that may indicate issues (very short sessions, drop-offs)
       const result = await query(`
         SELECT c.id, c.created_at, c.tenant_id, c.duration_seconds,
                c.messages_count, c.drop_off_turn,
@@ -934,6 +990,7 @@ module.exports = function(pool) {
         LEFT JOIN tenants t ON c.tenant_id = t.id
         WHERE c.duration_seconds > 0 AND c.duration_seconds < 5
               AND c.messages_count >= 1
+              AND c.is_sandbox=false
         ORDER BY c.created_at DESC
         LIMIT 50
       `);
