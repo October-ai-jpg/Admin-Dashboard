@@ -1002,6 +1002,151 @@ module.exports = function(pool) {
   });
 
   /* ═══════════════════════════════════════════════════════════════
+     PIPELINE HEALTH — scheduler liveness + table freshness
+     2026-05-20 — meta-endpoint that surfaces whether every data
+     producer feeding the dashboard is alive. Returns one row per
+     pipeline with: name, last_write_at, age_minutes, status
+     (green|amber|red), expected_max_age_min, row_count. Drives the
+     "Pipeline Health" panel on the System Health page so operators
+     can spot dead schedulers / silent failures without ssh-ing into
+     the box and tailing logs.
+
+     Status rules:
+       • green : age <= expected_max_age
+       • amber : age <= 2× expected
+       • red   : age >  2× expected   (or zero rows when activity expected)
+     Pipelines with externally-driven traffic (paid_invoices,
+     conversations) are flagged ONLY when they SHOULD have data based
+     on adjacent signals — we never alarm on "no Stripe customers yet".
+     ═══════════════════════════════════════════════════════════════ */
+  router.get('/pipelines', async (req, res) => {
+    try {
+      const result = await query(`
+        WITH freshness AS (
+          SELECT 'fx_rates' AS name,
+                 'Daily FX refresh (frankfurter.dev → fx_rates)' AS description,
+                 (SELECT MAX(fetched_at) FROM fx_rates) AS last_write,
+                 (SELECT COUNT(*) FROM fx_rates) AS rows,
+                 25*60 AS expected_max_age_min,
+                 true AS critical
+          UNION ALL
+          SELECT 'traffic_aggregator',
+                 'Daily roll-up: traffic_events → traffic_daily_pages',
+                 (SELECT MAX(day)::timestamptz + INTERVAL '1 day' FROM traffic_daily_pages),
+                 (SELECT COUNT(*) FROM traffic_daily_pages),
+                 36*60, true
+          UNION ALL
+          SELECT 'traffic_tracker',
+                 'First-party track.js writing to traffic_events',
+                 (SELECT MAX(ts) FROM traffic_events),
+                 (SELECT COUNT(*) FROM traffic_events),
+                 60, false
+          UNION ALL
+          SELECT 'insights_scheduler',
+                 'Weekly per-tenant LLM insight refresh',
+                 (SELECT MAX(computed_at) FROM dashboard_insights),
+                 (SELECT COUNT(*) FROM dashboard_insights),
+                 8*24*60, false
+          UNION ALL
+          SELECT 'voice_pipeline',
+                 'Voice sessions ending → conversations + voice_usage',
+                 (SELECT MAX(created_at) FROM conversations WHERE is_sandbox=false),
+                 (SELECT COUNT(*) FROM conversations WHERE is_sandbox=false),
+                 7*24*60, false
+          UNION ALL
+          SELECT 'usage_log_voice',
+                 'Per-session cost telemetry (voice feature)',
+                 (SELECT MAX(created_at) FROM usage_log WHERE feature='voice'),
+                 (SELECT COUNT(*) FROM usage_log WHERE feature='voice'),
+                 7*24*60, false
+          UNION ALL
+          SELECT 'usage_log_insights',
+                 'Per-call cost telemetry (insights feature)',
+                 (SELECT MAX(created_at) FROM usage_log WHERE feature='insights'),
+                 (SELECT COUNT(*) FROM usage_log WHERE feature='insights'),
+                 8*24*60, false
+          UNION ALL
+          SELECT 'client_events',
+                 'Visitor-side embed.js telemetry (mic + audio errors)',
+                 (SELECT MAX(received_at) FROM client_events),
+                 (SELECT COUNT(*) FROM client_events),
+                 7*24*60, false
+          UNION ALL
+          SELECT 'paid_invoices',
+                 'Stripe webhook → paid_invoices (invoice.paid)',
+                 (SELECT MAX(paid_at) FROM paid_invoices),
+                 (SELECT COUNT(*) FROM paid_invoices),
+                 NULL, false  -- no SLA: only meaningful once we have customers
+          UNION ALL
+          SELECT 'affiliate_commissions',
+                 'Stripe webhook → affiliate_commissions row',
+                 (SELECT MAX(created_at) FROM affiliate_commissions),
+                 (SELECT COUNT(*) FROM affiliate_commissions),
+                 NULL, false
+          UNION ALL
+          SELECT 'email_log',
+                 'Transactional email send log (Resend)',
+                 (SELECT MAX(sent_at) FROM email_log),
+                 (SELECT COUNT(*) FROM email_log),
+                 NULL, false  -- depends on signup velocity, no SLA
+          UNION ALL
+          SELECT 'sessions',
+                 '/auth/login session creation',
+                 (SELECT MAX(created_at) FROM sessions),
+                 (SELECT COUNT(*) FROM sessions),
+                 NULL, false
+        )
+        SELECT name, description, last_write, rows,
+               EXTRACT(EPOCH FROM (NOW() - last_write))/60 AS age_min,
+               expected_max_age_min, critical
+        FROM freshness
+        ORDER BY (CASE WHEN last_write IS NULL THEN 1 ELSE 0 END),
+                 last_write DESC NULLS LAST
+      `);
+
+      const pipelines = result.rows.map(r => {
+        const age = r.age_min == null ? null : parseFloat(r.age_min);
+        const sla = r.expected_max_age_min;
+        let status = 'unknown';
+        if (sla == null) {
+          // No SLA → grey "informational" only
+          status = r.rows > 0 ? 'info' : 'idle';
+        } else if (age == null) {
+          // Has SLA but zero data → red
+          status = 'red';
+        } else if (age <= sla) {
+          status = 'green';
+        } else if (age <= sla * 2) {
+          status = 'amber';
+        } else {
+          status = 'red';
+        }
+        return {
+          name: r.name,
+          description: r.description,
+          last_write_at: r.last_write,
+          age_min: age == null ? null : Math.round(age),
+          expected_max_age_min: sla,
+          rows: parseInt(r.rows || 0),
+          critical: !!r.critical,
+          status
+        };
+      });
+
+      // Top-line health: red/amber if any critical pipeline is non-green
+      const criticalIssues = pipelines.filter(p => p.critical && (p.status === 'red' || p.status === 'amber'));
+      const overall = criticalIssues.some(p => p.status === 'red') ? 'red'
+                    : criticalIssues.length ? 'amber'
+                    : 'green';
+
+      res.json({ overall, pipelines, generated_at: new Date().toISOString() });
+    } catch (e) {
+      console.error('Pipelines error:', e);
+      res.json({ overall: 'red', pipelines: [], error: e.message });
+    }
+  });
+
+  /* ═══════════════════════════════════════════════════════════════
      VISITOR RELIABILITY — embed.js telemetry surfacing
      Reads from client_events table (populated by visitor browsers
      POSTing to /api/client-event on the main October AI service).

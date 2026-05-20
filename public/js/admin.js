@@ -1534,6 +1534,12 @@ function loadHealth() {
     + healthCard('Deepgram API', 'checking', 'deepgram')
     + healthCard('Cartesia API', 'checking', 'cartesia')
     + '</div>'
+    /* 2026-05-20 — pipeline health: surfaces freshness of every data
+       producer that feeds this dashboard, so we know which scheduler
+       has gone dark before the numbers start lying. */
+    + '<div class="section-title">Pipeline Health</div>'
+    + '<p style="color:var(--muted);font-size:12px;margin:-4px 0 14px;">Schedulers + data producers feeding the dashboard. Green = on SLA, amber = late, red = dead or no SLA breached.</p>'
+    + '<div id="pipelineHealth">Loading...</div>'
     /* 2026-05-12 — visitor reliability section, fed by embed.js
        telemetry POSTs to /api/client-event on the main service.
        Reads 24h + 7d aggregates from client_events. */
@@ -1543,6 +1549,59 @@ function loadHealth() {
     + '<div class="section-title">Recent Errors</div>'
     + '<div id="errorLog">Loading...</div>';
   c.innerHTML = html;
+
+  // Load pipeline health
+  api('/api/monitoring/pipelines').then(function(data) {
+    var el = document.getElementById('pipelineHealth');
+    if (!el) return;
+    if (!data || !data.pipelines || !data.pipelines.length) {
+      el.innerHTML = '<p style="color:var(--muted);font-size:13px">No pipeline data.</p>';
+      return;
+    }
+    var dotColor = function(s) {
+      if (s === 'green') return '#16a34a';
+      if (s === 'amber') return '#d97706';
+      if (s === 'red')   return '#991b1b';
+      if (s === 'info')  return '#6b7280';
+      return '#9ca3af';
+    };
+    var fmtAge = function(min) {
+      if (min == null) return '—';
+      if (min < 0) return 'future';
+      if (min < 60) return min + ' min ago';
+      if (min < 60*24) return Math.round(min/60) + ' h ago';
+      return Math.round(min/(60*24)) + ' d ago';
+    };
+    var fmtSla = function(min) {
+      if (min == null) return '<span style="color:var(--muted)">no SLA</span>';
+      if (min < 60) return '<' + min + ' min';
+      if (min < 60*24) return '<' + Math.round(min/60) + ' h';
+      return '<' + Math.round(min/(60*24)) + ' d';
+    };
+    var overall = data.overall || 'unknown';
+    var overallLabel = overall === 'green' ? 'All critical pipelines healthy'
+                    : overall === 'amber' ? 'One or more critical pipelines lagging'
+                    : 'One or more critical pipelines DOWN';
+    var rows = data.pipelines.map(function(p) {
+      return '<tr>'
+        + '<td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + dotColor(p.status) + ';margin-right:8px;vertical-align:middle"></span>'
+        + '<strong>' + esc(p.name) + '</strong>' + (p.critical ? ' <span style="font-size:10px;color:#d97706;font-weight:600;letter-spacing:0.04em">CRITICAL</span>' : '') + '</td>'
+        + '<td style="color:var(--muted);font-size:12px">' + esc(p.description || '') + '</td>'
+        + '<td style="text-align:right">' + fmtAge(p.age_min) + '</td>'
+        + '<td style="text-align:right">' + fmtSla(p.expected_max_age_min) + '</td>'
+        + '<td style="text-align:right">' + fmtNum(p.rows) + '</td>'
+        + '</tr>';
+    }).join('');
+    el.innerHTML =
+        '<div style="background:' + dotColor(overall) + ';color:#fff;padding:10px 16px;border-radius:6px;font-size:13px;font-weight:500;margin-bottom:12px;">'
+      + 'Overall: ' + esc(overallLabel) + '</div>'
+      + '<div style="overflow:auto"><table class="data-table" style="width:100%">'
+      + '<thead><tr><th>Pipeline</th><th>Description</th><th style="text-align:right">Last write</th><th style="text-align:right">SLA</th><th style="text-align:right">Rows</th></tr></thead>'
+      + '<tbody>' + rows + '</tbody></table></div>';
+  }).catch(function() {
+    var el = document.getElementById('pipelineHealth');
+    if (el) el.innerHTML = '<p style="color:var(--muted);font-size:13px">Unable to load pipeline health.</p>';
+  });
 
   api('/api/health-check').then(function(data) {
     Object.keys(data).forEach(function(key) {
