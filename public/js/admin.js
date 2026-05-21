@@ -86,6 +86,7 @@ function loadPage(page) {
     case 'canary': loadCanary(); break;
     case 'live-sessions': loadLiveSessions(); break;
     case 'traffic': loadTraffic(); break;
+    case 'quiz': loadQuiz(); break;
   }
 }
 
@@ -5912,6 +5913,204 @@ function ueCostRow(label, cost, revenue) {
   var r = parseFloat(revenue) || 0;
   var pct = r > 0 ? ((c / r) * 100).toFixed(1) + '%' : '—';
   return '<tr><td>' + esc(label) + '</td><td style="text-align:right">' + fmtUSD(c) + '</td><td style="text-align:right">' + pct + '</td></tr>';
+}
+
+/* ════════════════════════════════════════════════════════════════
+   Quiz funnel monitoring (2026-05-21)
+   Reads /api/monitoring/quiz/{overview,sessions} which live on the
+   shared Postgres. Filter dropdowns get rebuilt from the segment data
+   returned by /overview so we only show segments that actually exist.
+   ════════════════════════════════════════════════════════════════ */
+var QUIZ_LABELS = {
+  space_type: {
+    hotel: 'Hotel', venue: 'Venue / event', showroom: 'Showroom / butik',
+    property: 'Ejendom / lejemål', clinic: 'Klinik', school: 'Skole / campus',
+    ops: 'Lager / drift / onboarding', other: 'Andet'
+  },
+  pain_point: {
+    leads: 'Flere leads', time_saving: 'Spar tid på gentagne spørgsmål',
+    insight: 'Indsigt i kundernes behov', ux: 'Bedre digital UX',
+    onboarding: 'Onboarding / træning', unsure: 'Ikke sikker'
+  },
+  audience: {
+    customers: 'Kunder før køb', visitors: 'Besøgende',
+    buyers: 'Lejere / købere', patients: 'Patienter / klienter',
+    employees: 'Medarbejdere', partners: 'Partnere / leverandører'
+  },
+  has_3d: {
+    yes_tour: 'Har virtuel tour', yes_passive: 'Har billeder / video',
+    no: 'Nej', unsure: 'Ikke sikker'
+  },
+  faq_topics: {
+    prices: 'Priser', booking: 'Booking / tilgængelighed',
+    facilities: 'Faciliteter', products: 'Produkter / services',
+    practical: 'Praktisk info', process: 'Proces / næste skridt',
+    unsure: 'Ved det ikke', other: 'Andet'
+  }
+};
+
+function qzLbl(group, key) {
+  return (QUIZ_LABELS[group] && QUIZ_LABELS[group][key]) || key;
+}
+
+function loadQuiz() {
+  var days  = (document.getElementById('qzDays') || {}).value || '30';
+  var space = (document.getElementById('qzSpace') || {}).value || 'all';
+  var pain  = (document.getElementById('qzPain')  || {}).value || 'all';
+  var aud   = (document.getElementById('qzAud')   || {}).value || 'all';
+  var t3d   = (document.getElementById('qz3d')    || {}).value || 'all';
+
+  var qs = 'days=' + days;
+  if (space !== 'all') qs += '&space_type=' + space;
+  if (pain  !== 'all') qs += '&pain_point=' + pain;
+  if (aud   !== 'all') qs += '&audience=' + aud;
+  if (t3d   !== 'all') qs += '&has_3d=' + t3d;
+
+  /* Overview (KPIs + segments) — always loads full periode for filter
+     dropdowns + breakdown bars regardless of currently selected
+     filters. The submissions TABLE uses the filters. */
+  api('/api/monitoring/quiz/overview?days=' + days).then(function (d) {
+    if (!d || !d.ok) {
+      document.getElementById('qzKpis').innerHTML = '<div class="qz-empty">Kunne ikke hente data: ' + ((d&&d.error)||'unknown') + '</div>';
+      return;
+    }
+    var t = d.totals || {};
+    var sub = parseInt(t.submissions || 0);
+    var completionPct = sub ? Math.round((parseInt(t.completed||0)/sub)*100) : 0;
+    var resultPct     = sub ? Math.round((parseInt(t.result_viewed||0)/sub)*100) : 0;
+    var calcPct       = sub ? Math.round((parseInt(t.calc_viewed||0)/sub)*100) : 0;
+    var bookedPct     = sub ? Math.round((parseInt(t.booked_demo||0)/sub)*100) : 0;
+    var leadPct       = sub ? Math.round((parseInt(t.with_email||0)/sub)*100) : 0;
+    document.getElementById('qzKpis').innerHTML = [
+      qzKpi('Submissions', fmtNum(sub), days + ' dage'),
+      qzKpi('Quiz færdig', fmtNum(t.completed||0), completionPct + '% af submissions'),
+      qzKpi('Result-side vist', fmtNum(t.result_viewed||0), resultPct + '% af submissions'),
+      qzKpi('Value calc åbnet', fmtNum(t.calc_viewed||0), calcPct + '% af submissions'),
+      qzKpi('Book demo klik', fmtNum(t.booked_demo||0), bookedPct + '% af submissions'),
+      qzKpi('Med email', fmtNum(t.with_email||0), leadPct + '% af submissions'),
+    ].join('');
+
+    document.getElementById('qzSegments').innerHTML = [
+      qzSegment('Space type',  d.by_space_type, 'space_type'),
+      qzSegment('Pain point',  d.by_pain_point, 'pain_point'),
+      qzSegment('Målgruppe',   d.by_audience,   'audience'),
+      qzSegment('3D-status',   d.by_has_3d,     'has_3d'),
+    ].join('');
+
+    // Rebuild filter dropdowns from segment data (only show existing)
+    qzPopulateFilter('qzSpace', d.by_space_type, 'space_type', space);
+    qzPopulateFilter('qzPain',  d.by_pain_point, 'pain_point', pain);
+    qzPopulateFilter('qzAud',   d.by_audience,   'audience',   aud);
+    qzPopulateFilter('qz3d',    d.by_has_3d,     'has_3d',     t3d);
+  });
+
+  api('/api/monitoring/quiz/sessions?' + qs + '&limit=200').then(function (d) {
+    var wrap = document.getElementById('qzTableWrap');
+    if (!wrap) return;
+    if (!d || !d.ok) { wrap.innerHTML = '<div class="qz-empty">Kunne ikke hente sessions.</div>'; return; }
+    if (!d.sessions || !d.sessions.length) { wrap.innerHTML = '<div class="qz-empty">Ingen submissions matcher filtrene.</div>'; return; }
+    var rows = d.sessions.map(function (s) {
+      var when = fmtDateTime(s.created_at);
+      var badges = [];
+      if (s.completed_at)     badges.push('<span class="qz-funnel-badge completed">✓ Færdig</span>');
+      if (s.result_viewed_at) badges.push('<span class="qz-funnel-badge result">Result</span>');
+      if (s.calc_viewed_at)   badges.push('<span class="qz-funnel-badge calc">Calc</span>');
+      if (s.booked_demo_at)   badges.push('<span class="qz-funnel-badge booked">Demo</span>');
+      var faqList = Array.isArray(s.faq_topics)
+        ? s.faq_topics.map(function (k) { return qzLbl('faq_topics', k); }).join(', ')
+        : '';
+      return '<tr class="qz-row" onclick="qzOpen(\'' + esc(s.session_id) + '\')">'
+        + '<td>' + when + '</td>'
+        + '<td>' + esc(qzLbl('space_type', s.space_type)) + (s.space_type === 'other' && s.space_type_other ? ' <span style="color:var(--muted)">(' + esc(s.space_type_other) + ')</span>' : '') + '</td>'
+        + '<td>' + esc(qzLbl('pain_point', s.pain_point)) + '</td>'
+        + '<td>' + esc(qzLbl('audience',   s.audience)) + '</td>'
+        + '<td>' + esc(qzLbl('has_3d',     s.has_3d)) + '</td>'
+        + '<td style="max-width:200px;color:var(--muted)">' + esc(faqList) + '</td>'
+        + '<td>' + esc(s.email || '—') + '</td>'
+        + '<td>' + badges.join(' ') + '</td>'
+        + '</tr>';
+    }).join('');
+    wrap.innerHTML =
+        '<table>'
+      + '<thead><tr>'
+      + '<th>Tid</th><th>Space</th><th>Pain</th><th>Målgr.</th><th>3D</th><th>FAQ topics</th><th>Email</th><th>Funnel</th>'
+      + '</tr></thead>'
+      + '<tbody>' + rows + '</tbody></table>';
+  });
+}
+
+function qzKpi(label, value, sub) {
+  return '<div class="qz-card">'
+    + '<div class="qz-card-label">' + esc(label) + '</div>'
+    + '<div class="qz-card-value">' + value + '</div>'
+    + '<div class="qz-card-sub">' + esc(sub || '') + '</div>'
+    + '</div>';
+}
+
+function qzSegment(title, rows, group) {
+  if (!rows || !rows.length) return '<div class="qz-seg"><div class="qz-seg-title">' + esc(title) + '</div><div style="color:var(--muted);font-size:13px">No data</div></div>';
+  var max = Math.max.apply(null, rows.map(function (r) { return parseInt(r.n||0); }));
+  var bars = rows.map(function (r) {
+    var n = parseInt(r.n||0);
+    var pct = max ? (n / max) * 100 : 0;
+    return '<div class="qz-bar-row">'
+      + '<div class="qz-bar-key">' + esc(qzLbl(group, r.key)) + '</div>'
+      + '<div class="qz-bar-track"><div class="qz-bar-fill" style="width:' + pct + '%"></div></div>'
+      + '<div class="qz-bar-n">' + n + '</div>'
+      + '</div>';
+  }).join('');
+  return '<div class="qz-seg"><div class="qz-seg-title">' + esc(title) + '</div>' + bars + '</div>';
+}
+
+function qzPopulateFilter(elId, rows, group, currentValue) {
+  var sel = document.getElementById(elId);
+  if (!sel) return;
+  /* preserve "all" + currently-selected value (which may not be in
+     the latest day's segment list — keep it anyway). */
+  var existing = currentValue || sel.value;
+  var html = '<option value="all">Alle ' + ({space_type:'space types', pain_point:'pain points', audience:'målgrupper', has_3d:'3D-status'}[group] || group) + '</option>';
+  (rows || []).forEach(function (r) {
+    html += '<option value="' + esc(r.key) + '"' + (r.key === existing ? ' selected' : '') + '>' + esc(qzLbl(group, r.key)) + ' (' + r.n + ')</option>';
+  });
+  sel.innerHTML = html;
+  if (existing && existing !== 'all') sel.value = existing;
+}
+
+window.qzOpen = function (sessionId) {
+  var modal = document.getElementById('qzModal');
+  var body = document.getElementById('qzModalBody');
+  body.innerHTML = 'Loading…';
+  modal.classList.add('open');
+  api('/api/monitoring/quiz/sessions/' + encodeURIComponent(sessionId)).then(function (d) {
+    if (!d || !d.ok) { body.innerHTML = 'Kunne ikke hente.'; return; }
+    var s = d.session;
+    var faqList = Array.isArray(s.faq_topics) ? s.faq_topics : [];
+    var rows = [
+      ['Session ID',          '<code>' + esc(s.session_id) + '</code>'],
+      ['Oprettet',             fmtDateTime(s.created_at)],
+      ['Q1 — Space type',      esc(qzLbl('space_type', s.space_type)) + (s.space_type === 'other' && s.space_type_other ? ' <span style="color:var(--muted)">(' + esc(s.space_type_other) + ')</span>' : '')],
+      ['Q2 — Pain point',      esc(qzLbl('pain_point', s.pain_point))],
+      ['Q3 — Målgruppe',       esc(qzLbl('audience',   s.audience))],
+      ['Q4 — FAQ topics',      faqList.length ? faqList.map(function (k) { return esc(qzLbl('faq_topics', k)); }).join(', ') : '<em style="color:var(--muted)">Ingen valgt</em>'],
+      ['Q5 — 3D-status',       esc(qzLbl('has_3d',     s.has_3d))],
+      ['Email',                esc(s.email || '—')],
+      ['Navn',                 esc(s.name || '—')],
+      ['Kilde',                esc(s.source || '—')],
+      ['Quiz færdig',          s.completed_at     ? fmtDateTime(s.completed_at)     : '—'],
+      ['Result-side vist',     s.result_viewed_at ? fmtDateTime(s.result_viewed_at) : '—'],
+      ['Value calc åbnet',     s.calc_viewed_at   ? fmtDateTime(s.calc_viewed_at)   : '—'],
+      ['Book demo klik',       s.booked_demo_at   ? fmtDateTime(s.booked_demo_at)   : '—'],
+    ];
+    body.innerHTML = '<dl class="qz-dl">'
+      + rows.map(function (r) { return '<dt>' + r[0] + '</dt><dd>' + r[1] + '</dd>'; }).join('')
+      + '</dl>';
+  });
+};
+
+function fmtDateTime(iso) {
+  if (!iso) return '—';
+  var d = new Date(iso);
+  return d.toLocaleString('da-DK', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
 }
 
 /* ── INIT ── */

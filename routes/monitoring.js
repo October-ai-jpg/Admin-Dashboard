@@ -1147,6 +1147,120 @@ module.exports = function(pool) {
   });
 
   /* ═══════════════════════════════════════════════════════════════
+     QUIZ FUNNEL — /quiz submissions overview
+     2026-05-21 — Backs the "Quiz" tab in the admin sidebar. Reads
+     from quiz_sessions (migration v66 on the main app's Postgres).
+
+     Three endpoints:
+       GET /quiz/overview?days=N
+         KPI cards: total submissions, completion %, result-viewed %,
+         calc-viewed %, booked-demo %, plus the top space_type /
+         pain_point / audience / has_3d breakdowns so we know what
+         segments are coming through. Default days=30.
+
+       GET /quiz/sessions?days=N&space_type=&pain_point=&limit=50
+         Filterable list — used by the table view + dropdown filters.
+         Each row carries all 5 answers + funnel timestamps + email.
+
+       GET /quiz/sessions/:session_id
+         Single-session drill-down for the modal.
+     ═══════════════════════════════════════════════════════════════ */
+  router.get('/quiz/overview', async (req, res) => {
+    try {
+      const days = Math.min(parseInt(req.query.days || '30'), 365);
+      const sinceClause = `created_at > NOW() - INTERVAL '${days} days'`;
+
+      const [totals, bySpace, byPain, byAudience, by3d] = await Promise.all([
+        query(`
+          SELECT
+            COUNT(*)::int                                                        AS submissions,
+            COUNT(*) FILTER (WHERE completed_at IS NOT NULL)::int                AS completed,
+            COUNT(*) FILTER (WHERE result_viewed_at IS NOT NULL)::int            AS result_viewed,
+            COUNT(*) FILTER (WHERE calc_viewed_at IS NOT NULL)::int              AS calc_viewed,
+            COUNT(*) FILTER (WHERE booked_demo_at IS NOT NULL)::int              AS booked_demo,
+            COUNT(*) FILTER (WHERE email IS NOT NULL)::int                       AS with_email
+          FROM quiz_sessions WHERE ${sinceClause}
+        `),
+        query(`SELECT space_type AS key, COUNT(*)::int AS n FROM quiz_sessions
+               WHERE ${sinceClause} AND space_type IS NOT NULL
+               GROUP BY space_type ORDER BY n DESC`),
+        query(`SELECT pain_point AS key, COUNT(*)::int AS n FROM quiz_sessions
+               WHERE ${sinceClause} AND pain_point IS NOT NULL
+               GROUP BY pain_point ORDER BY n DESC`),
+        query(`SELECT audience AS key, COUNT(*)::int AS n FROM quiz_sessions
+               WHERE ${sinceClause} AND audience IS NOT NULL
+               GROUP BY audience ORDER BY n DESC`),
+        query(`SELECT has_3d AS key, COUNT(*)::int AS n FROM quiz_sessions
+               WHERE ${sinceClause} AND has_3d IS NOT NULL
+               GROUP BY has_3d ORDER BY n DESC`),
+      ]);
+
+      res.json({
+        ok: true,
+        days,
+        totals: totals.rows[0] || {},
+        by_space_type: bySpace.rows,
+        by_pain_point: byPain.rows,
+        by_audience:   byAudience.rows,
+        by_has_3d:     by3d.rows
+      });
+    } catch (e) {
+      console.error('quiz/overview error:', e);
+      res.json({ ok: false, error: e.message });
+    }
+  });
+
+  router.get('/quiz/sessions', async (req, res) => {
+    try {
+      const days  = Math.min(parseInt(req.query.days  || '30'), 365);
+      const limit = Math.min(parseInt(req.query.limit || '100'), 500);
+
+      const whereParts = [`created_at > NOW() - INTERVAL '${days} days'`];
+      const params = [];
+      const allow = ['space_type','pain_point','audience','has_3d'];
+      allow.forEach(col => {
+        const v = req.query[col];
+        if (typeof v === 'string' && v && v !== 'all') {
+          params.push(v);
+          whereParts.push(`${col} = $${params.length}`);
+        }
+      });
+      const onlyEmail = req.query.only_email === '1';
+      if (onlyEmail) whereParts.push('email IS NOT NULL');
+
+      params.push(limit);
+      const result = await query(`
+        SELECT session_id, space_type, space_type_other, pain_point, audience,
+               faq_topics, has_3d, email, name, source,
+               created_at, completed_at, result_viewed_at, calc_viewed_at, booked_demo_at
+        FROM quiz_sessions
+        WHERE ${whereParts.join(' AND ')}
+        ORDER BY created_at DESC
+        LIMIT $${params.length}
+      `, params);
+
+      res.json({ ok: true, count: result.rows.length, sessions: result.rows });
+    } catch (e) {
+      console.error('quiz/sessions error:', e);
+      res.json({ ok: false, error: e.message });
+    }
+  });
+
+  router.get('/quiz/sessions/:session_id', async (req, res) => {
+    try {
+      const sid = String(req.params.session_id || '').slice(0, 24);
+      const result = await query(`
+        SELECT * FROM quiz_sessions WHERE session_id = $1
+      `, [sid]);
+      if (!result.rows.length) return res.status(404).json({ error: 'not_found' });
+      res.json({ ok: true, session: result.rows[0] });
+    } catch (e) {
+      console.error('quiz/session error:', e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  /* ═══════════════════════════════════════════════════════════════
      VISITOR RELIABILITY — embed.js telemetry surfacing
      Reads from client_events table (populated by visitor browsers
      POSTing to /api/client-event on the main October AI service).
