@@ -270,7 +270,7 @@ function crmSetCategory(selectEl) {
   selectEl.disabled = true;
   fetch('/api/crm/contacts/' + encodeURIComponent(id), {
     method: 'PATCH',
-    headers: { 'x-admin-token': ADMIN_TOKEN, 'Content-Type': 'application/json' },
+    headers: { 'x-admin-token': TOKEN, 'Content-Type': 'application/json' },
     body: JSON.stringify({ category: newCat })
   })
     .then(function(r) { return r.json(); })
@@ -292,7 +292,7 @@ function crmSync() {
   var btn = event && event.target;
   if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
   fetch('/api/crm/sync', {
-    method: 'POST', headers: { 'x-admin-token': ADMIN_TOKEN, 'Content-Type': 'application/json' }
+    method: 'POST', headers: { 'x-admin-token': TOKEN, 'Content-Type': 'application/json' }
   }).then(function(r) { return r.json(); }).then(function() {
     /* Poll status every 5s for 90s. */
     var pollAttempts = 0;
@@ -351,10 +351,12 @@ function crmOpenDrawer(id) {
           }).join('')
       +   '</select></div>'
       + '</div>'
-      + '<div style="display:flex;gap:8px;margin-top:18px">'
+      + '<div style="display:flex;gap:8px;margin-top:18px;flex-wrap:wrap">'
       +   '<button class="crm-btn crm-btn-dark" onclick="crmSaveDrawer()">Save</button>'
       +   '<button class="crm-btn" onclick="crmCloseDrawer()">Cancel</button>'
+      +   '<button class="crm-btn" style="margin-left:auto" onclick="crmSuggestReply(\'' + crmEsc(c.id) + '\')" title="Use Claude + your past outbound emails to draft a reply in your voice">✨ Suggest reply</button>'
       + '</div>'
+      + '<div id="crmReplyBox" style="display:none;margin-top:14px"></div>'
       + '<div class="crm-emails"><label>Recent emails (' + (d.emails||[]).length + ')</label>';
     if (!d.emails || !d.emails.length) {
       body += '<div style="color:var(--muted);font-size:12px;padding:14px 0">No emails imported yet for this contact. Click ↻ Sync now to fetch from Gmail.</div>';
@@ -396,12 +398,90 @@ function crmSaveDrawer() {
   };
   fetch('/api/crm/contacts/' + encodeURIComponent(_crmCurrentId), {
     method: 'PATCH',
-    headers: { 'x-admin-token': ADMIN_TOKEN, 'Content-Type': 'application/json' },
+    headers: { 'x-admin-token': TOKEN, 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   }).then(function(r){ return r.json(); }).then(function(d) {
     if (d && d.ok) { crmCloseDrawer(); loadCrm(_crmCategory); }
     else alert('Save failed: ' + ((d && d.error) || 'unknown'));
   });
+}
+
+/* ── AI reply suggestion ─────────────────────────────────────
+   Calls /api/crm/contacts/:id/suggest-reply which feeds Claude:
+     · The contact's brief + thread context (if any)
+     · The user's last 15 outbound emails as style samples
+   Returns { subject, body } drafted in the founder's voice. */
+function crmSuggestReply(contactId) {
+  if (!contactId) return;
+  var box = document.getElementById('crmReplyBox');
+  if (!box) return;
+  box.style.display = 'block';
+  box.innerHTML = '<div style="font-size:13px;color:var(--muted);padding:14px;border:1px dashed var(--border);border-radius:10px;text-align:center">Drafting in your voice…</div>';
+
+  fetch('/api/crm/contacts/' + encodeURIComponent(contactId) + '/suggest-reply', {
+    method: 'POST',
+    headers: { 'x-admin-token': TOKEN, 'Content-Type': 'application/json' }
+  })
+    .then(function(r) { return r.json().then(function(j) { return { status: r.status, j: j }; }); })
+    .then(function(res) {
+      var j = res.j || {};
+      if (res.status !== 200 || !j.suggestion) {
+        box.innerHTML = '<div style="font-size:13px;color:#B91C1C;padding:14px;border:1px solid #fcd5d5;background:#fef5f5;border-radius:10px">'
+          + crmEsc(j.error || ('Could not generate (HTTP ' + res.status + ')')) + '</div>';
+        return;
+      }
+      var s = j.suggestion;
+      var meta = (j.isReply ? 'Reply' : 'First-touch')
+        + ' · style learned from ' + (j.usedStyleSamples || 0) + ' past outbound emails'
+        + (j.usedThreadMessages ? (' · ' + j.usedThreadMessages + ' thread messages in context') : '');
+      box.innerHTML = ''
+        + '<div style="padding:16px;border:1px solid var(--border);border-radius:10px;background:#fafafa">'
+        +   '<div style="font-size:11px;color:var(--muted);letter-spacing:0.05em;text-transform:uppercase;font-weight:600;margin-bottom:10px">✨ Suggested ' + (j.isReply ? 'reply' : 'first-touch') + '</div>'
+        +   '<label style="display:block;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;font-weight:600;margin-bottom:4px">Subject</label>'
+        +   '<input id="crmRepSubj" type="text" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:7px;font-size:13px;background:#fff;margin-bottom:10px;font-family:inherit" value="' + crmEsc(s.subject) + '">'
+        +   '<label style="display:block;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;font-weight:600;margin-bottom:4px">Body</label>'
+        +   '<textarea id="crmRepBody" style="width:100%;min-height:200px;padding:10px 12px;border:1px solid var(--border);border-radius:7px;font-size:13px;line-height:1.55;background:#fff;font-family:inherit;resize:vertical">' + crmEsc(s.body) + '</textarea>'
+        +   '<div style="display:flex;gap:8px;margin-top:10px;align-items:center">'
+        +     '<button class="crm-btn" onclick="crmCopyReply()">📋 Copy to clipboard</button>'
+        +     '<a class="crm-btn" id="crmRepMailto" href="#" target="_blank">✉️ Open in mail app</a>'
+        +     '<button class="crm-btn" onclick="crmSuggestReply(\'' + crmEsc(contactId) + '\')" title="Re-roll with another draft">↻ Try again</button>'
+        +     '<span style="margin-left:auto;font-size:11px;color:var(--muted)">' + crmEsc(meta) + '</span>'
+        +   '</div>'
+        + '</div>';
+      crmUpdateMailtoLink();
+      /* Live-update mailto link as user edits draft. */
+      document.getElementById('crmRepSubj').addEventListener('input', crmUpdateMailtoLink);
+      document.getElementById('crmRepBody').addEventListener('input', crmUpdateMailtoLink);
+    })
+    .catch(function(e) {
+      box.innerHTML = '<div style="font-size:13px;color:#B91C1C;padding:14px;border:1px solid #fcd5d5;background:#fef5f5;border-radius:10px">Network error: ' + crmEsc(e.message) + '</div>';
+    });
+}
+function crmUpdateMailtoLink() {
+  var emailEl = document.getElementById('crmDrawerEmail');
+  var subj = document.getElementById('crmRepSubj').value;
+  var body = document.getElementById('crmRepBody').value;
+  var a = document.getElementById('crmRepMailto');
+  if (a && emailEl) {
+    a.href = 'mailto:' + encodeURIComponent(emailEl.textContent.trim())
+           + '?subject=' + encodeURIComponent(subj)
+           + '&body=' + encodeURIComponent(body);
+  }
+}
+function crmCopyReply() {
+  var subj = document.getElementById('crmRepSubj').value;
+  var body = document.getElementById('crmRepBody').value;
+  var combined = 'Subject: ' + subj + '\n\n' + body;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(combined).then(function() {
+      var btn = event && event.target;
+      if (btn) { var orig = btn.textContent; btn.textContent = '✓ Copied'; setTimeout(function(){ btn.textContent = orig; }, 1500); }
+    });
+  } else {
+    var t = document.createElement('textarea'); t.value = combined; document.body.appendChild(t); t.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(t);
+  }
 }
 
 function crmOpenNew() { document.getElementById('crmNewModal').classList.add('open'); }
@@ -425,7 +505,7 @@ function crmSaveNew() {
   };
   fetch('/api/crm/contacts', {
     method: 'POST',
-    headers: { 'x-admin-token': ADMIN_TOKEN, 'Content-Type': 'application/json' },
+    headers: { 'x-admin-token': TOKEN, 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   }).then(function(r){ return r.json(); }).then(function(d) {
     if (d && d.ok) { crmCloseNew(); loadCrm(_crmCategory); }
@@ -497,7 +577,7 @@ function crmShotProcessFile(file) {
 
   fetch('/api/crm/contacts/from-image', {
     method: 'POST',
-    headers: { 'x-admin-token': ADMIN_TOKEN },
+    headers: { 'x-admin-token': TOKEN },
     body: fd
   })
     .then(function(r) { return r.json().then(function(j){ return { status: r.status, j: j }; }); })
@@ -563,7 +643,7 @@ function crmShotSave() {
 
   fetch(url, {
     method: method,
-    headers: { 'x-admin-token': ADMIN_TOKEN, 'Content-Type': 'application/json' },
+    headers: { 'x-admin-token': TOKEN, 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   })
     .then(function(r) { return r.json(); })

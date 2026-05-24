@@ -399,6 +399,164 @@ Rules:
     }
   });
 
+  /* ─── AI reply suggestion ─────────────────────────────────────
+     Generates a draft email tailored to this contact, written in the
+     founder's natural voice — learned from their last 15 outbound
+     mails on file. Use cases:
+       1. New contact (e.g. from Upwork SDR screenshot) → cold outreach
+          first-touch in your style.
+       2. Existing contact with email history → reply suggestion that
+          fits the thread + your voice.
+
+     Robustness mirrors /from-image: 503 with clear msg if no API key,
+     502 on Claude failure, strict JSON parsing with one retry. */
+  router.post('/contacts/:id/suggest-reply', async (req, res) => {
+    try {
+      const id = String(req.params.id || '');
+      if (!process.env.ANTHROPIC_API_KEY) {
+        return res.status(503).json({ error: 'ANTHROPIC_API_KEY missing on Admin-Dashboard service' });
+      }
+
+      const contactRes = await q(
+        `SELECT id, company, contact_person, email, brief, category, status, owner_notes,
+                last_email_subject, last_email_direction
+           FROM crm_contacts WHERE id = $1`,
+        [id]
+      );
+      if (!contactRes.rows.length) return res.status(404).json({ error: 'Contact not found' });
+      const contact = contactRes.rows[0];
+
+      /* Style corpus: last 15 outbound emails from ANY contact. We
+         strip subject + body and feed as raw examples — Claude learns
+         tone, length, sign-off, formality from these. */
+      const stylePool = await q(
+        `SELECT subject, body_text
+           FROM crm_emails
+          WHERE direction = 'outbound'
+            AND body_text IS NOT NULL AND LENGTH(body_text) > 30
+          ORDER BY sent_at DESC NULLS LAST
+          LIMIT 15`
+      );
+
+      /* Thread context: last 5 emails to/from this contact. Used so
+         the suggestion picks up the conversation rather than starting
+         from zero on warm threads. */
+      const threadRes = await q(
+        `SELECT direction, subject, body_text, sent_at
+           FROM crm_emails WHERE contact_id = $1
+          ORDER BY sent_at DESC NULLS LAST
+          LIMIT 5`,
+        [id]
+      );
+      const hasThread = threadRes.rows.length > 0;
+
+      let Anthropic;
+      try { Anthropic = require('@anthropic-ai/sdk').default || require('@anthropic-ai/sdk'); }
+      catch (e) { return res.status(503).json({ error: 'Anthropic SDK unavailable: ' + e.message }); }
+      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+      /* Build the system prompt with the style + context corpus. We
+         emphasise: copy the founder's voice, don't invent facts, never
+         claim things the data doesn't support. */
+      const styleExamples = stylePool.rows.length
+        ? stylePool.rows.slice(0, 15).map((e, i) =>
+            `--- Past outbound email #${i + 1} ---\nSubject: ${e.subject || '(no subject)'}\n${(e.body_text || '').slice(0, 1200)}`
+          ).join('\n\n')
+        : '(no outbound style samples available yet)';
+
+      const threadCtx = hasThread
+        ? threadRes.rows.reverse().map(e =>
+            `[${e.direction.toUpperCase()}] ${e.sent_at ? new Date(e.sent_at).toISOString().slice(0,10) : ''} — ${e.subject || '(no subject)'}\n${(e.body_text || '').slice(0, 800)}`
+          ).join('\n\n---\n\n')
+        : 'No prior email history with this contact.';
+
+      const systemPrompt =
+`You are drafting an email on behalf of the founder of October AI — a voice-AI
+agent product for Matterport virtual tours. The founder's writing style is
+visible in the OUTBOUND EMAIL EXAMPLES below. Match it closely:
+  · tone (formal vs casual)
+  · length (short vs long)
+  · sign-off style
+  · whether the founder uses bullet points, links, etc.
+  · Danish or English (mirror what they normally use with similar contacts)
+
+Rules:
+  · Never invent facts. Stick to what's in the contact's brief, owner notes,
+    and the thread context.
+  · If the contact came from an Upwork SDR (brief mentions partner program,
+    AI-agent, or similar), this is a FIRST-TOUCH cold email after an SDR
+    intro — keep it short, reference the prior conversation, and propose a
+    concrete next step (15-min call).
+  · If there IS thread context, treat the next message as a REPLY to the
+    most recent inbound email.
+  · Output STRICT JSON with exactly two keys (no markdown, no prose):
+      { "subject": "string", "body": "string" }
+  · "body" uses real line breaks (\\n) — not literal "\\n" strings.
+  · Do not include "Dear" or overly formal greetings unless the examples do.`;
+
+      const userPrompt =
+`CONTACT
+  Name:    ${contact.contact_person || '(unknown)'}
+  Email:   ${contact.email}
+  Company: ${contact.company || '(unknown)'}
+  Category: ${contact.category}
+  Brief:   ${contact.brief || '(none)'}
+  Notes:   ${contact.owner_notes || '(none)'}
+
+THREAD CONTEXT (most recent last)
+${threadCtx}
+
+OUTBOUND EMAIL EXAMPLES (founder's voice — match this)
+${styleExamples}
+
+TASK
+${hasThread ? 'Draft the next reply to this contact, matching the founder\'s voice.' : 'Draft a first-touch email to this contact, matching the founder\'s voice.'}
+Output only the JSON object.`;
+
+      async function callClaude(strict) {
+        const resp = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 1200,
+          system: systemPrompt + (strict ? '\n\nIMPORTANT: previous output was not valid JSON. Return ONLY the JSON object.' : ''),
+          messages: [{ role: 'user', content: userPrompt }]
+        });
+        return (resp.content?.[0]?.text || '').trim();
+      }
+      function tryParse(raw) {
+        if (!raw) return null;
+        let cleaned = raw.replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
+        const s = cleaned.indexOf('{'); const e = cleaned.lastIndexOf('}');
+        if (s !== -1 && e > s) cleaned = cleaned.slice(s, e + 1);
+        try { return JSON.parse(cleaned); } catch { return null; }
+      }
+
+      let parsed = null;
+      try {
+        parsed = tryParse(await callClaude(false));
+        if (!parsed) parsed = tryParse(await callClaude(true));
+      } catch (e) {
+        return res.status(502).json({ error: 'Claude call failed: ' + e.message });
+      }
+      if (!parsed || !parsed.body) {
+        return res.status(502).json({ error: 'Claude returned no usable draft' });
+      }
+
+      res.json({
+        ok: true,
+        suggestion: {
+          subject: String(parsed.subject || '').slice(0, 500),
+          body:    String(parsed.body || '').slice(0, 6000)
+        },
+        usedStyleSamples: stylePool.rows.length,
+        usedThreadMessages: threadRes.rows.length,
+        isReply: hasThread
+      });
+    } catch (e) {
+      console.error('[crm/suggest-reply]', e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   /* ─── Templates ──────────────────────────────────────────────── */
 
   router.get('/templates', async (req, res) => {
