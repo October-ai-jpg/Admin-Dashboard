@@ -156,9 +156,14 @@ function loadCrm(category) {
   document.getElementById('crmTplPane').style.display  = 'none';
 
   var qs = '';
-  if (_crmCategory && _crmCategory !== 'all') qs = '?category=' + encodeURIComponent(_crmCategory);
+  var addQ = function(k, v) { qs += (qs ? '&' : '?') + k + '=' + encodeURIComponent(v); };
+  if (_crmCategory && _crmCategory !== 'all') addQ('category', _crmCategory);
   var search = (document.getElementById('crmSearch') || {}).value || '';
-  if (search) qs += (qs ? '&' : '?') + 'q=' + encodeURIComponent(search);
+  if (search) addQ('q', search);
+  /* Noise toggle — checked = only show filtered noise rows so user
+     can review them. Default off = noise hidden. */
+  var showNoiseEl = document.getElementById('crmShowNoise');
+  if (showNoiseEl && showNoiseEl.checked) addQ('only_noise', '1');
 
   api('/api/crm/contacts' + qs).then(function(d) {
     if (!d || !d.ok) {
@@ -175,6 +180,9 @@ function loadCrm(category) {
     setCnt('crmCnt_affiliate',        c.affiliate || 0);
     setCnt('crmCnt_customer_service', c.customer_service || 0);
     setCnt('crmCnt_other',            c.other || 0);
+    /* Noise count appears next to the "Show noise" toggle. */
+    var noiseCntEl = document.getElementById('crmNoiseCnt');
+    if (noiseCntEl) noiseCntEl.textContent = '(' + (c.noise || 0) + ')';
 
     if (!_crmRows.length) {
       document.getElementById('crmTbody').innerHTML =
@@ -189,11 +197,23 @@ function loadCrm(category) {
         ? crmFmtDaysSince(r.days_since_last_email) + (r.last_email_direction
             ? ' <span style="font-size:10px;color:var(--muted)">· ' + r.last_email_direction + '</span>' : '')
         : '<span class="crm-stale">No emails yet</span>';
-      return '<tr class="crm-row" data-id="' + crmEsc(r.id) + '">'
+      var isNoiseRow = r.status === 'lost';
+      /* Inline category quick-select — onchange fires PATCH and
+         reloads the list so the row moves to the right tab/count. */
+      var catSelect = ''
+        + '<select class="crm-cat-select cat-' + r.category + '" data-id="' + crmEsc(r.id) + '"'
+        +   ' onclick="event.stopPropagation()"'
+        +   ' onchange="crmSetCategory(this)">'
+        +   ['affiliate','customer_service','other'].map(function(k){
+              var lbl = { affiliate:'Affiliate', customer_service:'Customer service', other:'Other / lead' }[k];
+              return '<option value="' + k + '"' + (r.category===k?' selected':'') + '>' + lbl + '</option>';
+            }).join('')
+        + '</select>';
+      return '<tr class="crm-row' + (isNoiseRow ? ' is-noise' : '') + '" data-id="' + crmEsc(r.id) + '">'
         + '<td><strong>' + name + '</strong>' + subline + '</td>'
         + '<td style="font-family:monospace;font-size:12px">' + crmEsc(r.email) + '</td>'
         + '<td style="color:var(--muted);font-size:12px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + crmEsc(r.brief || '') + '</td>'
-        + '<td><span class="crm-cat-badge crm-cat-' + r.category + '">' + crmEsc(r.category.replace('_',' ')) + '</span></td>'
+        + '<td>' + catSelect + '</td>'
         + '<td><span style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em">' + crmEsc(r.status || 'new') + '</span></td>'
         + '<td>' + lastEmail + '</td>'
         + '</tr>';
@@ -201,7 +221,11 @@ function loadCrm(category) {
     var tb = document.getElementById('crmTbody');
     tb.innerHTML = html;
     tb.querySelectorAll('tr.crm-row').forEach(function(tr) {
-      tr.addEventListener('click', function() { crmOpenDrawer(tr.getAttribute('data-id')); });
+      tr.addEventListener('click', function(e) {
+        /* Don't open drawer when clicking the inline select. */
+        if (e.target && (e.target.tagName === 'SELECT' || e.target.closest('select'))) return;
+        crmOpenDrawer(tr.getAttribute('data-id'));
+      });
     });
   }).catch(function(e) {
     document.getElementById('crmTbody').innerHTML =
@@ -228,6 +252,40 @@ function loadCrm(category) {
       clearTimeout(debounce); debounce = setTimeout(function() { loadCrm(_crmCategory); }, 250);
     });
   }
+  /* Wire "Show noise" toggle once. */
+  var n = document.getElementById('crmShowNoise');
+  if (n && !n._wired) {
+    n._wired = true;
+    n.addEventListener('change', function() { loadCrm(_crmCategory); });
+  }
+}
+
+/* Inline category change from list row. Fires a PATCH and then
+   reloads the list so the moved contact appears under the right tab
+   and the count badges update. */
+function crmSetCategory(selectEl) {
+  var id = selectEl.getAttribute('data-id');
+  var newCat = selectEl.value;
+  if (!id || !newCat) return;
+  selectEl.disabled = true;
+  fetch('/api/crm/contacts/' + encodeURIComponent(id), {
+    method: 'PATCH',
+    headers: { 'x-admin-token': ADMIN_TOKEN, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ category: newCat })
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d && d.ok) {
+        loadCrm(_crmCategory);
+      } else {
+        selectEl.disabled = false;
+        alert('Could not change category: ' + ((d && d.error) || 'unknown'));
+      }
+    })
+    .catch(function() {
+      selectEl.disabled = false;
+      alert('Network error');
+    });
 }
 
 function crmSync() {

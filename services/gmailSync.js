@@ -66,6 +66,117 @@ function isOutboundFrom(addr) {
   return addr.toLowerCase().endsWith('@' + MY_DOMAIN);
 }
 
+/* ────────────────────────────────────────────────────────────────
+   Noise detection: distinguish promotional/transactional/automated
+   senders from real human correspondents.
+
+   Returns true for:
+     · noreply / no-reply / notifications / mailer-daemon / postmaster
+       and similar local-parts on any domain
+     · senders on common ESP/transactional sub-domains (mail.X,
+       send.X, e.X, em.X, notify.X) — these are usually marketing
+       blast lists or app notifications, never real people
+     · Known noise providers (calendly, apollo, instagram, mailchimp,
+       sendgrid, hubspot-automation, intercom-events, etc.)
+
+   This is a starting list; the user can add more patterns over time.
+   When `isNoise=true` the sync still imports the contact + email so
+   nothing is lost forever, but it marks the contact with
+   status='lost' so it stays hidden behind the "Show noise" toggle. */
+const NOISE_LOCAL_PARTS = new Set([
+  'noreply', 'no-reply', 'no_reply', 'donotreply', 'do-not-reply',
+  'notifications', 'notification', 'notify',
+  'mailer-daemon', 'mailerdaemon', 'postmaster', 'nobody', 'daemon',
+  'bounce', 'bounces',
+  'team', 'updates', 'news', 'newsletter', 'digest',
+  'automated', 'system', 'alerts', 'alert',
+  'welcome', 'reply',
+  'marketing', 'promo', 'promotions', 'offers'
+]);
+
+/* Sub-domain markers — if the address ends with @<one-of-these>.<tld>
+   we treat it as transactional. Match is on the FIRST sub-domain label. */
+const NOISE_SUBDOMAIN_PREFIXES = [
+  'mail.', 'send.', 'sendgrid.', 'sendmail.', 'e.', 'em.',
+  'email.', 'emails.', 'notify.', 'notifications.', 'updates.',
+  'news.', 'newsletter.', 'transactional.', 'automated.',
+  'replies.', 'bounce.', 'bounces.', 'noreply.', 'mailer.',
+  'auto.', 'auto-confirm.', 'order.', 'orders.', 'receipts.', 'receipt.',
+  'invoice.', 'invoices.', 'billing.', 'support.send.'
+];
+
+/* Known full domains that are always noise (system mail). */
+const NOISE_DOMAINS = new Set([
+  'calendly.com',
+  'mail.calendly.com', 'send.calendly.com',
+  'mail.apollo.io', 'apollo.io',
+  'mail.instagram.com', 'mail.facebook.com', 'facebookmail.com',
+  'linkedin.com',           /* invitations / notifications, almost never real */
+  'em.linkedin.com', 'e.linkedin.com', 'inmail-hit-reply.linkedin.com',
+  'mailchimp.com', 'mcsv.net',
+  'sendgrid.net', 'mandrill.com', 'mailgun.org',
+  'sendinblue.com', 'sib.notification.com',
+  'mailbluster.com', 'convertkit-mail.com',
+  'hubspot.com',            /* almost always marketing automation */
+  'em.hubspot.com', 'hs-sendgrid.net',
+  'intercom-mail.com', 'replies.intercom-mail.com',
+  'github.com',             /* notification mails (issues, PRs) */
+  'noreply.github.com',
+  'discord.com', 'discordapp.com',
+  'slackmail.com', 'slack.com',
+  'stripe.com', 'mail.stripe.com',
+  'amazonses.com', 'amazon.com',
+  'twilio.com',
+  'asana.com', 'mail.asana.com',
+  'notion.so', 'team.notion.so',
+  'figma.com',
+  'zoom.us',
+  'auth0.com',
+  'salesforce.com',
+  'pipedrive.com',
+  'twitter.com', 'x.com',
+  'youtube.com', 'mail.youtube.com',
+  'medium.com',
+  'producthunt.com',
+  'segment.io',
+  'webflow.com',
+  'shopify.com'
+]);
+
+function isNoiseSender(addr) {
+  if (!addr) return true; /* missing sender — treat as noise */
+  const lower = String(addr).toLowerCase().trim();
+  const atIdx = lower.indexOf('@');
+  if (atIdx < 1 || atIdx === lower.length - 1) return true;
+  const local = lower.slice(0, atIdx);
+  const domain = lower.slice(atIdx + 1);
+
+  /* 1. local-part check (handles prefixes like "noreply-...", "team+abc@") */
+  for (const noiseLocal of NOISE_LOCAL_PARTS) {
+    if (local === noiseLocal) return true;
+    if (local.startsWith(noiseLocal + '-')) return true;
+    if (local.startsWith(noiseLocal + '+')) return true;
+    if (local.startsWith(noiseLocal + '.')) return true;
+    if (local.endsWith('-' + noiseLocal)) return true;
+  }
+  /* "...mailer-..." catch-all */
+  if (/^|[-_.]/.test('') && /(mailer|daemon|noreply|bounces?|notify|notifications?)([-_.+]|$)/.test(local)) return true;
+
+  /* 2. sub-domain check */
+  for (const prefix of NOISE_SUBDOMAIN_PREFIXES) {
+    if (domain.startsWith(prefix)) return true;
+  }
+
+  /* 3. known noise domains (exact match) */
+  if (NOISE_DOMAINS.has(domain)) return true;
+
+  /* 4. anything with a long random-looking local-part (alphanumeric soup,
+     ≥20 chars) is almost always a transactional ID — treat as noise. */
+  if (local.length >= 20 && /^[a-z0-9._=+-]+$/.test(local) && /\d/.test(local)) return true;
+
+  return false;
+}
+
 /* ── DB upserts ────────────────────────────────────────────────── */
 
 async function findOrCreateContact(pool, email, brief, source) {
@@ -77,14 +188,46 @@ async function findOrCreateContact(pool, email, brief, source) {
   );
   if (existing.rows.length) return existing.rows[0];
 
+  /* New contact: pre-mark noise senders as status='lost' so they're
+     hidden from the default list. User can still view them via the
+     "Show noise" toggle and re-classify if needed. */
+  const initialStatus = isNoiseSender(lower) ? 'lost' : 'new';
   const inserted = await pool.query(
-    `INSERT INTO crm_contacts (email, brief, source, category)
-     VALUES ($1, $2, $3, 'other')
+    `INSERT INTO crm_contacts (email, brief, source, category, status)
+     VALUES ($1, $2, $3, 'other', $4)
      ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
      RETURNING id, category, llm_categorised`,
-    [lower, brief || null, source || 'gmail-inbound']
+    [lower, brief || null, source || 'gmail-inbound', initialStatus]
   );
   return inserted.rows[0];
+}
+
+/* One-time / on-demand cleanup of existing crm_contacts rows:
+   re-runs the noise heuristic and bumps newly-noisy ones to
+   status='lost'. Never demotes manually-edited contacts (a row whose
+   updated_at is much newer than created_at is treated as touched). */
+async function classifyNoiseExisting(pool) {
+  const r = await pool.query(
+    `SELECT id, email, status, updated_at, created_at
+       FROM crm_contacts
+      WHERE status IN ('new','active','dormant')`
+  );
+  let flagged = 0;
+  for (const row of r.rows) {
+    /* Heuristic: if updated_at is more than 30s after created_at, the
+       user has interacted with this row — don't auto-demote. */
+    const touched = row.updated_at && row.created_at &&
+      (new Date(row.updated_at).getTime() - new Date(row.created_at).getTime() > 30000);
+    if (touched) continue;
+    if (isNoiseSender(row.email)) {
+      await pool.query(
+        `UPDATE crm_contacts SET status='lost', updated_at=NOW() WHERE id=$1`,
+        [row.id]
+      );
+      flagged++;
+    }
+  }
+  return flagged;
 }
 
 async function insertEmail(pool, parsed, direction, contactId) {
@@ -342,8 +485,9 @@ async function runSync(pool) {
 
     await client.logout();
 
-    /* Categorise */
+    /* Categorise + noise-classify */
     await categoriseExistingContacts(pool);
+    await classifyNoiseExisting(pool);
     await categoriseWithLLM(pool, 25);
 
     const ca = await pool.query('SELECT COUNT(*) AS n FROM crm_contacts');
@@ -415,5 +559,7 @@ module.exports = {
   seedFromExistingTables,
   categoriseExistingContacts,
   categoriseWithLLM,
+  classifyNoiseExisting,
+  isNoiseSender,
   refreshTemplateClusters
 };

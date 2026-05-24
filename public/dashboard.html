@@ -781,6 +781,21 @@
       #page-crm .crm-cat-affiliate        { background:rgba(196,136,60,0.12); color:#C4883C; }
       #page-crm .crm-cat-customer_service { background:rgba(34,139,87,0.12);  color:#228B57; }
       #page-crm .crm-cat-other            { background:rgba(120,120,120,0.12); color:#666; }
+      /* Inline category quick-select on each contact row */
+      #page-crm select.crm-cat-select {
+        padding:4px 22px 4px 9px; border:1px solid var(--border); border-radius:6px;
+        font-size:11px; font-weight:600; background:#fff; cursor:pointer;
+        font-family:inherit; appearance:none; -webkit-appearance:none;
+        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6' fill='none'><path d='M1 1l3 3 3-3' stroke='%23666' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+        background-repeat:no-repeat; background-position:right 6px center;
+      }
+      #page-crm select.crm-cat-select.cat-affiliate        { background-color:rgba(196,136,60,0.10); color:#C4883C; border-color:rgba(196,136,60,0.30); }
+      #page-crm select.crm-cat-select.cat-customer_service { background-color:rgba(34,139,87,0.10);  color:#228B57; border-color:rgba(34,139,87,0.30); }
+      #page-crm select.crm-cat-select.cat-other            { background-color:rgba(120,120,120,0.06); color:#444;    border-color:var(--border); }
+      #page-crm .crm-noise-toggle { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); cursor:pointer; user-select:none; margin-right:8px; }
+      #page-crm .crm-noise-toggle input { margin:0; }
+      #page-crm tr.is-noise { opacity:0.6; }
+      #page-crm tr.is-noise td:first-child::before { content:"●"; color:#B91C1C; margin-right:6px; font-size:8px; vertical-align:middle; }
       #page-crm .crm-stale { color:#B91C1C; }
       #page-crm .crm-fresh { color:#228B57; }
       #page-crm .crm-empty { padding:60px; text-align:center; color:var(--muted); font-size:14px; }
@@ -840,6 +855,9 @@
         <p class="crm-sync-status" id="crmSyncStatus">Last sync: loading…</p>
       </div>
       <div class="crm-actions">
+        <label class="crm-noise-toggle">
+          <input type="checkbox" id="crmShowNoise"> Show filtered noise <span id="crmNoiseCnt" style="font-size:11px">(0)</span>
+        </label>
         <input type="text" class="crm-search" id="crmSearch" placeholder="Search company / contact / email…">
         <button class="crm-btn" onclick="crmSync()">↻ Sync now</button>
         <button class="crm-btn crm-btn-dark" onclick="crmOpenNew()">+ Add contact</button>

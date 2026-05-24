@@ -37,6 +37,8 @@ module.exports = function (pool) {
     try {
       const category = String(req.query.category || '').toLowerCase();
       const search = String(req.query.q || '').trim().toLowerCase();
+      const includeNoise = String(req.query.include_noise || '') === '1';
+      const onlyNoise = String(req.query.only_noise || '') === '1';
       const validCats = ['affiliate', 'customer_service', 'other'];
 
       const where = [];
@@ -49,6 +51,14 @@ module.exports = function (pool) {
         params.push('%' + search + '%');
         const p = '$' + params.length;
         where.push(`(LOWER(email) LIKE ${p} OR LOWER(COALESCE(company, '')) LIKE ${p} OR LOWER(COALESCE(contact_person, '')) LIKE ${p})`);
+      }
+      /* Noise filter: by default hide status='lost' (which the
+         noise-classifier sets). ?include_noise=1 shows everything,
+         ?only_noise=1 shows only noise — useful for "Show noise" view. */
+      if (onlyNoise) {
+        where.push(`status = 'lost'`);
+      } else if (!includeNoise) {
+        where.push(`status != 'lost'`);
       }
 
       const whereSql = where.length ? ('WHERE ' + where.join(' AND ')) : '';
@@ -64,17 +74,38 @@ module.exports = function (pool) {
         params
       );
 
-      /* Per-category counts so sidebar badges can stay live. */
-      const counts = await q(
-        `SELECT category, COUNT(*) AS n FROM crm_contacts GROUP BY category`
+      /* Per-category counts — excludes noise (status='lost') by
+         default so tab badges reflect what the user actually sees.
+         Also returns a separate `noise` total so the "Show noise"
+         toggle can show how many are hidden. */
+      const countsExclNoise = await q(
+        `SELECT category, COUNT(*) AS n
+           FROM crm_contacts WHERE status != 'lost'
+          GROUP BY category`
       );
-      const countMap = { affiliate: 0, customer_service: 0, other: 0, total: 0 };
-      for (const r of counts.rows) {
+      const noiseTotal = await q(
+        `SELECT COUNT(*) AS n FROM crm_contacts WHERE status = 'lost'`
+      );
+      const countMap = { affiliate: 0, customer_service: 0, other: 0, total: 0, noise: 0 };
+      for (const r of countsExclNoise.rows) {
         countMap[r.category] = parseInt(r.n, 10);
         countMap.total += parseInt(r.n, 10);
       }
+      countMap.noise = parseInt(noiseTotal.rows[0]?.n || 0, 10);
 
       res.json({ ok: true, contacts: rows.rows, counts: countMap });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  /* On-demand: re-run the noise classifier across all contacts.
+     Use after deploying new noise patterns. Soft — won't demote
+     contacts the user has manually edited. */
+  router.post('/cleanup-noise', async (req, res) => {
+    try {
+      const flagged = await gmailSync.classifyNoiseExisting(pool);
+      res.json({ ok: true, flagged });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
