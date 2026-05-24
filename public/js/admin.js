@@ -43,17 +43,8 @@ function navigateTo(page) {
   if (thSub) thSub.style.display = page === 'test-history' ? 'block' : 'none';
   // Show page
   document.querySelectorAll('.page-container').forEach(function(p) { p.style.display = 'none'; });
-  /* CRM list pages (crm-all / crm-affiliates / crm-customer-service /
-     crm-other) all share #page-crm — JS sets the active category. */
-  var crmListPages = { 'crm-all':'all', 'crm-affiliates':'affiliate',
-                       'crm-customer-service':'customer_service', 'crm-other':'other' };
-  if (page in crmListPages) {
-    var c = document.getElementById('page-crm');
-    if (c) c.style.display = 'block';
-  } else {
-    var container = document.getElementById('page-' + page);
-    if (container) { container.style.display = 'block'; }
-  }
+  var container = document.getElementById('page-' + page);
+  if (container) { container.style.display = 'block'; }
   // Load page content
   loadPage(page);
   // Clear auto-refresh, then install page-specific interval.
@@ -96,11 +87,7 @@ function loadPage(page) {
     case 'live-sessions': loadLiveSessions(); break;
     case 'traffic': loadTraffic(); break;
     case 'quiz': loadQuiz(); break;
-    case 'crm-all':              loadCrm('all'); break;
-    case 'crm-affiliates':       loadCrm('affiliate'); break;
-    case 'crm-customer-service': loadCrm('customer_service'); break;
-    case 'crm-other':            loadCrm('other'); break;
-    case 'crm-templates':        loadCrmTemplates(); break;
+    case 'crm':                  loadCrm(_crmCategory || 'all'); break;
   }
 }
 
@@ -137,13 +124,39 @@ function crmEsc(s) {
 }
 
 function loadCrm(category) {
-  _crmCategory = category;
-  document.getElementById('crmTitle').textContent = crmCatLabel(category);
-  document.getElementById('crmSub').textContent =
-    category === 'all' ? 'All contacts across categories' : crmCatLabel(category);
+  _crmCategory = category || 'all';
+
+  /* Wire tab clicks once. Tabs are pure client-side — they never
+     re-navigate; just swap which pane is visible + reload data. */
+  if (!window._crmTabsWired) {
+    window._crmTabsWired = true;
+    document.querySelectorAll('#crmTabs .crm-tab').forEach(function(t) {
+      t.addEventListener('click', function() {
+        var tab = t.getAttribute('data-tab');
+        document.querySelectorAll('#crmTabs .crm-tab').forEach(function(x) { x.classList.remove('active'); });
+        t.classList.add('active');
+        if (tab === 'templates') {
+          document.getElementById('crmListPane').style.display = 'none';
+          document.getElementById('crmTplPane').style.display  = 'block';
+          loadCrmTemplates();
+        } else {
+          document.getElementById('crmListPane').style.display = 'block';
+          document.getElementById('crmTplPane').style.display  = 'none';
+          loadCrm(tab);
+        }
+      });
+    });
+  }
+
+  /* Reflect active tab visually (in case loadCrm was called programmatically). */
+  document.querySelectorAll('#crmTabs .crm-tab').forEach(function(t) {
+    t.classList.toggle('active', t.getAttribute('data-tab') === _crmCategory);
+  });
+  document.getElementById('crmListPane').style.display = 'block';
+  document.getElementById('crmTplPane').style.display  = 'none';
 
   var qs = '';
-  if (category && category !== 'all') qs = '?category=' + encodeURIComponent(category);
+  if (_crmCategory && _crmCategory !== 'all') qs = '?category=' + encodeURIComponent(_crmCategory);
   var search = (document.getElementById('crmSearch') || {}).value || '';
   if (search) qs += (qs ? '&' : '?') + 'q=' + encodeURIComponent(search);
 
@@ -155,11 +168,13 @@ function loadCrm(category) {
     }
     _crmRows = d.contacts || [];
     var c = d.counts || {};
-    document.getElementById('crmCounts').innerHTML =
-        '<span class="crm-count-pill"><strong>' + (c.total||0) + '</strong>total</span>'
-      + '<span class="crm-count-pill"><strong>' + (c.affiliate||0) + '</strong>affiliates</span>'
-      + '<span class="crm-count-pill"><strong>' + (c.customer_service||0) + '</strong>customer service</span>'
-      + '<span class="crm-count-pill"><strong>' + (c.other||0) + '</strong>other / leads</span>';
+    /* Update per-tab badge counts. Templates count is filled in by
+       loadCrmTemplates when that tab is opened (or stays 0). */
+    var setCnt = function(id, n) { var el = document.getElementById(id); if (el) el.textContent = n || 0; };
+    setCnt('crmCnt_all',              c.total || 0);
+    setCnt('crmCnt_affiliate',        c.affiliate || 0);
+    setCnt('crmCnt_customer_service', c.customer_service || 0);
+    setCnt('crmCnt_other',            c.other || 0);
 
     if (!_crmRows.length) {
       document.getElementById('crmTbody').innerHTML =
@@ -364,24 +379,27 @@ function loadCrmTemplates() {
   api('/api/crm/templates').then(function(d) {
     var grid = document.getElementById('crmTplGrid');
     if (!grid) return;
-    if (!d || !d.ok || !d.templates || !d.templates.length) {
-      grid.innerHTML = '<div class="tpl-empty">Ingen templates endnu. Når CRM\'et har læst nok sent-mails dukker recurring patterns op her automatisk.</div>';
+    var tplCount = (d && d.templates) ? d.templates.length : 0;
+    var cntEl = document.getElementById('crmCnt_templates');
+    if (cntEl) cntEl.textContent = tplCount;
+    if (!d || !d.ok || !tplCount) {
+      grid.innerHTML = '<div style="padding:60px;text-align:center;color:var(--muted)">Ingen templates endnu. Når CRM\'et har læst nok sent-mails dukker recurring patterns op her automatisk.</div>';
       return;
     }
     grid.innerHTML = d.templates.map(function(t) {
-      return '<div class="tpl-card">'
-        + '<div class="tpl-card-head">'
-        +   '<h3 class="tpl-name">' + crmEsc(t.name) + '</h3>'
-        +   '<span class="tpl-badge ' + (t.auto_detected ? 'auto' : 'manual') + '">'
+      return '<div class="crm-tpl-card">'
+        + '<div class="crm-tpl-head">'
+        +   '<h3 class="crm-tpl-name">' + crmEsc(t.name) + '</h3>'
+        +   '<span class="crm-tpl-badge ' + (t.auto_detected ? 'auto' : 'manual') + '">'
         +     (t.auto_detected ? 'auto' : 'manual') + '</span>'
         + '</div>'
-        + (t.subject ? '<div class="tpl-subject">' + crmEsc(t.subject) + '</div>' : '')
-        + '<div class="tpl-body">' + crmEsc(t.body_text || '') + '</div>'
-        + '<div class="tpl-uses">Brugt ' + (t.usage_count || 0) + ' gange</div>'
+        + (t.subject ? '<div class="crm-tpl-subject">' + crmEsc(t.subject) + '</div>' : '')
+        + '<div class="crm-tpl-body">' + crmEsc(t.body_text || '') + '</div>'
+        + '<div class="crm-tpl-uses">Brugt ' + (t.usage_count || 0) + ' gange</div>'
         + '</div>';
     }).join('');
   }).catch(function() {
-    document.getElementById('crmTplGrid').innerHTML = '<div class="tpl-empty">Kunne ikke hente templates.</div>';
+    document.getElementById('crmTplGrid').innerHTML = '<div style="padding:60px;text-align:center;color:var(--muted)">Kunne ikke hente templates.</div>';
   });
 }
 

@@ -80,26 +80,9 @@
     <span>Quiz</span>
   </a>
 
-  <div class="sidebar-section-label">CRM</div>
-  <a class="sidebar-link" data-page="crm-all">
+  <a class="sidebar-link" data-page="crm">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
-    <span>All contacts</span>
-  </a>
-  <a class="sidebar-link" data-page="crm-affiliates">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="7"/><polyline points="8.21,13.89 7,23 12,20 17,23 15.79,13.88"/></svg>
-    <span>Affiliates</span>
-  </a>
-  <a class="sidebar-link" data-page="crm-customer-service">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M18 8h1a4 4 0 010 8h-1"/><path d="M2 8h16v9a4 4 0 01-4 4H6a4 4 0 01-4-4V8z"/><line x1="6" y1="1" x2="6" y2="4"/><line x1="10" y1="1" x2="10" y2="4"/><line x1="14" y1="1" x2="14" y2="4"/></svg>
-    <span>Customer service</span>
-  </a>
-  <a class="sidebar-link" data-page="crm-other">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-    <span>Other / leads</span>
-  </a>
-  <a class="sidebar-link" data-page="crm-templates">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg>
-    <span>Mail templates</span>
+    <span>CRM</span>
   </a>
 
   <div class="sidebar-section-label">Agent Builder</div>
@@ -829,12 +812,31 @@
       #page-crm .crm-modal.open { display:flex; }
       #page-crm .crm-modal-card { background:#fff; max-width:520px; width:90%; border-radius:12px; padding:28px; position:relative; }
       #page-crm .crm-modal-card h3 { font-family:var(--serif); font-size:22px; font-weight:400; margin:0 0 16px; }
+      /* Tab nav */
+      #page-crm .crm-tabs { display:flex; gap:4px; border-bottom:1px solid var(--border); margin:20px 0 22px; }
+      #page-crm .crm-tab { padding:10px 18px; border:0; background:transparent; font-size:13.5px; font-weight:500; cursor:pointer; color:var(--muted); border-bottom:2px solid transparent; margin-bottom:-1px; font-family:inherit; transition:color 0.15s, border-color 0.15s; }
+      #page-crm .crm-tab:hover { color:var(--black); }
+      #page-crm .crm-tab.active { color:var(--black); border-bottom-color:var(--black); font-weight:600; }
+      #page-crm .crm-tab-count { margin-left:6px; padding:1px 7px; background:rgba(0,0,0,0.06); border-radius:980px; font-size:11px; color:var(--muted); }
+      #page-crm .crm-tab.active .crm-tab-count { background:rgba(0,0,0,0.10); color:var(--black); }
+      /* Templates body (shown when active tab = templates) */
+      #page-crm .crm-tpl-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:14px; }
+      #page-crm .crm-tpl-card { background:#fff; border:1px solid var(--border); border-radius:10px; padding:18px 20px; }
+      #page-crm .crm-tpl-head { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px; }
+      #page-crm .crm-tpl-name { font-family:var(--serif); font-size:18px; font-weight:400; margin:0; }
+      #page-crm .crm-tpl-badge { font-size:10px; padding:2px 8px; border-radius:980px; font-weight:600; }
+      #page-crm .crm-tpl-badge.auto   { background:rgba(196,136,60,0.12); color:#C4883C; }
+      #page-crm .crm-tpl-badge.manual { background:rgba(120,120,120,0.12); color:#666; }
+      #page-crm .crm-tpl-subject { font-size:12px; color:var(--muted); margin-bottom:8px; }
+      #page-crm .crm-tpl-body { font-size:13px; color:var(--black); line-height:1.55; max-height:140px; overflow:hidden; position:relative; }
+      #page-crm .crm-tpl-body::after { content:""; position:absolute; bottom:0; left:0; right:0; height:24px; background:linear-gradient(180deg,transparent,#fff); }
+      #page-crm .crm-tpl-uses { font-size:11px; color:var(--muted); margin-top:10px; }
     </style>
 
     <div class="crm-header">
       <div>
-        <h1 id="crmTitle">Contacts</h1>
-        <p class="crm-sub" id="crmSub">All contacts</p>
+        <h1>CRM</h1>
+        <p class="crm-sub" id="crmSub">Founder CRM — kontakter samlet på tværs af affiliates, kunder og leads.</p>
         <p class="crm-sync-status" id="crmSyncStatus">Last sync: loading…</p>
       </div>
       <div class="crm-actions">
@@ -844,21 +846,38 @@
       </div>
     </div>
 
-    <div class="crm-counts" id="crmCounts"></div>
+    <!-- Tab nav: 4 categories + templates pane. Switching is purely
+         client-side; navigateTo never re-fires for tabs (single page). -->
+    <div class="crm-tabs" id="crmTabs">
+      <button class="crm-tab active" data-tab="all">All <span class="crm-tab-count" id="crmCnt_all">0</span></button>
+      <button class="crm-tab" data-tab="affiliate">Affiliates <span class="crm-tab-count" id="crmCnt_affiliate">0</span></button>
+      <button class="crm-tab" data-tab="customer_service">Customer service <span class="crm-tab-count" id="crmCnt_customer_service">0</span></button>
+      <button class="crm-tab" data-tab="other">Other / leads <span class="crm-tab-count" id="crmCnt_other">0</span></button>
+      <button class="crm-tab" data-tab="templates">Mail templates <span class="crm-tab-count" id="crmCnt_templates">0</span></button>
+    </div>
 
-    <table>
-      <thead>
-        <tr>
-          <th>Company / contact</th>
-          <th>Email</th>
-          <th>Brief</th>
-          <th>Category</th>
-          <th>Status</th>
-          <th>Last email</th>
-        </tr>
-      </thead>
-      <tbody id="crmTbody"><tr><td colspan="6" class="crm-empty">Loading…</td></tr></tbody>
-    </table>
+    <!-- Templates pane (hidden unless active tab = templates) -->
+    <div id="crmTplPane" style="display:none">
+      <p style="color:var(--muted);font-size:13px;margin:0 0 18px"><em>Auto-detected fra recurring outbound mails. October AI clusterer dine sent-mails der ligner hinanden — kandidater til genbrug.</em></p>
+      <div class="crm-tpl-grid" id="crmTplGrid"><div style="padding:60px;text-align:center;color:var(--muted)">Loading…</div></div>
+    </div>
+
+    <!-- Contacts pane (default; hidden when active tab = templates) -->
+    <div id="crmListPane">
+      <table>
+        <thead>
+          <tr>
+            <th>Company / contact</th>
+            <th>Email</th>
+            <th>Brief</th>
+            <th>Category</th>
+            <th>Status</th>
+            <th>Last email</th>
+          </tr>
+        </thead>
+        <tbody id="crmTbody"><tr><td colspan="6" class="crm-empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
 
     <!-- Drawer for contact detail -->
     <div class="crm-drawer-bg" id="crmDrawerBg" onclick="crmCloseDrawer()"></div>
@@ -919,29 +938,8 @@
        customer-service / other) all reuse #page-crm. JS swaps the
        active category via navigateTo's case-handler. -->
 
-  <!-- Templates page -->
-  <div class="page-container" id="page-crm-templates">
-    <style>
-      #page-crm-templates { padding: 32px; }
-      #page-crm-templates h1 { font-family:var(--serif); font-size:32px; font-weight:400; margin:0 0 6px; }
-      #page-crm-templates .tpl-sub { color:var(--muted); font-size:13px; margin:0 0 24px; }
-      #page-crm-templates .tpl-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:14px; }
-      #page-crm-templates .tpl-card { background:#fff; border:1px solid var(--border); border-radius:10px; padding:18px 20px; }
-      #page-crm-templates .tpl-card-head { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px; }
-      #page-crm-templates .tpl-name { font-family:var(--serif); font-size:18px; font-weight:400; margin:0; }
-      #page-crm-templates .tpl-badge { font-size:10px; padding:2px 8px; border-radius:980px; font-weight:600; }
-      #page-crm-templates .tpl-badge.auto   { background:rgba(196,136,60,0.12); color:#C4883C; }
-      #page-crm-templates .tpl-badge.manual { background:rgba(120,120,120,0.12); color:#666; }
-      #page-crm-templates .tpl-subject { font-size:12px; color:var(--muted); margin-bottom:8px; }
-      #page-crm-templates .tpl-body { font-size:13px; color:var(--black); line-height:1.55; max-height:140px; overflow:hidden; position:relative; }
-      #page-crm-templates .tpl-body::after { content:""; position:absolute; bottom:0; left:0; right:0; height:24px; background:linear-gradient(180deg,transparent,#fff); }
-      #page-crm-templates .tpl-uses { font-size:11px; color:var(--muted); margin-top:10px; }
-      #page-crm-templates .tpl-empty { padding:60px; text-align:center; color:var(--muted); }
-    </style>
-    <h1>Mail templates</h1>
-    <p class="tpl-sub">Auto-detected from recurring outbound emails. <em>October AI læser jeres sent-folder og clusterer mails der ligner hinanden — kandidater til genbrug.</em></p>
-    <div class="tpl-grid" id="crmTplGrid"><div class="tpl-empty">Loading…</div></div>
-  </div>
+  <!-- Mail templates are now a tab inside #page-crm; no separate
+       page-container is needed. -->
 
   <div class="page-container" id="page-default-system"></div>
   <div class="page-container" id="page-sandbox"></div>
