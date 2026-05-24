@@ -207,18 +207,21 @@ async function findOrCreateContact(pool, email, brief, source) {
    status='lost'. Never demotes manually-edited contacts (a row whose
    updated_at is much newer than created_at is treated as touched). */
 async function classifyNoiseExisting(pool) {
+  /* "Human-touched" = anything the founder has explicitly edited:
+     custom company, owner_notes, llm_categorised, OR a category other
+     than the default 'other'. Those rows we never auto-demote.
+     Everything else gets re-checked against isNoiseSender(). */
   const r = await pool.query(
-    `SELECT id, email, status, updated_at, created_at
+    `SELECT id, email
        FROM crm_contacts
-      WHERE status IN ('new','active','dormant')`
+      WHERE status IN ('new','active','dormant')
+        AND company IS NULL
+        AND owner_notes IS NULL
+        AND llm_categorised = false
+        AND category = 'other'`
   );
   let flagged = 0;
   for (const row of r.rows) {
-    /* Heuristic: if updated_at is more than 30s after created_at, the
-       user has interacted with this row — don't auto-demote. */
-    const touched = row.updated_at && row.created_at &&
-      (new Date(row.updated_at).getTime() - new Date(row.created_at).getTime() > 30000);
-    if (touched) continue;
     if (isNoiseSender(row.email)) {
       await pool.query(
         `UPDATE crm_contacts SET status='lost', updated_at=NOW() WHERE id=$1`,
