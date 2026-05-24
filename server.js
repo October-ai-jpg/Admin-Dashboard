@@ -90,6 +90,42 @@ app.use('/api/monitoring', requireAuth, monitoringRoutes(pool));
 const trafficRoutes = require('./routes/traffic');
 app.use('/api/traffic', requireAuth, trafficRoutes(pool));
 
+/* 2026-05-24 — Internal CRM. Reads + writes crm_contacts / crm_emails /
+   crm_templates (migration v67). Daily Gmail sync runs server-side via
+   node-cron so contact freshness updates whether or not the founder's
+   laptop is awake. */
+const crmRoutes = require('./routes/crm');
+app.use('/api/crm', requireAuth, crmRoutes(pool));
+
+const gmailSync = require('./services/gmailSync');
+if (pool && process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
+  /* Run once at boot + every 24h. node-cron not strictly necessary
+     for daily — setInterval is enough and survives no-op-restarts. */
+  const SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
+  const FIRST_DELAY_MS = 60 * 1000; /* let DB pool warm up + migrations finish */
+
+  setTimeout(async function bootSync() {
+    try {
+      console.log('[crm] running initial Gmail sync…');
+      await gmailSync.runSync(pool);
+      await gmailSync.refreshTemplateClusters(pool);
+    } catch (e) {
+      console.warn('[crm] initial sync skipped:', e.message);
+    }
+  }, FIRST_DELAY_MS);
+
+  setInterval(async function dailySync() {
+    try {
+      await gmailSync.runSync(pool);
+      await gmailSync.refreshTemplateClusters(pool);
+    } catch (e) {
+      console.warn('[crm] daily sync failed:', e.message);
+    }
+  }, SYNC_INTERVAL_MS);
+} else {
+  console.log('[crm] Gmail sync disabled (missing pool or GMAIL_USER/GMAIL_APP_PASSWORD)');
+}
+
 /* ══════════════════════════════════════════
    PROMPTS & CONFIGURATIONS API
    ══════════════════════════════════════════ */

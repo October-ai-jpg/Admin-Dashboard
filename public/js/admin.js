@@ -43,8 +43,17 @@ function navigateTo(page) {
   if (thSub) thSub.style.display = page === 'test-history' ? 'block' : 'none';
   // Show page
   document.querySelectorAll('.page-container').forEach(function(p) { p.style.display = 'none'; });
-  var container = document.getElementById('page-' + page);
-  if (container) { container.style.display = 'block'; }
+  /* CRM list pages (crm-all / crm-affiliates / crm-customer-service /
+     crm-other) all share #page-crm — JS sets the active category. */
+  var crmListPages = { 'crm-all':'all', 'crm-affiliates':'affiliate',
+                       'crm-customer-service':'customer_service', 'crm-other':'other' };
+  if (page in crmListPages) {
+    var c = document.getElementById('page-crm');
+    if (c) c.style.display = 'block';
+  } else {
+    var container = document.getElementById('page-' + page);
+    if (container) { container.style.display = 'block'; }
+  }
   // Load page content
   loadPage(page);
   // Clear auto-refresh, then install page-specific interval.
@@ -87,7 +96,293 @@ function loadPage(page) {
     case 'live-sessions': loadLiveSessions(); break;
     case 'traffic': loadTraffic(); break;
     case 'quiz': loadQuiz(); break;
+    case 'crm-all':              loadCrm('all'); break;
+    case 'crm-affiliates':       loadCrm('affiliate'); break;
+    case 'crm-customer-service': loadCrm('customer_service'); break;
+    case 'crm-other':            loadCrm('other'); break;
+    case 'crm-templates':        loadCrmTemplates(); break;
   }
+}
+
+/* ════════════════════════════════════════════════════════
+   CRM (2026-05-24)
+   ════════════════════════════════════════════════════════
+   Reads /api/crm/* on Admin-Dashboard. Same x-admin-token auth
+   as monitoring. Four list views share #page-crm + the same
+   loadCrm() function; category drives header + table filter.
+   Drawer reads full contact + 50 recent emails.            */
+
+var _crmCategory = 'all';
+var _crmRows = [];
+var _crmCurrentId = null;
+
+function crmCatLabel(c) {
+  return { all: 'All contacts', affiliate: 'Affiliates',
+           customer_service: 'Customer service', other: 'Other / leads' }[c] || c;
+}
+
+function crmFmtDaysSince(days) {
+  if (days == null || days < 0) return '<span class="crm-stale">Never</span>';
+  if (days === 0) return '<span class="crm-fresh">Today</span>';
+  if (days === 1) return '<span class="crm-fresh">Yesterday</span>';
+  var cls = days > 30 ? 'crm-stale' : (days > 14 ? '' : 'crm-fresh');
+  return '<span class="' + cls + '">' + days + 'd ago</span>';
+}
+
+function crmEsc(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, function(c) {
+    return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
+  });
+}
+
+function loadCrm(category) {
+  _crmCategory = category;
+  document.getElementById('crmTitle').textContent = crmCatLabel(category);
+  document.getElementById('crmSub').textContent =
+    category === 'all' ? 'All contacts across categories' : crmCatLabel(category);
+
+  var qs = '';
+  if (category && category !== 'all') qs = '?category=' + encodeURIComponent(category);
+  var search = (document.getElementById('crmSearch') || {}).value || '';
+  if (search) qs += (qs ? '&' : '?') + 'q=' + encodeURIComponent(search);
+
+  api('/api/crm/contacts' + qs).then(function(d) {
+    if (!d || !d.ok) {
+      document.getElementById('crmTbody').innerHTML =
+        '<tr><td colspan="6" class="crm-empty">Could not load: ' + ((d&&d.error)||'unknown') + '</td></tr>';
+      return;
+    }
+    _crmRows = d.contacts || [];
+    var c = d.counts || {};
+    document.getElementById('crmCounts').innerHTML =
+        '<span class="crm-count-pill"><strong>' + (c.total||0) + '</strong>total</span>'
+      + '<span class="crm-count-pill"><strong>' + (c.affiliate||0) + '</strong>affiliates</span>'
+      + '<span class="crm-count-pill"><strong>' + (c.customer_service||0) + '</strong>customer service</span>'
+      + '<span class="crm-count-pill"><strong>' + (c.other||0) + '</strong>other / leads</span>';
+
+    if (!_crmRows.length) {
+      document.getElementById('crmTbody').innerHTML =
+        '<tr><td colspan="6" class="crm-empty">No contacts in this view yet. Run a sync or add manually.</td></tr>';
+      return;
+    }
+    var html = _crmRows.map(function(r) {
+      var name = crmEsc(r.company || r.contact_person || r.email);
+      var subline = r.company && r.contact_person
+        ? '<div style="font-size:11px;color:var(--muted)">' + crmEsc(r.contact_person) + '</div>' : '';
+      var lastEmail = r.last_email_at
+        ? crmFmtDaysSince(r.days_since_last_email) + (r.last_email_direction
+            ? ' <span style="font-size:10px;color:var(--muted)">· ' + r.last_email_direction + '</span>' : '')
+        : '<span class="crm-stale">No emails yet</span>';
+      return '<tr class="crm-row" data-id="' + crmEsc(r.id) + '">'
+        + '<td><strong>' + name + '</strong>' + subline + '</td>'
+        + '<td style="font-family:monospace;font-size:12px">' + crmEsc(r.email) + '</td>'
+        + '<td style="color:var(--muted);font-size:12px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + crmEsc(r.brief || '') + '</td>'
+        + '<td><span class="crm-cat-badge crm-cat-' + r.category + '">' + crmEsc(r.category.replace('_',' ')) + '</span></td>'
+        + '<td><span style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em">' + crmEsc(r.status || 'new') + '</span></td>'
+        + '<td>' + lastEmail + '</td>'
+        + '</tr>';
+    }).join('');
+    var tb = document.getElementById('crmTbody');
+    tb.innerHTML = html;
+    tb.querySelectorAll('tr.crm-row').forEach(function(tr) {
+      tr.addEventListener('click', function() { crmOpenDrawer(tr.getAttribute('data-id')); });
+    });
+  }).catch(function(e) {
+    document.getElementById('crmTbody').innerHTML =
+      '<tr><td colspan="6" class="crm-empty">Error: ' + crmEsc(e.message) + '</td></tr>';
+  });
+
+  api('/api/crm/sync/status').then(function(d) {
+    var s = d && d.lastRun;
+    var el = document.getElementById('crmSyncStatus');
+    if (!el) return;
+    if (!s) { el.textContent = 'No syncs yet. Click ↻ Sync now to populate.'; return; }
+    var when = s.finished_at || s.started_at;
+    var ago = when ? new Date(when).toLocaleString() : '(unknown)';
+    el.textContent = 'Last sync: ' + ago + ' · ' + s.status
+      + ' · ' + (s.emails_imported || 0) + ' emails imported'
+      + (s.error_message ? ' · error: ' + s.error_message : '');
+  }).catch(function(){});
+
+  /* Wire search input once. */
+  var s = document.getElementById('crmSearch');
+  if (s && !s._wired) {
+    s._wired = true;
+    var debounce; s.addEventListener('input', function() {
+      clearTimeout(debounce); debounce = setTimeout(function() { loadCrm(_crmCategory); }, 250);
+    });
+  }
+}
+
+function crmSync() {
+  var btn = event && event.target;
+  if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
+  fetch('/api/crm/sync', {
+    method: 'POST', headers: { 'x-admin-token': ADMIN_TOKEN, 'Content-Type': 'application/json' }
+  }).then(function(r) { return r.json(); }).then(function() {
+    /* Poll status every 5s for 90s. */
+    var pollAttempts = 0;
+    var poll = setInterval(function() {
+      pollAttempts++;
+      api('/api/crm/sync/status').then(function(d) {
+        var s = d && d.lastRun;
+        if (s && s.status !== 'running') {
+          clearInterval(poll);
+          if (btn) { btn.disabled = false; btn.textContent = '↻ Sync now'; }
+          loadCrm(_crmCategory);
+        }
+      });
+      if (pollAttempts > 18) {
+        clearInterval(poll);
+        if (btn) { btn.disabled = false; btn.textContent = '↻ Sync now'; }
+        loadCrm(_crmCategory);
+      }
+    }, 5000);
+  }).catch(function() {
+    if (btn) { btn.disabled = false; btn.textContent = '↻ Sync now'; }
+  });
+}
+
+function crmOpenDrawer(id) {
+  _crmCurrentId = id;
+  document.getElementById('crmDrawerBg').classList.add('open');
+  document.getElementById('crmDrawer').classList.add('open');
+  document.getElementById('crmDrawerBody').innerHTML = 'Loading…';
+  api('/api/crm/contacts/' + encodeURIComponent(id)).then(function(d) {
+    if (!d || !d.ok) {
+      document.getElementById('crmDrawerBody').innerHTML = 'Error: ' + crmEsc((d&&d.error)||'unknown');
+      return;
+    }
+    var c = d.contact;
+    document.getElementById('crmDrawerName').textContent = c.company || c.contact_person || c.email;
+    document.getElementById('crmDrawerEmail').textContent = c.email;
+
+    var body = ''
+      + '<label>Company</label><input id="ed_company" value="' + crmEsc(c.company||'') + '">'
+      + '<div class="crm-row2">'
+      +   '<div><label>Contact person</label><input id="ed_person" value="' + crmEsc(c.contact_person||'') + '"></div>'
+      +   '<div><label>Phone</label><input id="ed_phone" value="' + crmEsc(c.phone||'') + '"></div>'
+      + '</div>'
+      + '<label>Brief</label><textarea id="ed_brief">' + crmEsc(c.brief||'') + '</textarea>'
+      + '<label>Notes (internal)</label><textarea id="ed_notes">' + crmEsc(c.owner_notes||'') + '</textarea>'
+      + '<div class="crm-row2">'
+      +   '<div><label>Category</label><select id="ed_cat">'
+      +     ['affiliate','customer_service','other'].map(function(k){
+            return '<option value="' + k + '"' + (c.category===k?' selected':'') + '>' + k.replace('_',' ') + '</option>';
+          }).join('')
+      +   '</select></div>'
+      +   '<div><label>Status</label><select id="ed_status">'
+      +     ['new','active','dormant','converted','lost'].map(function(k){
+            return '<option value="' + k + '"' + ((c.status||'new')===k?' selected':'') + '>' + k + '</option>';
+          }).join('')
+      +   '</select></div>'
+      + '</div>'
+      + '<div style="display:flex;gap:8px;margin-top:18px">'
+      +   '<button class="crm-btn crm-btn-dark" onclick="crmSaveDrawer()">Save</button>'
+      +   '<button class="crm-btn" onclick="crmCloseDrawer()">Cancel</button>'
+      + '</div>'
+      + '<div class="crm-emails"><label>Recent emails (' + (d.emails||[]).length + ')</label>';
+    if (!d.emails || !d.emails.length) {
+      body += '<div style="color:var(--muted);font-size:12px;padding:14px 0">No emails imported yet for this contact. Click ↻ Sync now to fetch from Gmail.</div>';
+    } else {
+      body += d.emails.map(function(e) {
+        var when = e.sent_at ? new Date(e.sent_at).toLocaleString() : '';
+        return '<div class="crm-email-item">'
+          + '<div class="crm-email-meta">'
+          +   '<span class="crm-email-dir ' + e.direction + '">' + e.direction + '</span>'
+          +   '<span>' + when + '</span>'
+          + '</div>'
+          + '<div class="crm-email-subject">' + crmEsc(e.subject || '(no subject)') + '</div>'
+          + '<div class="crm-email-preview">' + crmEsc((e.body_preview || '').slice(0, 280)) + '…</div>'
+          + '</div>';
+      }).join('');
+    }
+    body += '</div>';
+
+    document.getElementById('crmDrawerBody').innerHTML = body;
+  });
+}
+
+function crmCloseDrawer() {
+  document.getElementById('crmDrawerBg').classList.remove('open');
+  document.getElementById('crmDrawer').classList.remove('open');
+  _crmCurrentId = null;
+}
+
+function crmSaveDrawer() {
+  if (!_crmCurrentId) return;
+  var payload = {
+    company:        document.getElementById('ed_company').value.trim() || null,
+    contact_person: document.getElementById('ed_person').value.trim() || null,
+    phone:          document.getElementById('ed_phone').value.trim() || null,
+    brief:          document.getElementById('ed_brief').value.trim() || null,
+    owner_notes:    document.getElementById('ed_notes').value.trim() || null,
+    category:       document.getElementById('ed_cat').value,
+    status:         document.getElementById('ed_status').value
+  };
+  fetch('/api/crm/contacts/' + encodeURIComponent(_crmCurrentId), {
+    method: 'PATCH',
+    headers: { 'x-admin-token': ADMIN_TOKEN, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).then(function(r){ return r.json(); }).then(function(d) {
+    if (d && d.ok) { crmCloseDrawer(); loadCrm(_crmCategory); }
+    else alert('Save failed: ' + ((d && d.error) || 'unknown'));
+  });
+}
+
+function crmOpenNew() { document.getElementById('crmNewModal').classList.add('open'); }
+function crmCloseNew() {
+  document.getElementById('crmNewModal').classList.remove('open');
+  ['nc_company','nc_person','nc_email','nc_phone','nc_brief'].forEach(function(id) {
+    var el = document.getElementById(id); if (el) el.value = '';
+  });
+}
+function crmSaveNew() {
+  var email = document.getElementById('nc_email').value.trim();
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { alert('Valid email required'); return; }
+  var payload = {
+    company:        document.getElementById('nc_company').value.trim() || null,
+    contact_person: document.getElementById('nc_person').value.trim() || null,
+    email:          email,
+    phone:          document.getElementById('nc_phone').value.trim() || null,
+    brief:          document.getElementById('nc_brief').value.trim() || null,
+    category:       document.getElementById('nc_category').value,
+    status:         document.getElementById('nc_status').value
+  };
+  fetch('/api/crm/contacts', {
+    method: 'POST',
+    headers: { 'x-admin-token': ADMIN_TOKEN, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).then(function(r){ return r.json(); }).then(function(d) {
+    if (d && d.ok) { crmCloseNew(); loadCrm(_crmCategory); }
+    else alert('Save failed: ' + ((d && d.error) || 'unknown'));
+  });
+}
+
+function loadCrmTemplates() {
+  api('/api/crm/templates').then(function(d) {
+    var grid = document.getElementById('crmTplGrid');
+    if (!grid) return;
+    if (!d || !d.ok || !d.templates || !d.templates.length) {
+      grid.innerHTML = '<div class="tpl-empty">Ingen templates endnu. Når CRM\'et har læst nok sent-mails dukker recurring patterns op her automatisk.</div>';
+      return;
+    }
+    grid.innerHTML = d.templates.map(function(t) {
+      return '<div class="tpl-card">'
+        + '<div class="tpl-card-head">'
+        +   '<h3 class="tpl-name">' + crmEsc(t.name) + '</h3>'
+        +   '<span class="tpl-badge ' + (t.auto_detected ? 'auto' : 'manual') + '">'
+        +     (t.auto_detected ? 'auto' : 'manual') + '</span>'
+        + '</div>'
+        + (t.subject ? '<div class="tpl-subject">' + crmEsc(t.subject) + '</div>' : '')
+        + '<div class="tpl-body">' + crmEsc(t.body_text || '') + '</div>'
+        + '<div class="tpl-uses">Brugt ' + (t.usage_count || 0) + ' gange</div>'
+        + '</div>';
+    }).join('');
+  }).catch(function() {
+    document.getElementById('crmTplGrid').innerHTML = '<div class="tpl-empty">Kunne ikke hente templates.</div>';
+  });
 }
 
 /* ── Traffic analytics (2026-05-18) ──
