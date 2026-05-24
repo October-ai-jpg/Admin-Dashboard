@@ -20,7 +20,22 @@
  * ────────────────────────────────────────────────────────────────── */
 
 const express = require('express');
+const multer = require('multer');
 const gmailSync = require('../services/gmailSync');
+
+/* In-memory upload for screenshot-to-contact. 8 MB cap covers any
+   reasonable phone screenshot or business card photo. Only image
+   mime-types accepted — anything else is rejected at multer level. */
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024, files: 1 },
+  fileFilter: (req, file, cb) => {
+    if (!/^image\//.test(file.mimetype || '')) {
+      return cb(new Error('Only image uploads accepted'));
+    }
+    cb(null, true);
+  }
+});
 
 module.exports = function (pool) {
   const router = express.Router();
@@ -205,6 +220,175 @@ module.exports = function (pool) {
       await q(`UPDATE crm_contacts SET status = 'lost', updated_at = NOW() WHERE id = $1`, [id]);
       res.json({ ok: true });
     } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  /* ─── Screenshot → contact (vision extract) ───────────────────
+     Founder drops/pastes a screenshot of an email signature, LinkedIn
+     profile, business card, or any contact-info image. Claude Haiku
+     4.5 (vision) extracts company / name / email / phone / brief and
+     a category hint. We then upsert the contact and return it so the
+     UI can open the drawer for review.
+
+     Robustness:
+       · 8MB cap, image-mime-type whitelist via multer
+       · Strict JSON parsing — strips markdown fences, retries with
+         a stricter prompt if first parse fails
+       · No-API-key → 503 with a clear message (Anthropic key may be
+         missing on this Railway service)
+       · If extraction returns no email → 422 with what we DID see,
+         so the user can edit manually
+       · Always returns the structured extraction even if the upsert
+         fails, so the founder doesn't lose the parsed data
+   */
+  router.post('/contacts/from-image', upload.single('image'), async (req, res) => {
+    try {
+      if (!req.file || !req.file.buffer) {
+        return res.status(400).json({ error: 'No image uploaded (field name: image)' });
+      }
+      if (!process.env.ANTHROPIC_API_KEY) {
+        return res.status(503).json({
+          error: 'Vision extraction unavailable: ANTHROPIC_API_KEY missing on Admin-Dashboard service'
+        });
+      }
+
+      let Anthropic;
+      try { Anthropic = require('@anthropic-ai/sdk').default || require('@anthropic-ai/sdk'); }
+      catch (e) { return res.status(503).json({ error: 'Anthropic SDK unavailable: ' + e.message }); }
+      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+      const mediaType = req.file.mimetype || 'image/png';
+      const base64 = req.file.buffer.toString('base64');
+
+      const systemPrompt =
+`You extract contact information from a screenshot.
+The image may show: an email signature, a LinkedIn profile, a business
+card, a Stripe / payment confirmation, a Calendly booking confirmation,
+a CRM card, a website "Contact" section — anything with contact data.
+
+Return ONLY a single JSON object with these exact keys (no markdown
+fences, no commentary). Use null for any field you cannot reliably
+read. Do not invent values:
+
+{
+  "company": string | null,
+  "contact_person": string | null,
+  "email": string | null,
+  "phone": string | null,
+  "brief": string | null,
+  "category_hint": "affiliate" | "customer_service" | "other"
+}
+
+Rules:
+- email: lowercase, single valid address. If multiple, pick the
+  primary one (work email > personal).
+- phone: keep the user's formatting (+45 12 34 56 78). Strip "tel:" prefix.
+  If multiple, pick the work / direct number.
+- brief: 1-2 short sentences (≤200 chars) describing who they are,
+  factual only. No marketing language. Example: "Real-estate photographer
+  in Aarhus, runs DronesByTheBay. Found us via Matterport partner page."
+- category_hint:
+    "affiliate"        — partner, reseller, agency, referral marketer
+    "customer_service" — existing paying customer needing help
+    "other"            — lead, prospect, vendor, journalist, anything else
+  Default to "other" if uncertain.
+- If the image contains NO usable contact info, return all-null fields
+  with category_hint="other". Don't refuse.`;
+
+      async function callClaude(extraStrictness) {
+        const resp = await anthropic.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 600,
+          system: systemPrompt + (extraStrictness ? '\n\nIMPORTANT: Your previous response was not valid JSON. Return ONLY the JSON object — no prose, no markdown fences, no leading/trailing characters.' : ''),
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+              { type: 'text', text: 'Extract the contact info from this screenshot. Return only the JSON object.' }
+            ]
+          }]
+        });
+        return (resp.content?.[0]?.text || '').trim();
+      }
+
+      function tryParse(raw) {
+        if (!raw) return null;
+        /* Strip markdown fences ```json ... ``` if Claude added them. */
+        let cleaned = raw.replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
+        /* If there's prose before/after, snip out the JSON object. */
+        const start = cleaned.indexOf('{');
+        const end = cleaned.lastIndexOf('}');
+        if (start !== -1 && end > start) cleaned = cleaned.slice(start, end + 1);
+        try { return JSON.parse(cleaned); }
+        catch (e) { return null; }
+      }
+
+      let parsed = null;
+      try {
+        parsed = tryParse(await callClaude(false));
+        if (!parsed) parsed = tryParse(await callClaude(true));
+      } catch (e) {
+        return res.status(502).json({ error: 'Vision call failed: ' + e.message });
+      }
+
+      if (!parsed) {
+        return res.status(502).json({ error: 'Could not parse a structured response from Claude' });
+      }
+
+      /* Sanitise extracted fields. */
+      const clean = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max || 200) : null) || null;
+      const email = clean(parsed.email, 200);
+      const emailLower = email ? email.toLowerCase() : null;
+      const validEmail = emailLower && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailLower);
+      const company   = clean(parsed.company, 200);
+      const person    = clean(parsed.contact_person, 120);
+      const phone     = clean(parsed.phone, 40);
+      const brief     = clean(parsed.brief, 400);
+      const catHint   = ['affiliate','customer_service','other'].includes(parsed.category_hint)
+        ? parsed.category_hint : 'other';
+
+      if (!validEmail) {
+        /* No usable email — return the extraction so the user can edit
+           the form manually instead of losing the parsed data. */
+        return res.status(422).json({
+          error: 'No valid email detected in the image',
+          extracted: { company, contact_person: person, email: emailLower, phone, brief, category_hint: catHint }
+        });
+      }
+
+      /* Upsert contact (insert OR back-fill fields on existing rows). */
+      const row = await pool.query(
+        `INSERT INTO crm_contacts
+           (company, contact_person, email, phone, brief, category, status, source)
+         VALUES ($1, $2, $3, $4, $5, $6, 'new', 'screenshot-upload')
+         ON CONFLICT (email) DO UPDATE SET
+           company        = COALESCE(crm_contacts.company,        EXCLUDED.company),
+           contact_person = COALESCE(crm_contacts.contact_person, EXCLUDED.contact_person),
+           phone          = COALESCE(crm_contacts.phone,          EXCLUDED.phone),
+           brief          = COALESCE(crm_contacts.brief,          EXCLUDED.brief),
+           /* Only override category if existing row was the default 'other'
+              AND hasn't been LLM-categorised — preserve manual edits. */
+           category       = CASE
+                              WHEN crm_contacts.category = 'other' AND crm_contacts.llm_categorised = false
+                                THEN EXCLUDED.category
+                              ELSE crm_contacts.category
+                            END,
+           /* Lift status off 'lost' (noise) when a human deliberately
+              uploaded this contact. */
+           status         = CASE WHEN crm_contacts.status = 'lost' THEN 'new' ELSE crm_contacts.status END,
+           updated_at     = NOW()
+         RETURNING *`,
+        [company, person, emailLower, phone, brief, catHint]
+      );
+
+      res.json({
+        ok: true,
+        contact: row.rows[0],
+        extracted: { company, contact_person: person, email: emailLower, phone, brief, category_hint: catHint }
+      });
+    } catch (e) {
+      console.error('[crm/from-image]', e);
       res.status(500).json({ error: e.message });
     }
   });

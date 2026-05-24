@@ -433,6 +433,203 @@ function crmSaveNew() {
   });
 }
 
+/* ═══ Screenshot → contact extraction ═══════════════════════════
+   Founder drops/pastes/clicks an image. Image uploads to
+   /api/crm/contacts/from-image; Claude Haiku 4.5 (vision) extracts
+   fields. UI shows preview + editable form so user can correct
+   anything before final save. */
+
+var _crmShotState = { contactId: null, busy: false };
+
+function crmOpenScreenshot() {
+  document.getElementById('crmShotModal').classList.add('open');
+  crmShotReset();
+  setTimeout(function() {
+    var d = document.getElementById('crmShotDrop'); if (d) d.focus();
+  }, 50);
+}
+function crmCloseShot() {
+  document.getElementById('crmShotModal').classList.remove('open');
+  crmShotReset();
+}
+function crmShotReset() {
+  _crmShotState = { contactId: null, busy: false };
+  var prev = document.getElementById('crmShotPreview'); if (prev) prev.classList.remove('active');
+  var st = document.getElementById('crmShotStatus'); if (st) { st.textContent = ''; st.className = 'crm-shot-status'; }
+  var btn = document.getElementById('crmShotSaveBtn'); if (btn) btn.disabled = true;
+  ['sx_company','sx_person','sx_phone','sx_email','sx_brief'].forEach(function(id){
+    var el = document.getElementById(id); if (el) el.value = '';
+  });
+  var img = document.getElementById('crmShotImg'); if (img) img.src = '';
+  var f = document.getElementById('crmShotFile'); if (f) f.value = '';
+}
+function crmShotSetStatus(msg, kind) {
+  var st = document.getElementById('crmShotStatus');
+  if (!st) return;
+  st.textContent = msg || '';
+  st.className = 'crm-shot-status' + (kind ? ' ' + kind : '');
+}
+
+function crmShotProcessFile(file) {
+  if (!file || _crmShotState.busy) return;
+  if (!/^image\//.test(file.type || '')) {
+    crmShotSetStatus('That doesn\'t look like an image.', 'error');
+    return;
+  }
+  if (file.size > 8 * 1024 * 1024) {
+    crmShotSetStatus('Image is too large (max 8 MB).', 'error');
+    return;
+  }
+
+  /* Local preview straight away for instant feedback. */
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    document.getElementById('crmShotImg').src = e.target.result;
+    document.getElementById('crmShotPreview').classList.add('active');
+  };
+  reader.readAsDataURL(file);
+
+  _crmShotState.busy = true;
+  crmShotSetStatus('Reading screenshot with Claude vision…');
+
+  var fd = new FormData();
+  fd.append('image', file, file.name || 'screenshot.png');
+
+  fetch('/api/crm/contacts/from-image', {
+    method: 'POST',
+    headers: { 'x-admin-token': ADMIN_TOKEN },
+    body: fd
+  })
+    .then(function(r) { return r.json().then(function(j){ return { status: r.status, j: j }; }); })
+    .then(function(res) {
+      _crmShotState.busy = false;
+      var j = res.j || {};
+      var ex = j.extracted || j.contact || {};
+      if (ex) {
+        document.getElementById('sx_company').value = ex.company || '';
+        document.getElementById('sx_person').value  = ex.contact_person || '';
+        document.getElementById('sx_email').value   = ex.email || '';
+        document.getElementById('sx_phone').value   = ex.phone || '';
+        document.getElementById('sx_brief').value   = ex.brief || '';
+        var catEl = document.getElementById('sx_category');
+        if (catEl) catEl.value = ex.category_hint || ex.category || 'other';
+      }
+      if (res.status === 200 && j.ok && j.contact) {
+        _crmShotState.contactId = j.contact.id;
+        crmShotSetStatus('Extracted — review the fields below and click Save to confirm.');
+        document.getElementById('crmShotSaveBtn').disabled = false;
+      } else if (res.status === 422) {
+        crmShotSetStatus(j.error + ' — fill in the missing email below.', 'error');
+        document.getElementById('crmShotSaveBtn').disabled = false;
+        document.getElementById('sx_email').focus();
+      } else {
+        crmShotSetStatus(j.error || ('Request failed (HTTP ' + res.status + ')'), 'error');
+      }
+    })
+    .catch(function(e) {
+      _crmShotState.busy = false;
+      crmShotSetStatus('Upload failed: ' + e.message, 'error');
+    });
+}
+
+function crmShotSave() {
+  var email = document.getElementById('sx_email').value.trim();
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    crmShotSetStatus('Valid email required before saving.', 'error');
+    document.getElementById('sx_email').focus();
+    return;
+  }
+  var payload = {
+    company:        document.getElementById('sx_company').value.trim() || null,
+    contact_person: document.getElementById('sx_person').value.trim() || null,
+    email:          email,
+    phone:          document.getElementById('sx_phone').value.trim() || null,
+    brief:          document.getElementById('sx_brief').value.trim() || null,
+    category:       document.getElementById('sx_category').value || 'other',
+    status:         document.getElementById('sx_status').value || 'new'
+  };
+
+  var url, method;
+  if (_crmShotState.contactId) {
+    url = '/api/crm/contacts/' + encodeURIComponent(_crmShotState.contactId);
+    method = 'PATCH';
+  } else {
+    url = '/api/crm/contacts';
+    method = 'POST';
+  }
+
+  document.getElementById('crmShotSaveBtn').disabled = true;
+  crmShotSetStatus('Saving…');
+
+  fetch(url, {
+    method: method,
+    headers: { 'x-admin-token': ADMIN_TOKEN, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d && d.ok) {
+        var newId = d.contact && d.contact.id;
+        crmCloseShot();
+        loadCrm(_crmCategory);
+        if (newId) setTimeout(function(){ crmOpenDrawer(newId); }, 250);
+      } else {
+        document.getElementById('crmShotSaveBtn').disabled = false;
+        crmShotSetStatus((d && d.error) || 'Save failed', 'error');
+      }
+    })
+    .catch(function(e) {
+      document.getElementById('crmShotSaveBtn').disabled = false;
+      crmShotSetStatus('Save failed: ' + e.message, 'error');
+    });
+}
+
+/* Wire drop/click/paste once. Paste only fires while modal is open. */
+(function wireScreenshotUploads() {
+  if (window._crmShotWired) return;
+  window._crmShotWired = true;
+
+  function ready(fn) {
+    if (document.readyState !== 'loading') fn();
+    else document.addEventListener('DOMContentLoaded', fn);
+  }
+  ready(function() {
+    var drop = document.getElementById('crmShotDrop');
+    var fileInput = document.getElementById('crmShotFile');
+    if (!drop || !fileInput) return;
+
+    drop.addEventListener('click', function() { fileInput.click(); });
+    drop.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+    });
+    fileInput.addEventListener('change', function() {
+      if (fileInput.files && fileInput.files[0]) crmShotProcessFile(fileInput.files[0]);
+    });
+    ['dragenter','dragover'].forEach(function(ev) {
+      drop.addEventListener(ev, function(e) { e.preventDefault(); e.stopPropagation(); drop.classList.add('is-dragover'); });
+    });
+    ['dragleave','drop'].forEach(function(ev) {
+      drop.addEventListener(ev, function(e) { e.preventDefault(); e.stopPropagation(); drop.classList.remove('is-dragover'); });
+    });
+    drop.addEventListener('drop', function(e) {
+      var dt = e.dataTransfer;
+      if (dt && dt.files && dt.files[0]) crmShotProcessFile(dt.files[0]);
+    });
+
+    document.addEventListener('paste', function(e) {
+      var modal = document.getElementById('crmShotModal');
+      if (!modal || !modal.classList.contains('open')) return;
+      var items = (e.clipboardData || window.clipboardData || {}).items || [];
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].type && items[i].type.indexOf('image/') === 0) {
+          var file = items[i].getAsFile();
+          if (file) { crmShotProcessFile(file); e.preventDefault(); return; }
+        }
+      }
+    });
+  });
+})();
+
 function loadCrmTemplates() {
   api('/api/crm/templates').then(function(d) {
     var grid = document.getElementById('crmTplGrid');

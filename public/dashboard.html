@@ -860,6 +860,7 @@
         </label>
         <input type="text" class="crm-search" id="crmSearch" placeholder="Search company / contact / email…">
         <button class="crm-btn" onclick="crmSync()">↻ Sync now</button>
+        <button class="crm-btn" onclick="crmOpenScreenshot()" title="Drop or paste a screenshot of a contact — system extracts the info">📷 From screenshot</button>
         <button class="crm-btn crm-btn-dark" onclick="crmOpenNew()">+ Add contact</button>
       </div>
     </div>
@@ -947,6 +948,77 @@
         <div style="display:flex;gap:8px;margin-top:20px;justify-content:flex-end">
           <button class="crm-btn" onclick="crmCloseNew()">Cancel</button>
           <button class="crm-btn crm-btn-dark" onclick="crmSaveNew()">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Screenshot → contact extraction modal -->
+    <style>
+      #page-crm #crmShotModal .crm-modal-card { max-width:640px; }
+      #page-crm .crm-shot-drop {
+        border:2px dashed var(--border); border-radius:14px;
+        padding:48px 24px; text-align:center;
+        background:#fafafa; cursor:pointer;
+        transition:border-color 0.15s, background 0.15s;
+        user-select:none;
+      }
+      #page-crm .crm-shot-drop:hover { border-color:var(--black); background:#f3f3f3; }
+      #page-crm .crm-shot-drop.is-dragover { border-color:#C4883C; background:rgba(196,136,60,0.06); }
+      #page-crm .crm-shot-drop strong { display:block; font-family:var(--serif); font-size:20px; font-weight:400; color:var(--black); margin-bottom:6px; }
+      #page-crm .crm-shot-drop span { display:block; font-size:13px; color:var(--muted); line-height:1.5; }
+      #page-crm .crm-shot-drop .crm-shot-icon { font-size:36px; margin-bottom:10px; display:block; }
+      #page-crm .crm-shot-status { margin-top:16px; font-size:13px; color:var(--muted); text-align:center; min-height:1.5em; }
+      #page-crm .crm-shot-status.error { color:#B91C1C; }
+      #page-crm .crm-shot-preview { display:none; margin-top:16px; }
+      #page-crm .crm-shot-preview.active { display:block; }
+      #page-crm .crm-shot-preview img { max-width:100%; max-height:200px; border-radius:8px; display:block; margin:0 auto 14px; border:1px solid var(--border); }
+      #page-crm .crm-shot-fields { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+      #page-crm .crm-shot-fields .full { grid-column:1 / -1; }
+      #page-crm .crm-shot-fields label { font-size:11px; letter-spacing:0.05em; text-transform:uppercase; color:var(--muted); font-weight:600; display:block; margin-bottom:4px; }
+      #page-crm .crm-shot-fields input,
+      #page-crm .crm-shot-fields textarea,
+      #page-crm .crm-shot-fields select { width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:7px; font-size:13px; font-family:inherit; background:#fff; }
+      #page-crm .crm-shot-fields textarea { resize:vertical; min-height:64px; }
+      #page-crm .crm-shot-actions { display:flex; gap:8px; margin-top:18px; justify-content:flex-end; }
+    </style>
+    <div class="crm-modal" id="crmShotModal">
+      <div class="crm-modal-card">
+        <h3>Add contact from screenshot</h3>
+        <div class="crm-shot-drop" id="crmShotDrop" tabindex="0">
+          <span class="crm-shot-icon">📷</span>
+          <strong>Drop, paste, or click to upload</strong>
+          <span>Screenshot of email signature, LinkedIn, business card, Calendly booking… Anything with contact info. Cmd+V works while this dialog is open.</span>
+        </div>
+        <input type="file" id="crmShotFile" accept="image/*" style="display:none">
+        <div class="crm-shot-status" id="crmShotStatus"></div>
+        <div class="crm-shot-preview" id="crmShotPreview">
+          <img id="crmShotImg" alt="Uploaded screenshot">
+          <div class="crm-shot-fields">
+            <div class="full"><label>Company</label><input type="text" id="sx_company"></div>
+            <div><label>Contact person</label><input type="text" id="sx_person"></div>
+            <div><label>Phone</label><input type="text" id="sx_phone"></div>
+            <div class="full"><label>Email *</label><input type="email" id="sx_email" required></div>
+            <div class="full"><label>Brief</label><textarea id="sx_brief"></textarea></div>
+            <div><label>Category</label>
+              <select id="sx_category">
+                <option value="other">Other / lead</option>
+                <option value="affiliate">Affiliate</option>
+                <option value="customer_service">Customer service</option>
+              </select>
+            </div>
+            <div><label>Status</label>
+              <select id="sx_status">
+                <option value="new">New</option>
+                <option value="active">Active</option>
+                <option value="dormant">Dormant</option>
+                <option value="converted">Converted</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="crm-shot-actions">
+          <button class="crm-btn" onclick="crmCloseShot()">Cancel</button>
+          <button class="crm-btn crm-btn-dark" id="crmShotSaveBtn" onclick="crmShotSave()" disabled>Save contact</button>
         </div>
       </div>
     </div>
