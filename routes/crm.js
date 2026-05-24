@@ -191,20 +191,26 @@ module.exports = function (pool) {
       const set = [];
       const params = [];
       const allowed = ['company','contact_person','phone','brief','status','category','owner_notes'];
+      let categoryEdited = false;
       for (const k of allowed) {
         if (k in fields) {
           if (k === 'category' && !['affiliate','customer_service','other'].includes(fields[k])) continue;
           if (k === 'status'   && !['new','active','dormant','lost','converted'].includes(fields[k])) continue;
           params.push(fields[k]);
           set.push(k + ' = $' + params.length);
+          if (k === 'category') categoryEdited = true;
         }
       }
       if (!set.length) return res.status(400).json({ error: 'No valid fields' });
+      /* Manual category edit also flips llm_categorised=true so the
+         next sync's LLM-recategorise loop leaves this row alone. */
+      if (categoryEdited) set.push('llm_categorised = true');
+      set.push('updated_at = NOW()');
       params.push(id);
       const row = await q(
-        `UPDATE crm_contacts SET ${set.join(', ')}, updated_at = NOW(),
-                                  llm_categorised = CASE WHEN $${params.length - (set.length - 1)} IS NOT NULL THEN true ELSE llm_categorised END
-          WHERE id = $${params.length} RETURNING *`,
+        `UPDATE crm_contacts SET ${set.join(', ')}
+          WHERE id = $${params.length}
+          RETURNING *`,
         params
       );
       if (!row.rows.length) return res.status(404).json({ error: 'Not found' });
