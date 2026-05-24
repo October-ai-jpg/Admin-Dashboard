@@ -65,7 +65,10 @@ module.exports = function (pool) {
       const rows = await q(
         `SELECT id, company, contact_person, email, phone, brief, status, category,
                 last_email_at, last_email_subject, last_email_direction,
-                EXTRACT(DAY FROM NOW() - last_email_at)::int AS days_since_last_email,
+                /* Total calendar days, not interval-day-component. Cast
+                   to date so months/years are flattened to a real day count. */
+                CASE WHEN last_email_at IS NOT NULL
+                     THEN (NOW()::date - last_email_at::date) END AS days_since_last_email,
                 created_at, updated_at
            FROM crm_contacts
            ${whereSql}
@@ -258,6 +261,21 @@ module.exports = function (pool) {
         console.log('[crm/sync] done:', result);
       } catch (e) {
         console.error('[crm/sync] failed:', e.message);
+      }
+    });
+  });
+
+  router.post('/sync/full', async (req, res) => {
+    /* One-time full mailbox backfill — fetches everything (no date floor).
+       Fires and returns; client polls /sync/status. */
+    res.json({ ok: true, started: true });
+    setImmediate(async () => {
+      try {
+        const result = await gmailSync.runFullBackfill(pool);
+        await gmailSync.refreshTemplateClusters(pool);
+        console.log('[crm/sync/full] done:', result);
+      } catch (e) {
+        console.error('[crm/sync/full] failed:', e.message);
       }
     });
   });

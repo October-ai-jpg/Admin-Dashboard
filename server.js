@@ -99,9 +99,11 @@ app.use('/api/crm', requireAuth, crmRoutes(pool));
 
 const gmailSync = require('./services/gmailSync');
 if (pool && process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
-  /* Run once at boot + every 24h. node-cron not strictly necessary
-     for daily — setInterval is enough and survives no-op-restarts. */
-  const SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
+  /* Run 60s after boot + every 6h. Incremental syncs are cheap
+     (only fetch last few days minus overlap) so we run more often.
+     First-ever sync still fetches the ENTIRE mailbox — may take
+     several minutes; subsequent runs only see the delta. */
+  const SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
   const FIRST_DELAY_MS = 60 * 1000; /* let DB pool warm up + migrations finish */
 
   setTimeout(async function bootSync() {

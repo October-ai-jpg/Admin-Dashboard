@@ -31,7 +31,16 @@ const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 const crypto = require('crypto');
 
-const LOOKBACK_DAYS = parseInt(process.env.CRM_LOOKBACK_DAYS || '180', 10); // ~6 months
+/* Sync strategy:
+   · First-ever sync (crm_emails table empty): fetch ENTIRE mailbox.
+     CRM_INITIAL_LOOKBACK_DAYS=0 (default) means no date floor.
+   · Incremental syncs (table non-empty): fetch from
+     max(sent_at) - OVERLAP_DAYS so late deliveries / clock skew are
+     covered. OVERLAP_DAYS=7 by default.
+   This avoids re-downloading the full mailbox every 24h, but still
+   guarantees nothing is missed because IMAP is dedup'd by Message-ID. */
+const INITIAL_LOOKBACK_DAYS = parseInt(process.env.CRM_INITIAL_LOOKBACK_DAYS || '0', 10);
+const INCREMENTAL_OVERLAP_DAYS = parseInt(process.env.CRM_INCREMENTAL_OVERLAP_DAYS || '7', 10);
 const BODY_MAX_KB = 6;
 const MY_DOMAIN = 'october-ai.com';
 
@@ -179,27 +188,52 @@ function isNoiseSender(addr) {
 
 /* ── DB upserts ────────────────────────────────────────────────── */
 
-async function findOrCreateContact(pool, email, brief, source) {
+async function findOrCreateContact(pool, email, brief, source, displayName) {
   if (!email) return null;
   const lower = email.toLowerCase();
   const existing = await pool.query(
-    'SELECT id, category, llm_categorised FROM crm_contacts WHERE LOWER(email) = $1 LIMIT 1',
+    'SELECT id, category, llm_categorised, contact_person FROM crm_contacts WHERE LOWER(email) = $1 LIMIT 1',
     [lower]
   );
-  if (existing.rows.length) return existing.rows[0];
+  if (existing.rows.length) {
+    /* Back-fill contact_person if we have a display name and the
+       row's name is empty — common for contacts seeded before the
+       parser started extracting names. */
+    if (displayName && !existing.rows[0].contact_person) {
+      await pool.query(
+        `UPDATE crm_contacts SET contact_person = $1, updated_at = NOW()
+          WHERE id = $2 AND contact_person IS NULL`,
+        [displayName, existing.rows[0].id]
+      );
+    }
+    return existing.rows[0];
+  }
 
   /* New contact: pre-mark noise senders as status='lost' so they're
      hidden from the default list. User can still view them via the
      "Show noise" toggle and re-classify if needed. */
   const initialStatus = isNoiseSender(lower) ? 'lost' : 'new';
   const inserted = await pool.query(
-    `INSERT INTO crm_contacts (email, brief, source, category, status)
-     VALUES ($1, $2, $3, 'other', $4)
-     ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
+    `INSERT INTO crm_contacts (email, contact_person, brief, source, category, status)
+     VALUES ($1, $2, $3, $4, 'other', $5)
+     ON CONFLICT (email) DO UPDATE SET
+       contact_person = COALESCE(crm_contacts.contact_person, EXCLUDED.contact_person)
      RETURNING id, category, llm_categorised`,
-    [lower, brief || null, source || 'gmail-inbound', initialStatus]
+    [lower, displayName || null, brief || null, source || 'gmail-inbound', initialStatus]
   );
   return inserted.rows[0];
+}
+
+/* Extract a clean display name from a mailparser address-field. */
+function extractName(rawAddrField) {
+  if (!rawAddrField || !Array.isArray(rawAddrField.value) || !rawAddrField.value.length) return null;
+  let name = (rawAddrField.value[0].name || '').trim();
+  if (!name) return null;
+  /* Strip quotes & wrapping whitespace. Drop names that look like the
+     email itself (e.g. when the From: header had no real name). */
+  name = name.replace(/^[\s"']+|[\s"']+$/g, '');
+  if (!name || name.toLowerCase() === String(rawAddrField.value[0].address || '').toLowerCase()) return null;
+  return name.slice(0, 120);
 }
 
 /* One-time / on-demand cleanup of existing crm_contacts rows:
@@ -275,12 +309,19 @@ async function updateContactLastEmail(pool, contactId, parsed, direction) {
 async function fetchFolder(client, folderName, sinceDate) {
   const messages = [];
   await client.mailboxOpen(folderName, { readOnly: true });
+  /* `since: null` means fetch ALL messages in the folder. Pass the
+     IMAP fetch criteria as 'all' in that case. */
+  const criteria = sinceDate ? { since: sinceDate } : { all: true };
   for await (const msg of client.fetch(
-    { since: sinceDate },
-    { source: true, envelope: true, uid: true }
+    criteria,
+    { source: true, envelope: true, uid: true, internalDate: true }
   )) {
     try {
       const parsed = await simpleParser(msg.source);
+      /* mailparser populates parsed.date from the Date: header — but
+         that can be missing/lying on automated mail. Fall back to the
+         IMAP server's internalDate (always trustworthy). */
+      if (!parsed.date && msg.internalDate) parsed.date = msg.internalDate;
       messages.push(parsed);
     } catch (e) {
       console.warn('[gmailSync] parse error in', folderName, ':', e.message);
@@ -427,7 +468,16 @@ async function seedFromExistingTables(pool) {
 
 /* ── main entrypoint ─────────────────────────────────────────── */
 
-async function runSync(pool) {
+/* Force a full historic backfill — ignores the incremental cursor
+   and fetches the ENTIRE mailbox. Useful when LOOKBACK_DAYS was
+   previously capped and we now want everything. Safe to re-run —
+   dedup is on Message-ID. */
+async function runFullBackfill(pool) {
+  return runSync(pool, { forceFull: true });
+}
+
+async function runSync(pool, options) {
+  options = options || {};
   if (!pool) throw new Error('No DB pool');
   if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
     throw new Error('Gmail credentials missing (GMAIL_USER, GMAIL_APP_PASSWORD)');
@@ -448,7 +498,27 @@ async function runSync(pool) {
   try {
     await seedFromExistingTables(pool);
 
-    const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 3600 * 1000);
+    /* Decide the date cursor:
+       · First-ever sync (no emails imported yet) — fetch EVERYTHING
+         unless INITIAL_LOOKBACK_DAYS env var sets a floor.
+       · Subsequent syncs — fetch from max(sent_at) - OVERLAP_DAYS so
+         we never re-download more than a small window each day. */
+    const existingCount = await pool.query(`SELECT COUNT(*) AS n FROM crm_emails`);
+    const isFirstSync = parseInt(existingCount.rows[0]?.n || 0, 10) === 0;
+    const forceFull = !!options.forceFull;
+    let since = null;
+    if (isFirstSync || forceFull) {
+      if (INITIAL_LOOKBACK_DAYS > 0) {
+        since = new Date(Date.now() - INITIAL_LOOKBACK_DAYS * 24 * 3600 * 1000);
+      }
+      console.log('[gmailSync] ' + (forceFull ? 'FORCED FULL backfill' : 'FIRST sync') + ' — fetching ' + (since ? 'since ' + since.toISOString() : 'ENTIRE mailbox'));
+    } else {
+      const cursor = await pool.query(`SELECT MAX(sent_at) AS max FROM crm_emails`);
+      const max = cursor.rows[0]?.max ? new Date(cursor.rows[0].max) : null;
+      if (max) since = new Date(max.getTime() - INCREMENTAL_OVERLAP_DAYS * 24 * 3600 * 1000);
+      console.log('[gmailSync] incremental sync — since ' + (since ? since.toISOString() : '(none)'));
+    }
+
     const client = new ImapFlow({
       host: 'imap.gmail.com',
       port: 993,
@@ -463,7 +533,8 @@ async function runSync(pool) {
     for (const msg of inbound) {
       const fromAddr = extractAddr(msg.from);
       if (!fromAddr || isOutboundFrom(fromAddr)) continue; /* skip self-sent in inbox */
-      const contact = await findOrCreateContact(pool, fromAddr, null, 'gmail-inbound');
+      const displayName = extractName(msg.from);
+      const contact = await findOrCreateContact(pool, fromAddr, null, 'gmail-inbound', displayName);
       const wasNew = await insertEmail(pool, msg, 'inbound', contact?.id);
       if (wasNew) imported++;
       if (contact?.id) await updateContactLastEmail(pool, contact.id, msg, 'inbound');
@@ -480,7 +551,8 @@ async function runSync(pool) {
     for (const msg of outbound) {
       const toAddr = extractAddr(msg.to);
       if (!toAddr || isOutboundFrom(toAddr)) continue;
-      const contact = await findOrCreateContact(pool, toAddr, null, 'gmail-outbound');
+      const displayName = extractName(msg.to);
+      const contact = await findOrCreateContact(pool, toAddr, null, 'gmail-outbound', displayName);
       const wasNew = await insertEmail(pool, msg, 'outbound', contact?.id);
       if (wasNew) imported++;
       if (contact?.id) await updateContactLastEmail(pool, contact.id, msg, 'outbound');
@@ -559,10 +631,12 @@ async function refreshTemplateClusters(pool) {
 
 module.exports = {
   runSync,
+  runFullBackfill,
   seedFromExistingTables,
   categoriseExistingContacts,
   categoriseWithLLM,
   classifyNoiseExisting,
   isNoiseSender,
+  extractName,
   refreshTemplateClusters
 };
