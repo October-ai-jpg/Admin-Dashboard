@@ -621,6 +621,7 @@
       <div class="tf-card"><div class="tf-card-label">Pageviews</div><div class="tf-card-value" id="tfPageviews">—</div></div>
       <div class="tf-card"><div class="tf-card-label">Avg engaged</div><div class="tf-card-value" id="tfEngaged">—</div></div>
       <div class="tf-card"><div class="tf-card-label">Bounce rate</div><div class="tf-card-value" id="tfBounce">—</div></div>
+      <div class="tf-card" style="border-left:3px solid #c87f3a"><div class="tf-card-label">AI search sessions</div><div class="tf-card-value" id="tfAiSessions">—</div><div style="font-size:11px;color:var(--muted);margin-top:4px" id="tfAiBreakdown">—</div></div>
     </div>
 
     <div class="tf-chart-wrap">
@@ -644,7 +645,20 @@
 
     <div class="tf-cols" style="margin-top:24px">
       <div>
-        <h2>Traffic sources</h2>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:8px">
+          <h2 style="margin:0">Traffic sources</h2>
+          <div style="display:flex;align-items:center;gap:8px">
+            <label style="font-size:12px;color:var(--muted)">Filter</label>
+            <select id="tfMediumFilter" style="padding:4px 8px;font-size:13px">
+              <option value="">All sources</option>
+              <option value="ai-search">AI search only</option>
+              <option value="organic">Organic search</option>
+              <option value="referral">Referral</option>
+              <option value="social">Social</option>
+              <option value="(none)">Direct</option>
+            </select>
+          </div>
+        </div>
         <table>
           <thead><tr><th>Source</th><th>Medium</th><th class="tf-num">Sessions</th><th class="tf-num">Visitors</th></tr></thead>
           <tbody id="tfSources"><tr><td colspan="4" style="text-align:center;color:var(--muted);padding:24px">—</td></tr></tbody>

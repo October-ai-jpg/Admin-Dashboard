@@ -771,11 +771,18 @@ function tfFetch(path) {
   }).then(function(r){ return r.json().then(function(j){ if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status)); return j; }); });
 }
 
+var _tfMediumFilter = '';
+
 function loadTraffic() {
   var sel = document.getElementById('tfRange');
   if (sel) {
     sel.value = String(_tfRange);
     sel.onchange = function() { _tfRange = parseInt(this.value, 10) || 30; tfRefresh(); };
+  }
+  var med = document.getElementById('tfMediumFilter');
+  if (med) {
+    med.value = _tfMediumFilter;
+    med.onchange = function() { _tfMediumFilter = this.value; tfRefreshSources(); };
   }
   tfRefresh();
 }
@@ -844,13 +851,51 @@ function tfRefresh() {
     }).join('');
   }).catch(function(e){ console.error('[traffic/pages]', e); });
 
-  // Sources
+  tfRefreshSources();
+  tfRefreshAiKpi();
+}
+
+/* AI-search KPI card — total sessions from medium='ai-search' in the
+   period, plus a one-line breakdown of the top 3 engines. Reads the
+   unfiltered /sources endpoint and aggregates client-side so we don't
+   have to keep the dropdown filter in sync. */
+function tfRefreshAiKpi() {
+  var d = _tfRange;
   tfFetch('/sources?days=' + d).then(function(s){
+    var ai = (s.sources || []).filter(function(r){ return r.medium === 'ai-search'; });
+    var total = ai.reduce(function(sum, r){ return sum + (r.sessions || 0); }, 0);
+    var el = document.getElementById('tfAiSessions');
+    if (el) el.textContent = tfFmtInt(total);
+    var bk = document.getElementById('tfAiBreakdown');
+    if (bk) {
+      if (!ai.length) bk.textContent = 'No AI referrals yet';
+      else {
+        var top = ai.slice().sort(function(a,b){ return (b.sessions||0)-(a.sessions||0); }).slice(0, 3);
+        bk.textContent = top.map(function(r){ return r.source + ' ' + tfFmtInt(r.sessions); }).join(' · ');
+      }
+    }
+  }).catch(function(e){ console.error('[traffic/ai-kpi]', e); });
+}
+
+/* Refresh just the sources table — used both on full refresh and when
+   the medium filter changes. Highlights AI-search rows with a small
+   accent badge so they stand out. */
+function tfRefreshSources() {
+  var d = _tfRange;
+  var qs = '/sources?days=' + d;
+  if (_tfMediumFilter) qs += '&medium=' + encodeURIComponent(_tfMediumFilter);
+  tfFetch(qs).then(function(s){
     var tbody = document.getElementById('tfSources');
     if (!s.sources.length) { tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:24px">—</td></tr>'; return; }
     tbody.innerHTML = s.sources.slice(0, 20).map(function(r){
+      var isAi = r.medium === 'ai-search';
+      var sourceCell = '<td>'
+        + (isAi ? '<span style="display:inline-block;padding:2px 6px;margin-right:6px;background:#c87f3a;color:#fff;border-radius:3px;font-size:10px;letter-spacing:0.04em;text-transform:uppercase;font-weight:600">AI</span>' : '')
+        + tfEscape(r.source)
+        + (r.campaign ? ' <span style="color:var(--muted);font-size:11px">/ ' + tfEscape(r.campaign) + '</span>' : '')
+        + '</td>';
       return '<tr>'
-        + '<td>' + tfEscape(r.source) + (r.campaign ? ' <span style="color:var(--muted);font-size:11px">/ ' + tfEscape(r.campaign) + '</span>' : '') + '</td>'
+        + sourceCell
         + '<td>' + tfEscape(r.medium) + '</td>'
         + '<td class="tf-num">' + tfFmtInt(r.sessions) + '</td>'
         + '<td class="tf-num">' + tfFmtInt(r.visitors) + '</td>'

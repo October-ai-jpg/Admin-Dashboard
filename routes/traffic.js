@@ -203,9 +203,14 @@ module.exports = function(pool) {
     }
   });
 
-  /* SOURCES — UTM / referrer breakdown for the period. */
+  /* SOURCES — UTM / referrer breakdown for the period.
+     Optional ?medium= filter restricts to one medium (e.g. ai-search,
+     organic, referral, (none) for direct). Whitelisted to prevent
+     arbitrary input from reaching the SQL. */
   router.get('/sources', async (req, res) => {
     const days = rangeDays(req);
+    const ALLOWED_MEDIUMS = ['ai-search', 'organic', 'referral', 'social', 'paid', 'email', '(none)'];
+    const medium = ALLOWED_MEDIUMS.includes(String(req.query.medium || '')) ? String(req.query.medium) : '';
     try {
       const past = await q(
         `SELECT source, medium, campaign,
@@ -213,11 +218,12 @@ module.exports = function(pool) {
                 SUM(visitors)::int AS visitors
            FROM traffic_daily_sources
           WHERE day >= CURRENT_DATE - ($1::int - 1) AND day < CURRENT_DATE
+            ${medium ? 'AND medium = $2' : ''}
           GROUP BY source, medium, campaign
           ORDER BY sessions DESC LIMIT 50`,
-        [days]
+        medium ? [days, medium] : [days]
       );
-      res.json({ days, sources: past.rows });
+      res.json({ days, medium: medium || null, sources: past.rows });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
