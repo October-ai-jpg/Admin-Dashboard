@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "October AI — LinkedIn Outreach Helper",
+  "version": "1.0.0",
+  "description": "Pulls outreach drafts from the October AI dashboard and fills them into LinkedIn's compose box. You review and click Send yourself.",
+  "permissions": ["storage", "clipboardWrite"],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "https://admin-dashboard-production-e40e.up.railway.app/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "October AI — LinkedIn Outreach",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.linkedin.com/*"],
+      "js": ["content.js"],
+      "css": ["panel.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -88,6 +88,7 @@ function loadPage(page) {
     case 'traffic': loadTraffic(); break;
     case 'quiz': loadQuiz(); break;
     case 'crm':                  loadCrm(_crmCategory || 'all'); break;
+    case 'linkedin':             loadLinkedin(); break;
   }
 }
 
@@ -6804,6 +6805,503 @@ function fmtDateTime(iso) {
   if (!iso) return '—';
   var d = new Date(iso);
   return d.toLocaleString('da-DK', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
+}
+
+/* ════════════════════════════════════════════════════════
+   LINKEDIN OUTREACH (2026-05-29)
+   ════════════════════════════════════════════════════════
+   Reads /api/linkedin/* on Admin-Dashboard (shared main Postgres,
+   linkedin_* tables from eb-tour-agent migration v71). Import a 10k+
+   lead list → auto-filled template drafts → review/approve → the
+   Chrome extension FILLS LinkedIn's compose box (founder clicks Send).
+   Six tabs share #page-linkedin: Leads · Today's Batch · Import ·
+   Replies · Templates · Settings.                                   */
+
+var _liTab = 'leads';
+var _liPage = 1;
+var _liShell = false;
+var _liFilters = { search: '', status: '', channel: '', tier: '' };
+var _liReplyLead = null;
+
+function liEsc(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, function(c) {
+    return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
+  });
+}
+
+function loadLinkedin() {
+  var page = document.getElementById('page-linkedin');
+  if (!page) return;
+  if (!_liShell) {
+    page.innerHTML = liShellHtml();
+    _liShell = true;
+    liWireTabs();
+  }
+  liLoadStats();
+  liSwitchTab(_liTab, true);
+}
+
+function liShellHtml() {
+  return ''
+  + '<style>'
+  + '#page-linkedin { padding:32px; }'
+  + '#page-linkedin h1 { font-family:var(--serif); font-size:32px; font-weight:400; margin:0; }'
+  + '#page-linkedin .li-sub { color:var(--muted); font-size:13px; margin:6px 0 0; }'
+  + '#page-linkedin .li-stats { display:flex; gap:12px; flex-wrap:wrap; margin:18px 0 4px; }'
+  + '#page-linkedin .li-stat { background:var(--white); border:1px solid var(--border); border-radius:10px; padding:14px 18px; min-width:120px; }'
+  + '#page-linkedin .li-stat .n { font-size:24px; font-weight:600; font-family:var(--serif); }'
+  + '#page-linkedin .li-stat .l { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.05em; margin-top:2px; }'
+  + '#page-linkedin .li-tabs { display:flex; gap:4px; border-bottom:1px solid var(--border); margin:20px 0 22px; flex-wrap:wrap; }'
+  + '#page-linkedin .li-tab { padding:10px 16px; border:0; background:transparent; font-size:13.5px; font-weight:500; cursor:pointer; color:var(--muted); border-bottom:2px solid transparent; margin-bottom:-1px; font-family:inherit; }'
+  + '#page-linkedin .li-tab:hover { color:var(--black); }'
+  + '#page-linkedin .li-tab.active { color:var(--black); border-bottom-color:var(--black); font-weight:600; }'
+  + '#page-linkedin table { width:100%; border-collapse:collapse; background:var(--white); border:1px solid var(--border); border-radius:10px; overflow:hidden; font-size:13px; }'
+  + '#page-linkedin th { text-align:left; padding:10px 13px; background:#fafafa; color:var(--muted); font-weight:600; font-size:11px; letter-spacing:0.05em; text-transform:uppercase; border-bottom:1px solid var(--border); }'
+  + '#page-linkedin td { padding:10px 13px; border-bottom:1px solid #f5f5f5; vertical-align:top; }'
+  + '#page-linkedin .li-badge { display:inline-block; padding:2px 9px; border-radius:980px; font-size:11px; font-weight:600; }'
+  + '#page-linkedin .li-ch-inmail { background:rgba(59,130,246,0.12); color:#3b82f6; }'
+  + '#page-linkedin .li-ch-note   { background:rgba(120,120,120,0.14); color:#666; }'
+  + '#page-linkedin .li-st-draft_ready { background:rgba(120,120,120,0.12); color:#666; }'
+  + '#page-linkedin .li-st-approved   { background:rgba(196,136,60,0.14); color:#C4883C; }'
+  + '#page-linkedin .li-st-sent       { background:rgba(59,130,246,0.12); color:#3b82f6; }'
+  + '#page-linkedin .li-st-replied    { background:rgba(34,139,87,0.14); color:#228B57; }'
+  + '#page-linkedin .li-st-skipped    { background:rgba(185,28,28,0.10); color:#B91C1C; }'
+  + '#page-linkedin .li-btn { padding:5px 11px; border:1px solid var(--border); border-radius:7px; background:#fff; font-size:12px; cursor:pointer; font-family:inherit; margin-right:5px; }'
+  + '#page-linkedin .li-btn:hover { border-color:var(--black); }'
+  + '#page-linkedin .li-btn-dark { background:var(--black); color:#fff; border-color:var(--black); }'
+  + '#page-linkedin .li-input, #page-linkedin select.li-input { padding:7px 11px; border:1px solid var(--border); border-radius:7px; font-size:13px; font-family:inherit; background:#fff; }'
+  + '#page-linkedin textarea.li-draft { width:100%; min-height:130px; padding:10px 12px; border:1px solid var(--border); border-radius:8px; font-size:13px; font-family:inherit; line-height:1.5; resize:vertical; }'
+  + '#page-linkedin .li-toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:14px; }'
+  + '#page-linkedin .li-card { background:var(--white); border:1px solid var(--border); border-radius:10px; padding:20px 22px; margin-bottom:16px; }'
+  + '#page-linkedin .li-card h3 { font-family:var(--serif); font-weight:400; font-size:20px; margin:0 0 4px; }'
+  + '#page-linkedin .li-muted { color:var(--muted); font-size:12px; }'
+  + '#page-linkedin .li-empty { padding:50px; text-align:center; color:var(--muted); font-size:14px; }'
+  + '#page-linkedin .li-pager { display:flex; gap:10px; align-items:center; margin-top:14px; font-size:13px; color:var(--muted); }'
+  + '#page-linkedin .li-draftwrap { display:none; padding-top:8px; }'
+  + '#page-linkedin .li-draftwrap.open { display:block; }'
+  + '#page-linkedin .li-note-banner { background:rgba(196,136,60,0.08); border:1px solid rgba(196,136,60,0.25); border-radius:8px; padding:10px 14px; font-size:12px; color:#8a5a1a; margin-bottom:16px; }'
+  + '</style>'
+  + '<div><h1>LinkedIn Outreach</h1>'
+  + '<p class="li-sub">Import a lead list → review template drafts → fill &amp; send with the Chrome extension. Human-in-the-loop: nothing is sent automatically.</p></div>'
+  + '<div class="li-stats" id="liStats"></div>'
+  + '<div class="li-note-banner">⚠️ You send every message yourself. The extension only fills LinkedIn\u2019s message box — you review and click Send. Caps mirror LinkedIn\u2019s limits to protect your account.</div>'
+  + '<div class="li-tabs">'
+  + ['leads:Leads','batch:Today\u2019s Batch','import:Import','replies:Replies','templates:Templates','settings:Settings']
+      .map(function(t){ var p=t.split(':'); return '<button class="li-tab" data-litab="'+p[0]+'">'+p[1]+'</button>'; }).join('')
+  + '</div>'
+  + '<div id="liBody"></div>';
+}
+
+function liWireTabs() {
+  document.querySelectorAll('#page-linkedin .li-tab').forEach(function(b) {
+    b.addEventListener('click', function() { liSwitchTab(this.getAttribute('data-litab')); });
+  });
+}
+
+function liSwitchTab(tab, force) {
+  _liTab = tab;
+  document.querySelectorAll('#page-linkedin .li-tab').forEach(function(b) {
+    b.classList.toggle('active', b.getAttribute('data-litab') === tab);
+  });
+  if (tab === 'leads')      liLoadLeads();
+  else if (tab === 'batch') liLoadBatch();
+  else if (tab === 'import') liRenderImport();
+  else if (tab === 'replies') liLoadReplies();
+  else if (tab === 'templates') liLoadTemplates();
+  else if (tab === 'settings') liLoadSettings();
+}
+
+function liLoadStats() {
+  api('/api/linkedin/stats').then(function(d) {
+    var el = document.getElementById('liStats');
+    if (!el) return;
+    if (!d || !d.ok) { el.innerHTML = '<div class="li-muted">' + liEsc((d && d.error) || 'Failed to load stats') + '</div>'; return; }
+    var c = d.counts || {};
+    function stat(n, l) { return '<div class="li-stat"><div class="n">' + (n != null ? n : 0) + '</div><div class="l">' + l + '</div></div>'; }
+    var eta = d.eta_weeks != null ? ('~' + d.eta_weeks + ' wk') : '—';
+    el.innerHTML =
+        stat(c.total, 'Total leads')
+      + stat(d.backlog, 'Backlog')
+      + stat(c.sent, 'Sent')
+      + stat(c.replied, 'Replied')
+      + stat(c.skipped, 'Skipped')
+      + stat(eta, 'Drain ETA');
+  }).catch(function(){});
+}
+
+/* ─── Leads tab ──────────────────────────────────────────────── */
+function liLoadLeads() {
+  var body = document.getElementById('liBody');
+  if (!body) return;
+  body.innerHTML =
+      '<div class="li-toolbar">'
+    + '<input class="li-input" id="liSearch" placeholder="Search name or company" style="width:240px" value="' + liEsc(_liFilters.search) + '">'
+    + '<select class="li-input" id="liFStatus"><option value="">All status</option>'
+        + ['draft_ready','approved','sent','replied','skipped'].map(function(s){return '<option value="'+s+'"'+(_liFilters.status===s?' selected':'')+'>'+s+'</option>';}).join('') + '</select>'
+    + '<select class="li-input" id="liFChannel"><option value="">All channels</option><option value="inmail"'+(_liFilters.channel==='inmail'?' selected':'')+'>InMail</option><option value="note"'+(_liFilters.channel==='note'?' selected':'')+'>Note</option></select>'
+    + '<select class="li-input" id="liFTier"><option value="">All tiers</option><option value="top"'+(_liFilters.tier==='top'?' selected':'')+'>Top</option><option value="standard"'+(_liFilters.tier==='standard'?' selected':'')+'>Standard</option></select>'
+    + '</div>'
+    + '<div id="liLeadsTable"><div class="li-empty">Loading…</div></div>';
+
+  var deb;
+  document.getElementById('liSearch').addEventListener('input', function() {
+    var v = this.value; clearTimeout(deb); deb = setTimeout(function(){ _liFilters.search = v; _liPage = 1; liFetchLeads(); }, 250);
+  });
+  ['liFStatus','liFChannel','liFTier'].forEach(function(id) {
+    document.getElementById(id).addEventListener('change', function() {
+      _liFilters.status = document.getElementById('liFStatus').value;
+      _liFilters.channel = document.getElementById('liFChannel').value;
+      _liFilters.tier = document.getElementById('liFTier').value;
+      _liPage = 1; liFetchLeads();
+    });
+  });
+  liFetchLeads();
+}
+
+function liFetchLeads() {
+  var qs = '?page=' + _liPage + '&limit=50'
+    + (_liFilters.search ? '&search=' + encodeURIComponent(_liFilters.search) : '')
+    + (_liFilters.status ? '&status=' + _liFilters.status : '')
+    + (_liFilters.channel ? '&channel=' + _liFilters.channel : '')
+    + (_liFilters.tier ? '&tier=' + _liFilters.tier : '');
+  api('/api/linkedin/leads' + qs).then(function(d) {
+    var t = document.getElementById('liLeadsTable');
+    if (!t) return;
+    if (!d || !d.ok) { t.innerHTML = '<div class="li-empty">' + liEsc((d && d.error) || 'Failed to load') + '</div>'; return; }
+    if (!d.leads.length) { t.innerHTML = '<div class="li-empty">No leads. Import a list in the Import tab.</div>'; return; }
+    var rows = d.leads.map(liLeadRow).join('');
+    t.innerHTML = '<table><thead><tr><th>Name</th><th>Company</th><th>Channel</th><th>Tier</th><th>Status</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table>'
+      + '<div class="li-pager"><button class="li-btn" ' + (_liPage<=1?'disabled':'') + ' onclick="liPage(-1)">‹ Prev</button>'
+      + '<span>Page ' + d.page + ' / ' + d.totalPages + ' · ' + d.total + ' leads</span>'
+      + '<button class="li-btn" ' + (_liPage>=d.totalPages?'disabled':'') + ' onclick="liPage(1)">Next ›</button></div>';
+  }).catch(function(e){ var t=document.getElementById('liLeadsTable'); if(t) t.innerHTML='<div class="li-empty">'+liEsc(e.message)+'</div>'; });
+}
+
+function liLeadRow(l) {
+  var draftId = 'lidraft-' + l.id;
+  return '<tr>'
+    + '<td>' + liEsc(l.name) + '</td>'
+    + '<td>' + liEsc(l.company || '—') + '</td>'
+    + '<td><span class="li-badge li-ch-' + l.channel + '">' + l.channel + '</span></td>'
+    + '<td><select class="li-input" style="padding:3px 8px;font-size:11px" onchange="liSetTier(\'' + l.id + '\', this.value)">'
+        + '<option value="standard"' + (l.tier==='standard'?' selected':'') + '>standard</option>'
+        + '<option value="top"' + (l.tier==='top'?' selected':'') + '>top</option></select></td>'
+    + '<td><span class="li-badge li-st-' + l.status + '">' + l.status.replace('_',' ') + '</span></td>'
+    + '<td>'
+      + '<button class="li-btn" onclick="liToggleDraft(\'' + l.id + '\')">Draft</button>'
+      + (l.status!=='approved' ? '<button class="li-btn" onclick="liAction(\'' + l.id + '\',\'approve\')">Approve</button>' : '')
+      + '<button class="li-btn" onclick="liAction(\'' + l.id + '\',\'sent\')">Mark sent</button>'
+      + '<button class="li-btn" onclick="liAction(\'' + l.id + '\',\'skip\')">Skip</button>'
+      + '<div class="li-draftwrap" id="' + draftId + '">'
+        + '<textarea class="li-draft" id="ta-' + l.id + '">' + liEsc(l.outreach_draft || '') + '</textarea>'
+        + '<div style="margin-top:6px">'
+          + '<button class="li-btn li-btn-dark" onclick="liSaveDraft(\'' + l.id + '\')">Save</button>'
+          + '<button class="li-btn" onclick="liCopyDraft(\'' + l.id + '\')">Copy</button>'
+          + (l.search_url ? '' : '')
+        + '</div>'
+      + '</div>'
+    + '</td></tr>';
+}
+
+function liPage(delta) { _liPage = Math.max(1, _liPage + delta); liFetchLeads(); }
+function liToggleDraft(id) { var w = document.getElementById('lidraft-' + id); if (w) w.classList.toggle('open'); }
+function liCopyDraft(id) {
+  var ta = document.getElementById('ta-' + id); if (!ta) return;
+  navigator.clipboard.writeText(ta.value).then(function(){ liToast('Draft copied'); });
+}
+function liSaveDraft(id) {
+  var ta = document.getElementById('ta-' + id); if (!ta) return;
+  api('/api/linkedin/leads/' + id, { method:'PATCH', body: JSON.stringify({ outreach_draft: ta.value }) })
+    .then(function(d){ if (d && d.ok) liToast('Draft saved'); else liToast((d&&d.error)||'Save failed'); });
+}
+function liSetTier(id, tier) {
+  api('/api/linkedin/leads/' + id, { method:'PATCH', body: JSON.stringify({ tier: tier }) })
+    .then(function(d){ if (d && d.ok) { liToast('Tier updated → ' + d.lead.channel); liFetchLeads(); liLoadStats(); } });
+}
+function liAction(id, action) {
+  api('/api/linkedin/leads/' + id + '/' + action, { method:'POST' })
+    .then(function(d){ if (d && d.ok) { liFetchLeads(); liLoadStats(); } else liToast((d&&d.error)||'Failed'); });
+}
+
+/* ─── Today's Batch tab ──────────────────────────────────────── */
+function liLoadBatch() {
+  var body = document.getElementById('liBody');
+  body.innerHTML = '<div class="li-empty">Loading batch…</div>';
+  api('/api/linkedin/batch').then(function(d) {
+    if (!d || !d.ok) { body.innerHTML = '<div class="li-empty">' + liEsc((d&&d.error)||'Failed') + '</div>'; return; }
+    var caps = d.caps || {};
+    var html = '<div class="li-card"><h3>Send capacity today</h3>'
+      + '<p class="li-muted">InMail: <strong>' + caps.inmail.remaining + '</strong> of ' + caps.inmail.cap + ' left · '
+      + 'Notes: <strong>' + caps.note.remaining + '</strong> left (daily ' + caps.note.used_today + '/' + caps.note.daily_cap + ', weekly ' + caps.note.used_week + '/' + caps.note.weekly_cap + ')</p></div>';
+    html += liBatchSection('InMail (top tier first)', d.inmail);
+    html += liBatchSection('Connection notes', d.note);
+    if (!d.inmail.length && !d.note.length) html = '<div class="li-empty">Nothing to send right now — caps used up or no approved/ready leads.</div>';
+    body.innerHTML = html;
+  });
+}
+function liBatchSection(title, list) {
+  if (!list || !list.length) return '';
+  var rows = list.map(function(l) {
+    return '<div class="li-card" style="padding:14px 18px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px">'
+        + '<div><strong>' + liEsc(l.name) + '</strong> <span class="li-muted">' + liEsc(l.company||'') + '</span> <span class="li-badge li-ch-' + l.channel + '">' + l.channel + '</span></div>'
+        + '<div>'
+          + '<a class="li-btn" href="' + liEsc(l.search_url) + '" target="_blank" rel="noopener">Open in LinkedIn ↗</a>'
+          + '<button class="li-btn" onclick="liCopyText(' + liJsonAttr(l.outreach_draft) + ')">Copy draft</button>'
+          + '<button class="li-btn li-btn-dark" onclick="liAction(\'' + l.id + '\',\'sent\');this.closest(\'.li-card\').style.opacity=.4">Mark sent</button>'
+        + '</div>'
+      + '</div>'
+      + '<textarea class="li-draft" style="min-height:90px;margin-top:8px" readonly>' + liEsc(l.outreach_draft||'') + '</textarea>'
+      + '</div>';
+  }).join('');
+  return '<h3 style="font-family:var(--serif);font-weight:400;margin:18px 0 10px">' + title + ' (' + list.length + ')</h3>' + rows;
+}
+function liJsonAttr(s) { return "'" + String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\n/g,'\\n').replace(/\r/g,'') + "'"; }
+function liCopyText(s) { navigator.clipboard.writeText(s).then(function(){ liToast('Copied'); }); }
+
+/* ─── Import tab ─────────────────────────────────────────────── */
+function liRenderImport() {
+  var body = document.getElementById('liBody');
+  body.innerHTML =
+      '<div class="li-card">'
+    + '<h3>Import leads</h3>'
+    + '<p class="li-muted">CSV or pasted lines. Columns: <strong>name</strong>, <strong>company</strong>, optional <strong>tier</strong> (top/standard) and <strong>profile_url</strong>. A header row is auto-detected; otherwise the first two columns are taken as name, company.</p>'
+    + '<div style="margin:12px 0"><input type="file" id="liCsvFile" accept=".csv,.txt" class="li-input"></div>'
+    + '<p class="li-muted">…or paste here:</p>'
+    + '<textarea class="li-draft" id="liPaste" placeholder="Jane Doe, Acme Studios\nJohn Smith, Beta Tours, top"></textarea>'
+    + '<div style="margin-top:12px"><button class="li-btn li-btn-dark" id="liImportBtn">Import</button> <span id="liImportStatus" class="li-muted"></span></div>'
+    + '</div>';
+  document.getElementById('liCsvFile').addEventListener('change', function() {
+    var f = this.files[0]; if (!f) return;
+    var rd = new FileReader();
+    rd.onload = function() { document.getElementById('liPaste').value = rd.result; };
+    rd.readAsText(f);
+  });
+  document.getElementById('liImportBtn').addEventListener('click', liDoImport);
+}
+
+function liParseCsvLine(line) {
+  var out = [], cur = '', inq = false;
+  for (var i = 0; i < line.length; i++) {
+    var ch = line[i];
+    if (inq) {
+      if (ch === '"' && line[i+1] === '"') { cur += '"'; i++; }
+      else if (ch === '"') inq = false;
+      else cur += ch;
+    } else {
+      if (ch === '"') inq = true;
+      else if (ch === ',' || ch === ';' || ch === '\t') { out.push(cur); cur = ''; }
+      else cur += ch;
+    }
+  }
+  out.push(cur);
+  return out.map(function(s){ return s.trim(); });
+}
+
+function liDoImport() {
+  var raw = document.getElementById('liPaste').value || '';
+  var lines = raw.split(/\r?\n/).filter(function(l){ return l.trim(); });
+  if (!lines.length) { liToast('Nothing to import'); return; }
+
+  /* Header detection */
+  var idx = { name:0, company:1, tier:-1, profile_url:-1 };
+  var first = liParseCsvLine(lines[0]).map(function(s){ return s.toLowerCase(); });
+  var hasHeader = first.indexOf('name') !== -1 || first.indexOf('company') !== -1;
+  if (hasHeader) {
+    idx.name = first.indexOf('name') !== -1 ? first.indexOf('name') : 0;
+    idx.company = first.indexOf('company') !== -1 ? first.indexOf('company') : 1;
+    idx.tier = first.indexOf('tier');
+    idx.profile_url = first.indexOf('profile_url') !== -1 ? first.indexOf('profile_url') : first.indexOf('url');
+    lines = lines.slice(1);
+  }
+  var rows = [];
+  lines.forEach(function(line) {
+    var c = liParseCsvLine(line);
+    var name = (c[idx.name] || '').trim();
+    if (!name) return;
+    var r = { name: name, company: (c[idx.company] || '').trim() };
+    if (idx.tier >= 0 && /^top$/i.test(c[idx.tier] || '')) r.tier = 'top';
+    if (idx.profile_url >= 0 && c[idx.profile_url]) r.profile_url = c[idx.profile_url].trim();
+    rows.push(r);
+  });
+  if (!rows.length) { liToast('No valid rows parsed'); return; }
+
+  var sourceFile = (document.getElementById('liCsvFile').files[0] || {}).name || ('paste-' + new Date().toISOString().slice(0,10));
+  var CHUNK = 500, total = rows.length, imported = 0, skipped = 0, i = 0;
+  var statusEl = document.getElementById('liImportStatus');
+  var btn = document.getElementById('liImportBtn'); btn.disabled = true;
+
+  function next() {
+    if (i >= total) {
+      btn.disabled = false;
+      statusEl.textContent = 'Done — imported ' + imported + ', skipped ' + skipped + ' (duplicates).';
+      liLoadStats();
+      return;
+    }
+    var chunk = rows.slice(i, i + CHUNK);
+    statusEl.textContent = 'Importing ' + Math.min(i + CHUNK, total) + ' / ' + total + '…';
+    api('/api/linkedin/import', { method:'POST', body: JSON.stringify({ rows: chunk, source_file: sourceFile }) })
+      .then(function(d) {
+        if (d && d.ok) { imported += d.imported; skipped += d.skipped; }
+        else { statusEl.textContent = 'Error: ' + ((d&&d.error)||'import failed'); btn.disabled = false; return; }
+        i += CHUNK; next();
+      }).catch(function(e){ statusEl.textContent = 'Error: ' + e.message; btn.disabled = false; });
+  }
+  next();
+}
+
+/* ─── Replies tab ────────────────────────────────────────────── */
+function liLoadReplies() {
+  var body = document.getElementById('liBody');
+  body.innerHTML =
+      '<div class="li-card"><h3>Draft a reply</h3>'
+    + '<p class="li-muted">Pick a lead you\u2019ve messaged, paste their inbound reply, and generate a grounded response (positive → demo link, question → answer from the product brief).</p>'
+    + '<div class="li-toolbar"><input class="li-input" id="liReplySearch" placeholder="Search a lead by name/company" style="width:300px"></div>'
+    + '<div id="liReplyPick"></div>'
+    + '<div id="liReplyComposer"></div>'
+    + '</div>'
+    + '<h3 style="font-family:var(--serif);font-weight:400;margin:20px 0 10px">Replied leads</h3>'
+    + '<div id="liRepliedList"><div class="li-empty">Loading…</div></div>';
+
+  var deb;
+  document.getElementById('liReplySearch').addEventListener('input', function() {
+    var v = this.value; clearTimeout(deb); deb = setTimeout(function(){ liReplySearch(v); }, 250);
+  });
+  // Replied list
+  api('/api/linkedin/leads?status=replied&limit=50').then(function(d) {
+    var el = document.getElementById('liRepliedList');
+    if (!d || !d.ok || !d.leads.length) { el.innerHTML = '<div class="li-empty">No replies logged yet.</div>'; return; }
+    el.innerHTML = d.leads.map(function(l) {
+      return '<div class="li-card" style="padding:14px 18px">'
+        + '<strong>' + liEsc(l.name) + '</strong> <span class="li-muted">' + liEsc(l.company||'') + '</span>'
+        + '<div class="li-muted" style="margin:8px 0 3px">Their message:</div><div style="font-size:13px">' + liEsc(l.reply_text||'') + '</div>'
+        + '<div class="li-muted" style="margin:10px 0 3px">Suggested reply:</div>'
+        + '<textarea class="li-draft" style="min-height:80px">' + liEsc(l.reply_draft||'') + '</textarea>'
+        + '<div style="margin-top:6px"><button class="li-btn" onclick="liCopyText(' + liJsonAttr(l.reply_draft) + ')">Copy reply</button></div>'
+        + '</div>';
+    }).join('');
+  });
+}
+function liReplySearch(v) {
+  var pick = document.getElementById('liReplyPick');
+  if (!v || v.length < 2) { pick.innerHTML = ''; return; }
+  api('/api/linkedin/leads?search=' + encodeURIComponent(v) + '&limit=8').then(function(d) {
+    if (!d || !d.ok || !d.leads.length) { pick.innerHTML = '<div class="li-muted">No matches</div>'; return; }
+    pick.innerHTML = d.leads.map(function(l) {
+      return '<button class="li-btn" style="display:block;width:100%;text-align:left;margin:4px 0" onclick="liPickReply(' + liJsonAttr(JSON.stringify({id:l.id,name:l.name,company:l.company,draft:l.outreach_draft})) + ')">'
+        + liEsc(l.name) + ' — ' + liEsc(l.company||'') + ' <span class="li-badge li-st-' + l.status + '">' + l.status.replace('_',' ') + '</span></button>';
+    }).join('');
+  });
+}
+function liPickReply(json) {
+  _liReplyLead = JSON.parse(json);
+  document.getElementById('liReplyPick').innerHTML = '';
+  document.getElementById('liReplySearch').value = _liReplyLead.name;
+  var c = document.getElementById('liReplyComposer');
+  c.innerHTML =
+      '<div class="li-muted" style="margin:12px 0 4px">Their inbound message:</div>'
+    + '<textarea class="li-draft" id="liInbound" placeholder="Paste what they wrote back…"></textarea>'
+    + '<div style="margin-top:10px"><button class="li-btn li-btn-dark" id="liGenReply">Generate reply</button> <span id="liReplyStatus" class="li-muted"></span></div>'
+    + '<div id="liReplyOut"></div>';
+  document.getElementById('liGenReply').addEventListener('click', liGenerateReply);
+}
+function liGenerateReply() {
+  if (!_liReplyLead) return;
+  var inbound = document.getElementById('liInbound').value.trim();
+  if (!inbound) { liToast('Paste their message first'); return; }
+  var btn = document.getElementById('liGenReply'); btn.disabled = true;
+  document.getElementById('liReplyStatus').textContent = 'Generating…';
+  api('/api/linkedin/leads/' + _liReplyLead.id + '/reply', { method:'POST', body: JSON.stringify({ inbound: inbound }) })
+    .then(function(d) {
+      btn.disabled = false;
+      if (!d || !d.ok) { document.getElementById('liReplyStatus').textContent = (d&&d.error)||'Failed'; return; }
+      document.getElementById('liReplyStatus').textContent = '';
+      document.getElementById('liReplyOut').innerHTML =
+          '<div class="li-muted" style="margin:12px 0 4px">Suggested reply:</div>'
+        + '<textarea class="li-draft" id="liReplyText">' + liEsc(d.lead.reply_draft||'') + '</textarea>'
+        + '<div style="margin-top:6px"><button class="li-btn" onclick="liCopyText(document.getElementById(\'liReplyText\').value)">Copy reply</button></div>';
+      liLoadStats();
+    }).catch(function(e){ btn.disabled=false; document.getElementById('liReplyStatus').textContent = e.message; });
+}
+
+/* ─── Templates tab ──────────────────────────────────────────── */
+function liLoadTemplates() {
+  var body = document.getElementById('liBody');
+  body.innerHTML = '<div class="li-empty">Loading templates…</div>';
+  api('/api/linkedin/templates').then(function(d) {
+    if (!d || !d.ok) { body.innerHTML = '<div class="li-empty">Failed</div>'; return; }
+    var map = {}; d.templates.forEach(function(t){ map[t.channel] = t.body; });
+    body.innerHTML =
+        '<p class="li-muted" style="margin-bottom:14px">Tokens: <code>[Name]</code> → the lead\u2019s first name · <code>[COMPANY_UPDATE]</code> → optional enrichment line (removed when empty). Editing here updates the master; use \u201cRe-render ready drafts\u201d to apply to existing draft_ready leads.</p>'
+      + liTplCard('inmail', 'InMail (Sales Navigator — full length)', map.inmail)
+      + liTplCard('note', 'Connection note (\u2264300 chars)', map.note)
+      + '<button class="li-btn" onclick="liRegenAll()">Re-render ready drafts from templates</button> <span id="liRegenStatus" class="li-muted"></span>';
+  });
+}
+function liTplCard(channel, title, bodyText) {
+  return '<div class="li-card"><h3>' + title + '</h3>'
+    + '<textarea class="li-draft" id="litpl-' + channel + '" style="min-height:200px">' + liEsc(bodyText||'') + '</textarea>'
+    + '<div style="margin-top:8px"><button class="li-btn li-btn-dark" onclick="liSaveTpl(\'' + channel + '\')">Save ' + channel + '</button> '
+    + '<span class="li-muted" id="litplstatus-' + channel + '"></span></div></div>';
+}
+function liSaveTpl(channel) {
+  var body = document.getElementById('litpl-' + channel).value;
+  api('/api/linkedin/templates', { method:'POST', body: JSON.stringify({ channel: channel, body: body }) })
+    .then(function(d){ document.getElementById('litplstatus-'+channel).textContent = (d&&d.ok)?'Saved ✓':((d&&d.error)||'Failed'); });
+}
+function liRegenAll() {
+  document.getElementById('liRegenStatus').textContent = 'Working…';
+  api('/api/linkedin/regenerate-all', { method:'POST' })
+    .then(function(d){ document.getElementById('liRegenStatus').textContent = (d&&d.ok)?('Re-rendered ' + d.updated + ' drafts'):((d&&d.error)||'Failed'); });
+}
+
+/* ─── Settings tab ───────────────────────────────────────────── */
+function liLoadSettings() {
+  var body = document.getElementById('liBody');
+  body.innerHTML = '<div class="li-empty">Loading settings…</div>';
+  api('/api/linkedin/settings').then(function(d) {
+    if (!d || !d.ok) { body.innerHTML = '<div class="li-empty">Failed</div>'; return; }
+    var s = d.settings;
+    body.innerHTML =
+        '<div class="li-card"><h3>Send caps</h3>'
+      + '<p class="li-muted">Mirror LinkedIn\u2019s own limits. The batch + extension never offer more than these per day/week.</p>'
+      + liField('InMail per day', 'liInmailCap', s.inmail_daily_cap)
+      + liField('Notes per day', 'liNoteDaily', s.note_daily_cap)
+      + liField('Notes per week', 'liNoteWeekly', s.note_weekly_cap)
+      + '</div>'
+      + '<div class="li-card"><h3>Demo link</h3>'
+      + '<p class="li-muted">Used in positive-reply drafts. Paste the public URL of your one-pager / demo.</p>'
+      + '<input class="li-input" id="liOnepager" style="width:100%" placeholder="https://www.october-ai.com/…" value="' + liEsc(s.onepager_url||'') + '">'
+      + '</div>'
+      + '<button class="li-btn li-btn-dark" onclick="liSaveSettings()">Save settings</button> <span id="liSettingsStatus" class="li-muted"></span>';
+  });
+}
+function liField(label, id, val) {
+  return '<div style="margin:10px 0"><label class="li-muted" style="display:block;margin-bottom:3px">' + label + '</label>'
+    + '<input class="li-input" id="' + id + '" type="number" min="0" value="' + (val!=null?val:0) + '" style="width:120px"></div>';
+}
+function liSaveSettings() {
+  var payload = {
+    inmail_daily_cap: document.getElementById('liInmailCap').value,
+    note_daily_cap: document.getElementById('liNoteDaily').value,
+    note_weekly_cap: document.getElementById('liNoteWeekly').value,
+    onepager_url: document.getElementById('liOnepager').value
+  };
+  api('/api/linkedin/settings', { method:'POST', body: JSON.stringify(payload) })
+    .then(function(d){ document.getElementById('liSettingsStatus').textContent = (d&&d.ok)?'Saved ✓':((d&&d.error)||'Failed'); });
+}
+
+/* ─── Toast ──────────────────────────────────────────────────── */
+function liToast(msg) {
+  var t = document.getElementById('liToast');
+  if (!t) {
+    t = document.createElement('div'); t.id = 'liToast';
+    t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a1a1a;color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;z-index:9999;opacity:0;transition:opacity .2s';
+    document.body.appendChild(t);
+  }
+  t.textContent = msg; t.style.opacity = '1';
+  clearTimeout(t._h); t._h = setTimeout(function(){ t.style.opacity = '0'; }, 1800);
 }
 
 /* ── INIT ── */

@@ -97,6 +97,14 @@ app.use('/api/traffic', requireAuth, trafficRoutes(pool));
 const crmRoutes = require('./routes/crm');
 app.use('/api/crm', requireAuth, crmRoutes(pool));
 
+/* 2026-05-29 — LinkedIn Outreach. Reads + writes linkedin_leads /
+   linkedin_templates / linkedin_settings (eb-tour-agent migration v71)
+   on the shared main Postgres. Import a 10k+ lead list, auto-fill a
+   template draft per lead, review + approve, then a Chrome extension
+   FILLS the LinkedIn compose box (founder clicks Send — never auto). */
+const linkedinRoutes = require('./routes/linkedin');
+app.use('/api/linkedin', requireAuth, linkedinRoutes(pool));
+
 const gmailSync = require('./services/gmailSync');
 if (pool && process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
   /* Run 60s after boot + every 6h. Incremental syncs are cheap
