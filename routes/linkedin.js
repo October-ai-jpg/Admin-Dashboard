@@ -66,7 +66,13 @@ function channelForTier(tier) {
    extension/dashboard can jump straight to the person. If we already
    stored a profile_url, the caller prefers that. */
 function searchUrl(name, company) {
-  const kw = [name, company].filter(Boolean).join(' ');
+  /* Business-target lists often carry the same value in name and company;
+     dedupe so the keyword string isn't "Acme Acme". */
+  const seen = new Set();
+  const kw = [name, company]
+    .map(v => String(v || '').trim())
+    .filter(v => { const k = v.toLowerCase(); if (!v || seen.has(k)) return false; seen.add(k); return true; })
+    .join(' ');
   return 'https://www.linkedin.com/search/results/people/?keywords=' + encodeURIComponent(kw);
 }
 
