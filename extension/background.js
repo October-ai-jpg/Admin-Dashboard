@@ -58,6 +58,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         case "SKIP":
           sendResponse({ ok: true, data: await apiFetch(`/api/linkedin/leads/${msg.id}/skip`, { method: "POST" }) });
           break;
+        case "SET_NAME":
+          // Persist the person's first name; server re-renders the [Name] token.
+          sendResponse({ ok: true, data: await apiFetch(`/api/linkedin/leads/${msg.id}`, {
+            method: "PATCH", body: { first_name: msg.firstName || "" }
+          }) });
+          break;
         case "PING":
           sendResponse({ ok: true, data: await apiFetch("/api/linkedin/stats") });
           break;

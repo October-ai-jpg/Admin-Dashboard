@@ -42,6 +42,10 @@
           </div>
           <span id="oai-channel" class="oai-chan"></span>
         </div>
+        <div class="oai-fnrow">
+          <input id="oai-fn" type="text" placeholder="Person's first name (fills [Name])" autocomplete="off" spellcheck="false">
+          <button id="oai-setname" class="oai-btn ghost">Set</button>
+        </div>
         <textarea id="oai-draft" rows="7" spellcheck="false"></textarea>
         <div id="oai-charcount" class="oai-cc"></div>
         <div class="oai-actions">
@@ -100,8 +104,26 @@
     const ch = lead.channel === "inmail" ? "InMail" : "Connection note";
     $("#oai-channel").textContent = ch;
     $("#oai-channel").className = "oai-chan " + (lead.channel || "");
+    $("#oai-fn").value = lead.first_name || "";
     $("#oai-draft").value = lead.outreach_draft || "";
     updateCharCount();
+  }
+
+  /* ── Set the person's first name (fills the [Name] token) ──────── */
+  async function setName() {
+    if (!current) return;
+    const fn = $("#oai-fn").value.trim();
+    $("#oai-setname").disabled = true;
+    const r = await send({ type: "SET_NAME", id: current.id, firstName: fn });
+    $("#oai-setname").disabled = false;
+    if (!r || !r.ok) { toast((r && r.error) || "Failed", "err"); return; }
+    if (r.data && r.data.lead) {
+      current.first_name = r.data.lead.first_name;
+      current.outreach_draft = r.data.lead.outreach_draft;
+      $("#oai-draft").value = r.data.lead.outreach_draft || "";
+      updateCharCount();
+    }
+    toast(fn ? "Name set — draft updated" : "Name cleared — [Name] restored", "ok");
   }
 
   function updateCharCount() {
@@ -113,6 +135,8 @@
     el.className = "oai-cc" + (isNote && len > 300 ? " over" : "");
   }
   $("#oai-draft").addEventListener("input", updateCharCount);
+  $("#oai-setname").addEventListener("click", setName);
+  $("#oai-fn").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); setName(); } });
 
   /* ── Get next ────────────────────────────────────────────────── */
   async function getNext() {

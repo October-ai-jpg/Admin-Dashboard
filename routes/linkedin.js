@@ -42,17 +42,17 @@ leads, less repetitive admin, and clearer insight into what prospects are
 looking for before they reach out. Setup is quick — the agent layers on top
 of the tour the company already has.`;
 
-function deriveFirstName(name) {
-  const first = String(name || '').trim().split(/\s+/)[0] || '';
-  if (!first) return '';
-  return first.charAt(0).toUpperCase() + first.slice(1);
-}
-
-/* Render a template body for a lead. [Name] → first name,
+/* Render a template body for a lead.
+   [Name] → the person's first name. Our leads are business TARGETS, so the
+   person is usually not known until the user finds them on LinkedIn. In that
+   case we keep the literal "[Name]" token as a visible fill-in placeholder —
+   the user types the real first name (in the panel / compose box) once they
+   find the decision-maker. Only substitute when we actually have a name.
    [COMPANY_UPDATE] → " " + the enrichment line (or removed entirely). */
 function renderDraft(body, firstName, companyUpdate) {
   let out = String(body || '');
-  out = out.split('[Name]').join(firstName || 'there');
+  const fn = String(firstName || '').trim();
+  if (fn) out = out.split('[Name]').join(fn); // else leave [Name] for the user to fill
   const upd = String(companyUpdate || '').trim();
   out = out.split('[COMPANY_UPDATE]').join(upd ? ' ' + upd : '');
   return out;
@@ -143,9 +143,13 @@ module.exports = function (pool) {
            LIMIT ${limit} OFFSET ${offset}`,
         params
       );
+      const leads = rowsRes.rows.map(row => ({
+        ...row,
+        search_url: row.profile_url || searchUrl(row.name, row.company)
+      }));
       res.json({
         ok: true,
-        leads: rowsRes.rows,
+        leads,
         total,
         page,
         totalPages: Math.max(1, Math.ceil(total / limit))
@@ -178,7 +182,12 @@ module.exports = function (pool) {
         const tier = (r && r.tier === 'top') ? 'top' : 'standard';
         const channel = channelForTier(tier);
         const profileUrl = (r && r.profile_url) ? String(r.profile_url).trim().slice(0, 500) : null;
-        const firstName = deriveFirstName(name);
+        /* Leads are business targets: `name` is the business/company, not a
+           person. Only set first_name if the client explicitly hands us a
+           known contact; otherwise leave it null so the draft keeps the
+           [Name] placeholder until the user finds the person via search. */
+        const firstName = (r && typeof r.first_name === 'string' && r.first_name.trim())
+          ? r.first_name.trim() : null;
         const draft = renderDraft(tpl[channel], firstName, '');
         vals.push({ name, firstName, company, profileUrl, tier, channel, draft });
       }
@@ -396,6 +405,8 @@ module.exports = function (pool) {
       let tier = lead.tier, channel = lead.channel;
       let companyUpdate = lead.company_update, outreachDraft = lead.outreach_draft;
       let profileUrl = lead.profile_url;
+      let firstName = lead.first_name;
+      let firstNameChanged = false;
       let tierChanged = false;
 
       if (fields.tier && ['top','standard'].includes(fields.tier) && fields.tier !== tier) {
@@ -406,21 +417,26 @@ module.exports = function (pool) {
       }
       if ('company_update' in fields) companyUpdate = String(fields.company_update || '').slice(0, 500);
       if ('profile_url' in fields) profileUrl = String(fields.profile_url || '').trim().slice(0, 500) || null;
+      /* The person found via LinkedIn search — sets the [Name] token. */
+      if ('first_name' in fields) {
+        firstName = String(fields.first_name || '').trim().slice(0, 80) || null;
+        firstNameChanged = true;
+      }
 
-      /* If tier/channel/company_update changed and the user didn't hand
-         us an explicit draft, re-render from the matching template. */
+      /* If a draft-affecting field changed and the user didn't hand us an
+         explicit draft, re-render from the matching template. */
       if ('outreach_draft' in fields) {
         outreachDraft = String(fields.outreach_draft || '').slice(0, 4000);
-      } else if (tierChanged || ('company_update' in fields) || (fields.channel && fields.channel !== lead.channel)) {
+      } else if (tierChanged || firstNameChanged || ('company_update' in fields) || (fields.channel && fields.channel !== lead.channel)) {
         const tpl = await getTemplates();
-        outreachDraft = renderDraft(tpl[channel], lead.first_name || deriveFirstName(lead.name), companyUpdate);
+        outreachDraft = renderDraft(tpl[channel], firstName, companyUpdate);
       }
 
       const r = await q(
         `UPDATE linkedin_leads
-            SET tier = $1, channel = $2, company_update = $3, outreach_draft = $4, profile_url = $5, updated_at = NOW()
-          WHERE id = $6 RETURNING *`,
-        [tier, channel, companyUpdate, outreachDraft, profileUrl, id]
+            SET tier = $1, channel = $2, company_update = $3, outreach_draft = $4, profile_url = $5, first_name = $6, updated_at = NOW()
+          WHERE id = $7 RETURNING *`,
+        [tier, channel, companyUpdate, outreachDraft, profileUrl, firstName, id]
       );
       res.json({ ok: true, lead: r.rows[0] });
     } catch (e) { res.status(500).json({ error: e.message }); }
@@ -441,6 +457,35 @@ module.exports = function (pool) {
   statusEndpoint('skip',    `UPDATE linkedin_leads SET status = 'skipped', updated_at = NOW()`);
   statusEndpoint('sent',    `UPDATE linkedin_leads SET status = 'sent', sent_at = NOW(), updated_at = NOW()`);
 
+  /* ─── Delete a single lead ───────────────────────────────────── */
+  router.delete('/leads/:id', async (req, res) => {
+    if (!guardPool(res)) return;
+    try {
+      const r = await q(`DELETE FROM linkedin_leads WHERE id = $1 RETURNING id`, [String(req.params.id)]);
+      if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
+      res.json({ ok: true, deleted: 1 });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  /* ─── Purge (bulk delete) — by source_file, or everything ─────────
+     Guarded: require explicit ?confirm=1 to wipe everything, so a stray
+     call can't nuke the whole queue. Mainly for cleaning up test imports. */
+  router.post('/purge', async (req, res) => {
+    if (!guardPool(res)) return;
+    try {
+      const sourceFile = String((req.body && req.body.source_file) || '').trim();
+      if (sourceFile) {
+        const r = await q(`DELETE FROM linkedin_leads WHERE source_file = $1`, [sourceFile]);
+        return res.json({ ok: true, deleted: r.rowCount || 0, scope: 'source_file:' + sourceFile });
+      }
+      if (String((req.body && req.body.confirm) || '') !== '1') {
+        return res.status(400).json({ error: 'Pass { source_file } to target an import, or { confirm: "1" } to wipe ALL leads' });
+      }
+      const r = await q(`DELETE FROM linkedin_leads`);
+      res.json({ ok: true, deleted: r.rowCount || 0, scope: 'all' });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   /* ─── Regenerate drafts from current template ────────────────── */
   router.post('/leads/:id/regenerate', async (req, res) => {
     if (!guardPool(res)) return;
@@ -449,7 +494,7 @@ module.exports = function (pool) {
       const cur = await q(`SELECT * FROM linkedin_leads WHERE id = $1`, [String(req.params.id)]);
       if (!cur.rows.length) return res.status(404).json({ error: 'Not found' });
       const lead = cur.rows[0];
-      const draft = renderDraft(tpl[lead.channel], lead.first_name || deriveFirstName(lead.name), lead.company_update);
+      const draft = renderDraft(tpl[lead.channel], lead.first_name, lead.company_update);
       const r = await q(`UPDATE linkedin_leads SET outreach_draft = $1, updated_at = NOW() WHERE id = $2 RETURNING *`, [draft, lead.id]);
       res.json({ ok: true, lead: r.rows[0] });
     } catch (e) { res.status(500).json({ error: e.message }); }
@@ -466,7 +511,7 @@ module.exports = function (pool) {
         const r = await q(
           `UPDATE linkedin_leads
               SET outreach_draft = replace(
-                    replace($1, '[Name]', COALESCE(first_name, 'there')),
+                    replace($1, '[Name]', COALESCE(first_name, '[Name]')),
                     '[COMPANY_UPDATE]',
                     CASE WHEN COALESCE(company_update,'') = '' THEN '' ELSE ' ' || company_update END
                   ),

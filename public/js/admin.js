@@ -6994,11 +6994,15 @@ function liLeadRow(l) {
       + '<button class="li-btn" onclick="liAction(\'' + l.id + '\',\'sent\')">Mark sent</button>'
       + '<button class="li-btn" onclick="liAction(\'' + l.id + '\',\'skip\')">Skip</button>'
       + '<div class="li-draftwrap" id="' + draftId + '">'
+        + '<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">'
+          + '<input class="li-input" id="fn-' + l.id + '" placeholder="Person\'s first name (fills [Name])" value="' + liEsc(l.first_name || '') + '" style="flex:1;font-size:12px">'
+          + '<button class="li-btn" onclick="liSetFirstName(\'' + l.id + '\')">Set</button>'
+          + (l.search_url ? '<a class="li-btn" href="' + liEsc(l.search_url) + '" target="_blank" rel="noopener">Find on LinkedIn ↗</a>' : '')
+        + '</div>'
         + '<textarea class="li-draft" id="ta-' + l.id + '">' + liEsc(l.outreach_draft || '') + '</textarea>'
         + '<div style="margin-top:6px">'
           + '<button class="li-btn li-btn-dark" onclick="liSaveDraft(\'' + l.id + '\')">Save</button>'
           + '<button class="li-btn" onclick="liCopyDraft(\'' + l.id + '\')">Copy</button>'
-          + (l.search_url ? '' : '')
         + '</div>'
       + '</div>'
     + '</td></tr>';
@@ -7018,6 +7022,18 @@ function liSaveDraft(id) {
 function liSetTier(id, tier) {
   api('/api/linkedin/leads/' + id, { method:'PATCH', body: JSON.stringify({ tier: tier }) })
     .then(function(d){ if (d && d.ok) { liToast('Tier updated → ' + d.lead.channel); liFetchLeads(); liLoadStats(); } });
+}
+function liSetFirstName(id) {
+  var inp = document.getElementById('fn-' + id); if (!inp) return;
+  var fn = inp.value.trim();
+  api('/api/linkedin/leads/' + id, { method:'PATCH', body: JSON.stringify({ first_name: fn }) })
+    .then(function(d){
+      if (d && d.ok) {
+        var ta = document.getElementById('ta-' + id);
+        if (ta && d.lead && typeof d.lead.outreach_draft === 'string') ta.value = d.lead.outreach_draft;
+        liToast(fn ? 'Name set — draft updated' : 'Name cleared — [Name] restored');
+      } else liToast((d && d.error) || 'Failed to set name');
+    });
 }
 function liAction(id, action) {
   api('/api/linkedin/leads/' + id + '/' + action, { method:'POST' })
@@ -7066,7 +7082,7 @@ function liRenderImport() {
   body.innerHTML =
       '<div class="li-card">'
     + '<h3>Import leads</h3>'
-    + '<p class="li-muted">CSV or pasted lines. Columns: <strong>name</strong>, <strong>company</strong>, optional <strong>tier</strong> (top/standard) and <strong>profile_url</strong>. A header row is auto-detected; otherwise the first two columns are taken as name, company.</p>'
+    + '<p class="li-muted">CSV or pasted lines. Works with a <strong>person list</strong> (columns <strong>name</strong>, <strong>company</strong>, optional <strong>tier</strong>/<strong>profile_url</strong>) or a <strong>business-target list</strong> (discovery export with <strong>business</strong>/<strong>title</strong>/<strong>apex</strong> — the business becomes the lead, and you find the person on LinkedIn via the auto-generated search link). Header row auto-detected.</p>'
     + '<div style="margin:12px 0"><input type="file" id="liCsvFile" accept=".csv,.txt" class="li-input"></div>'
     + '<p class="li-muted">…or paste here:</p>'
     + '<textarea class="li-draft" id="liPaste" placeholder="Jane Doe, Acme Studios\nJohn Smith, Beta Tours, top"></textarea>'
@@ -7104,23 +7120,45 @@ function liDoImport() {
   var lines = raw.split(/\r?\n/).filter(function(l){ return l.trim(); });
   if (!lines.length) { liToast('Nothing to import'); return; }
 
-  /* Header detection */
-  var idx = { name:0, company:1, tier:-1, profile_url:-1 };
+  /* Header detection. Two shapes are supported:
+       1. Person/company list  → has a `name` (and/or `company`) column.
+       2. Business-target list → discovery export with `business`/`title`/
+          `apex` columns (e.g. the urlscan ICP list). Here the lead `name`
+          = the business, since the actual person is found later via search. */
+  var idx = { name:0, company:1, tier:-1, profile_url:-1, business:-1, title:-1, apex:-1, website:-1 };
   var first = liParseCsvLine(lines[0]).map(function(s){ return s.toLowerCase(); });
-  var hasHeader = first.indexOf('name') !== -1 || first.indexOf('company') !== -1;
+  var hasHeader = ['name','company','business','title','apex'].some(function(h){ return first.indexOf(h) !== -1; });
   if (hasHeader) {
-    idx.name = first.indexOf('name') !== -1 ? first.indexOf('name') : 0;
-    idx.company = first.indexOf('company') !== -1 ? first.indexOf('company') : 1;
+    idx.name = first.indexOf('name');
+    idx.company = first.indexOf('company');
     idx.tier = first.indexOf('tier');
     idx.profile_url = first.indexOf('profile_url') !== -1 ? first.indexOf('profile_url') : first.indexOf('url');
+    idx.business = first.indexOf('business');
+    idx.title = first.indexOf('title');
+    idx.apex = first.indexOf('apex');
+    idx.website = first.indexOf('website');
     lines = lines.slice(1);
+  }
+  /* Clean a noisy page title into a search-friendly business name:
+     "Cadence at Gateway Mesa Arizona | Home" → "Cadence at Gateway Mesa Arizona". */
+  function cleanTitle(t) {
+    return String(t || '').split('|')[0].replace(/\s+/g, ' ').trim();
   }
   var rows = [];
   lines.forEach(function(line) {
     var c = liParseCsvLine(line);
-    var name = (c[idx.name] || '').trim();
+    var name = '';
+    if (idx.name >= 0 && (c[idx.name]||'').trim()) name = c[idx.name].trim();
+    else if (idx.business >= 0 && (c[idx.business]||'').trim()) name = c[idx.business].trim();
+    else if (idx.title >= 0 && cleanTitle(c[idx.title])) name = cleanTitle(c[idx.title]);
+    else if (idx.apex >= 0 && (c[idx.apex]||'').trim()) name = c[idx.apex].trim();
+    else if (!hasHeader) name = (c[0]||'').trim();
     if (!name) return;
-    var r = { name: name, company: (c[idx.company] || '').trim() };
+    var company = '';
+    if (idx.company >= 0) company = (c[idx.company]||'').trim();
+    if (!company && idx.business >= 0) company = (c[idx.business]||'').trim();
+    if (!company) company = name; // business-target: company == the business
+    var r = { name: name, company: company };
     if (idx.tier >= 0 && /^top$/i.test(c[idx.tier] || '')) r.tier = 'top';
     if (idx.profile_url >= 0 && c[idx.profile_url]) r.profile_url = c[idx.profile_url].trim();
     rows.push(r);
