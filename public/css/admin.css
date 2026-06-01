@@ -885,6 +885,48 @@ body.sidebar-collapsed .main{margin-left:var(--sidebar-collapsed)}
 }
 
 /* ═══════════════════════════════════════
+   SYSTEM ARCHITECTURE DIAGRAM
+   ═══════════════════════════════════════ */
+.arch-wrap{
+  background:var(--white);
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:16px;
+  overflow-x:auto;
+}
+.arch-legend{
+  display:flex;flex-wrap:wrap;gap:18px;
+  margin-bottom:14px;font-size:12px;color:var(--muted);
+}
+.arch-legend span{display:inline-flex;align-items:center;gap:7px}
+.arch-legend i{
+  width:14px;height:14px;border-radius:4px;display:inline-block;flex:none;
+}
+.arch-legend i.dash{
+  background:transparent;border:1.5px dashed var(--muted);
+}
+.arch-steps{
+  background:var(--cream);
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:20px 24px;
+  margin-top:16px;
+}
+.arch-steps-title{
+  font-family:var(--serif);font-size:22px;font-weight:400;
+  letter-spacing:-0.01em;margin-bottom:10px;
+}
+.arch-steps ol{margin:0;padding-left:20px}
+.arch-steps li{
+  font-size:13.5px;line-height:1.75;color:var(--black);margin-bottom:8px;
+}
+.arch-steps code{
+  font-family:'JetBrains Mono',ui-monospace,monospace;
+  font-size:12px;background:var(--cream-dark);
+  padding:1px 5px;border-radius:4px;
+}
+
+/* ═══════════════════════════════════════
    PRODUCTION REFERENCE BOX (always visible)
    ═══════════════════════════════════════ */
 .prod-ref-box{

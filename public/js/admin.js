@@ -2567,6 +2567,137 @@ var PROD_DEFAULTS = {
   }
 };
 
+/* ═══════════════════════════════════════════════
+   SYSTEM ARCHITECTURE DIAGRAM
+   Grafisk overblik over hele October AI-stacken —
+   tænkt som onboarding-billede til kolleger.
+   Viser: kildekode → deploy (prod vs. staging),
+   live runtime-pipeline, og back-office/søster-apps.
+   ═══════════════════════════════════════════════ */
+function buildArchitectureSVG() {
+  var INK = '#1A1A1A', MUTE = '#6B6560', GREEN = '#2d8a4e', ORANGE = '#e67e22',
+      CREAM = '#EDE8DF', BORDER = 'rgba(26,26,26,0.16)', BLUE = '#2d6a8a';
+
+  function node(x, y, w, h, title, lines, o) {
+    o = o || {};
+    var fill = o.fill || '#fff', stroke = o.stroke || BORDER,
+        dash = o.dash ? ' stroke-dasharray="6 5"' : '', accent = o.accent;
+    var s = '<g>';
+    s += '<rect x="' + x + '" y="' + y + '" width="' + w + '" height="' + h + '" rx="12" fill="' + fill + '" stroke="' + stroke + '" stroke-width="1.5"' + dash + '/>';
+    if (accent) s += '<rect x="' + x + '" y="' + (y + 1) + '" width="5" height="' + (h - 2) + '" rx="2.5" fill="' + accent + '"/>';
+    s += '<text x="' + (x + 18) + '" y="' + (y + 27) + '" font-family="Cormorant Garamond,Georgia,serif" font-size="20" font-weight="600" fill="' + INK + '">' + title + '</text>';
+    (lines || []).forEach(function(ln, i) {
+      s += '<text x="' + (x + 18) + '" y="' + (y + 48 + i * 16.5) + '" font-family="system-ui,-apple-system,sans-serif" font-size="12" fill="' + MUTE + '">' + ln + '</text>';
+    });
+    return s + '</g>';
+  }
+  function ar(x1, y1, x2, y2, o) {
+    o = o || {};
+    var col = o.color || INK, dash = o.dash ? ' stroke-dasharray="6 5"' : '',
+        mk = o.color === MUTE ? 'aho' : 'ah';
+    if (o.q) return '<path d="M' + x1 + ' ' + y1 + ' Q ' + o.q[0] + ' ' + o.q[1] + ' ' + x2 + ' ' + y2 + '" fill="none" stroke="' + col + '" stroke-width="1.8" marker-end="url(#' + mk + ')"' + dash + '/>';
+    return '<line x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 + '" stroke="' + col + '" stroke-width="1.8" marker-end="url(#' + mk + ')"' + dash + '/>';
+  }
+  function lbl(x, y, t, o) {
+    o = o || {};
+    return '<text x="' + x + '" y="' + y + '" font-family="system-ui,sans-serif" font-size="' + (o.size || 11.5) + '" font-weight="' + (o.weight || 400) + '" fill="' + (o.color || MUTE) + '"' + (o.anchor ? ' text-anchor="' + o.anchor + '"' : '') + '>' + t + '</text>';
+  }
+  function band(y, t) {
+    return '<line x1="32" y1="' + y + '" x2="1268" y2="' + y + '" stroke="' + BORDER + '" stroke-width="1"/>' +
+           '<text x="32" y="' + (y + 26) + '" font-family="system-ui,sans-serif" font-size="12" font-weight="700" letter-spacing="0.08em" fill="' + INK + '">' + t + '</text>';
+  }
+  function chip(x, y, w, h, top, bot, col) {
+    return '<rect x="' + x + '" y="' + y + '" width="' + w + '" height="' + h + '" rx="9" fill="#fff" stroke="' + col + '" stroke-width="1.5"/>' +
+           '<text x="' + (x + w / 2) + '" y="' + (y + 26) + '" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="700" letter-spacing="0.06em" fill="' + col + '">' + top + '</text>' +
+           '<text x="' + (x + w / 2) + '" y="' + (y + 48) + '" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12.5" fill="' + INK + '">' + bot + '</text>';
+  }
+
+  var s = '<svg viewBox="0 0 1300 862" width="100%" role="img" aria-label="October AI system architecture" style="min-width:1040px">';
+  s += '<defs>'
+    + '<marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 z" fill="' + INK + '"/></marker>'
+    + '<marker id="aho" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 z" fill="' + MUTE + '"/></marker>'
+    + '</defs>';
+
+  /* ── BAND 1: SOURCE → DEPLOY ── */
+  s += band(34, '1 — KILDEKODE  →  DEPLOY   ·   én kodebase, to branches, to verdener');
+  s += node(40, 96, 215, 104, 'GitHub-repo', ['October-ai-jpg / -october-ai', '1 kodebase · 2 branches', 'Railway auto-deployer ved push']);
+  s += node(355, 84, 255, 110, 'Railway · «Staging»', ['branch: staging', '…youthfulness-…up.railway.app', 'leg, test &amp; nye features'], { accent: ORANGE });
+  s += node(700, 96, 250, 104, 'Postgres-staging', ['PG 18.3 · shortline-proxy', 'E2E-tests + webshop-sandbox', 'conv 1651 · email_log 1763'], { fill: CREAM, accent: ORANGE });
+  s += node(355, 238, 255, 110, 'Railway · «-october-ai»', ['branch: main  →  LIVE', 'www.october-ai.com', 'rigtige, betalende kunder'], { accent: GREEN });
+  s += node(700, 250, 250, 104, 'Postgres (prod)', ['PG 17.7 · mainline-proxy', '16 tenants · 12 clients', 'Park Lane · Marstalsgade · DIS'], { fill: CREAM, accent: GREEN });
+  // right explainer
+  s += node(995, 84, 273, 270, 'Sådan bruges staging', [
+      'Alt nyt bygges &amp; testes FØRST på', 'staging-branchen — egen server,', 'egen database. Rører aldrig kunder.', '',
+      'Når E2E-tests er grønne (92/92)', 'merges staging → main, og Railway', 'deployer automatisk til prod.', '',
+      'Webshop-koncierge lever KUN på', 'staging og må aldrig nå main.'], { fill: '#fff', stroke: BORDER });
+  // arrows
+  s += ar(255, 128, 353, 116);
+  s += ar(255, 165, 353, 270);
+  s += ar(610, 124, 698, 130);
+  s += ar(610, 290, 698, 296);
+  s += ar(470, 194, 470, 236, { color: GREEN });
+  s += '<rect x="486" y="196" width="186" height="38" rx="8" fill="#fff" stroke="' + GREEN + '" stroke-width="1.2"/>';
+  s += lbl(494, 211, 'PROMOTE  ▼  git merge', { color: GREEN, weight: 700, size: 11 });
+  s += lbl(494, 226, 'staging → main (når E2E grøn)', { color: GREEN, size: 10.5 });
+
+  /* ── BAND 2: RUNTIME ── */
+  s += band(388, '2 — RUNTIME   ·   sådan svarer agenten live (samme voice-pipeline i begge miljøer)');
+  s += node(40, 446, 165, 96, 'Besøgende', ['mikrofon + browser', 'på kunde-site eller', '3D-tour / preview-shop']);
+  s += node(245, 446, 185, 96, 'embed.js', ['installeres på hver side', 'åbner WebSocket', 'afspiller lyd + popups']);
+  // voice app container
+  s += '<rect x="470" y="424" width="545" height="150" rx="14" fill="#fff" stroke="' + INK + '" stroke-width="1.8"/>';
+  s += lbl(488, 449, 'Voice-app  ·  Express (Node ESM) på Railway', { color: INK, weight: 700, size: 13 });
+  s += chip(488, 466, 150, 70, 'STT', 'Deepgram', BLUE);
+  s += chip(672, 466, 168, 70, 'LLM', 'Claude · persona', GREEN);
+  s += chip(874, 466, 124, 70, 'TTS', 'Cartesia', ORANGE);
+  s += ar(638, 501, 672, 501);
+  s += ar(840, 501, 874, 501);
+  s += lbl(488, 562, 'Tools: naviger · konverter · search_catalog · highlight_product …', { color: MUTE, size: 11 });
+  s += node(1055, 446, 213, 96, 'Anthropic API', ['Claude Opus / Haiku', 'LLM-svar + ugentlige', 'insights + brand-ingest'], { dash: true });
+  // runtime arrows
+  s += ar(205, 494, 243, 494);
+  s += ar(430, 494, 468, 494);
+  s += lbl(437, 486, 'WebSocket', { size: 10 });
+  s += ar(1015, 500, 1053, 500, { dash: true });
+  s += ar(1053, 514, 1015, 514, { dash: true, color: MUTE });
+  s += ar(720, 574, 337, 546, { q: [510, 598], color: MUTE, dash: true });
+  s += lbl(345, 614, 'syntetiseret tale  →  retur til besøgende', { color: MUTE, size: 10.5 });
+  s += lbl(648, 636, '↕  voice-app læser/skriver tenant-config · conversations · usage i Postgres (prod ELLER staging alt efter miljø)', { color: MUTE, size: 11, anchor: 'middle' });
+
+  /* ── BAND 3: BACK-OFFICE ── */
+  s += band(658, '3 — BACK-OFFICE &amp; SØSTER-APPS   ·   samme Railway-projekt «divine-passion»');
+  s += node(40, 706, 235, 120, 'Admin-Dashboard', ['egen Railway-service', 'LÆSER prod-Postgres (read-only)', 'traffic · CRM · unit-economics', '◀ denne side bor her'], { accent: BLUE });
+  s += node(300, 706, 180, 120, 'Resend', ['e-mail via HTTPS-API', 'verifikation · kvitteringer', 'affiliate-mails', '(SMTP blokeret på Railway)'], { dash: true });
+  s += node(505, 706, 180, 120, 'Stripe', ['abonnement + billing', 'affiliate-payouts', 'webhooks → skriver DB', ''], { dash: true });
+  s += node(710, 706, 300, 120, 'Søster-apps', ['delt Postgres-8oHy · egne repos:', 'Ejendoms Scout — bolig-scraper', 'Kalender — opgavestyring', 'Dashborad — IT-sikkerhed'], { fill: CREAM });
+  s += node(1035, 706, 233, 120, 'Fælles for alt', ['hostes på Railway', 'auto-deploy ved git push', 'til main / staging', 'node-cron til baggrundsjobs'], { fill: '#fff' });
+
+  s += '</svg>';
+
+  var legend = '<div class="arch-legend">'
+    + '<span><i style="background:' + GREEN + '"></i>Production (main)</span>'
+    + '<span><i style="background:' + ORANGE + '"></i>Staging</span>'
+    + '<span><i style="background:' + BLUE + '"></i>Intern service</span>'
+    + '<span><i class="dash"></i>Ekstern udbyder</span>'
+    + '<span><i style="background:' + CREAM + ';border:1px solid ' + BORDER + '"></i>Database</span>'
+    + '</div>';
+
+  var steps = '<div class="arch-steps"><div class="arch-steps-title">Sådan hænger det sammen</div><ol>'
+    + '<li><b>Én kodebase</b> i GitHub deployer to steder: <b>staging</b>-branchen → test-server + test-database, og <b>main</b>-branchen → den live kundeløsning. Railway bygger automatisk ved hvert <code>git push</code>.</li>'
+    + '<li><b>Nyt bygges altid på staging først.</b> Når de automatiske E2E-tests er grønne, merges staging → main, og prod opdateres af sig selv. Staging og prod har <b>hver sin database</b>, så test-trafik aldrig blandes med rigtige kunder.</li>'
+    + '<li><b>Live svarer agenten</b> via en lille <code>embed.js</code> på kundens side: besøgendes tale → Deepgram (STT) → Claude (hjernen, styret af persona-prompten) → Cartesia (TTS) → tale tilbage. Alt læses/skrives i den database miljøet peger på.</li>'
+    + '<li><b>Back-office</b> (dette Admin-Dashboard, Stripe, Resend) og søster-apps kører som separate services i samme Railway-projekt — Admin-Dashboard læser prod-databasen read-only.</li>'
+    + '</ol></div>';
+
+  return '<div class="ds-section">'
+    + '<h3 class="section-title" style="font-size:22px;margin-bottom:6px">System-arkitektur</h3>'
+    + '<p style="font-size:13px;color:var(--muted);margin:0 0 16px">Hele October AI på ét billede — kildekode, deploy, live-pipeline og hvor staging passer ind.</p>'
+    + legend
+    + '<div class="arch-wrap">' + s + '</div>'
+    + steps
+    + '</div>';
+}
+
 function loadDefaultSystem() {
   var c = document.getElementById('page-default-system');
   var d = PROD_DEFAULTS;
@@ -2582,6 +2713,9 @@ function loadDefaultSystem() {
   var html = '<div class="page-label">AGENT BUILDER</div>'
     + '<h1 class="page-heading">Default System</h1>'
     + '<p class="page-sub">Current production settings across all customer agents.</p>';
+
+  // ── System architecture (graphical overview) ──
+  html += buildArchitectureSVG();
 
   // ── LLM ──
   html += '<div class="ds-section">'
