@@ -55,6 +55,10 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 12c0-5.52-4.48-10-10-10S2 6.48 2 12s4.48 10 10 10 10-4.48 10-10z"/><path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
     <span>Meta Landing Page</span>
   </a>
+  <a class="sidebar-link" data-page="email-marketing">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7l9 6 9-6"/><rect x="3" y="5" width="18" height="14" rx="2"/></svg>
+    <span>E-mail Marketing</span>
+  </a>
   <a class="sidebar-link" data-page="voice-telemetry">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2v6m0 0a3 3 0 100 6 3 3 0 000-6zm0 6v8m-6-4h12"/></svg>
     <span>Voice Telemetry</span>
@@ -279,6 +283,56 @@
 
     <h2>Recent events</h2>
     <div id="metaLpRecent"></div>
+  </div>
+
+  <!-- ═══ E-MAIL MARKETING (2026-06-04) ═══
+       Early-access list captured by the 10s popup on the marketing site.
+       Reads email_captures (migration v77) from the shared Postgres. -->
+  <div class="page-container" id="page-email-marketing">
+    <style>
+      #page-email-marketing{padding:32px}
+      #page-email-marketing h1{font-family:var(--serif);font-size:32px;font-weight:400;margin:0 0 6px}
+      #page-email-marketing .em-sub{color:var(--muted);font-size:14px;margin:0 0 24px}
+      #page-email-marketing .em-header{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px;margin-bottom:20px}
+      #page-email-marketing select{padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--white);font-size:13px;font-family:inherit}
+      #page-email-marketing .em-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:28px}
+      #page-email-marketing .em-card{background:var(--white);border:1px solid var(--border);border-radius:10px;padding:16px 18px}
+      #page-email-marketing .em-card-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:600;margin-bottom:8px}
+      #page-email-marketing .em-card-value{font-family:var(--serif);font-size:32px;font-weight:300;line-height:1;color:var(--black)}
+      #page-email-marketing .em-card-sub{font-size:12px;color:var(--muted);margin-top:5px}
+      #page-email-marketing h2{font-family:var(--serif);font-size:22px;font-weight:400;margin:28px 0 12px}
+      #page-email-marketing table{width:100%;border-collapse:collapse;background:var(--white);border:1px solid var(--border);border-radius:10px;overflow:hidden;font-size:13px}
+      #page-email-marketing th{text-align:left;padding:10px 14px;background:#fafafa;color:var(--muted);font-weight:600;font-size:11px;letter-spacing:0.05em;text-transform:uppercase;border-bottom:1px solid var(--border)}
+      #page-email-marketing td{padding:10px 14px;border-bottom:1px solid #f5f5f5}
+      #page-email-marketing .em-badge{display:inline-block;padding:2px 8px;border-radius:980px;font-size:11px;font-weight:600}
+      #page-email-marketing .em-badge.sub{background:rgba(22,163,74,0.12);color:#16a34a}
+      #page-email-marketing .em-badge.unsub{background:rgba(0,0,0,0.10);color:#555}
+      #page-email-marketing .em-empty{padding:40px;text-align:center;color:var(--muted);font-size:14px}
+      #page-email-marketing .em-bar-row{display:flex;align-items:center;gap:10px;margin-bottom:6px;font-size:13px}
+      #page-email-marketing .em-bar-row .em-bar-key{flex:0 0 160px;color:var(--black)}
+      #page-email-marketing .em-bar-row .em-bar-track{flex:1;background:#f3f0eb;border-radius:4px;height:6px;overflow:hidden}
+      #page-email-marketing .em-bar-row .em-bar-fill{background:var(--accent-warm,#C4883C);height:100%}
+      #page-email-marketing .em-bar-row .em-bar-n{flex:0 0 40px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+    </style>
+
+    <div class="em-header">
+      <div>
+        <h1>E-mail Marketing</h1>
+        <p class="em-sub">Early-access list — emails captured by the 10-second popup on the marketing site. Joiners get the "be first to new features" welcome.</p>
+      </div>
+      <select id="emDays" onchange="loadEmailMarketing()">
+        <option value="7">Last 7 days</option>
+        <option value="30" selected>Last 30 days</option>
+        <option value="90">Last 90 days</option>
+        <option value="365">Last 12 months</option>
+      </select>
+    </div>
+
+    <div class="em-cards" id="emCards"></div>
+    <h2>Top sources</h2>
+    <div id="emSources">Loading…</div>
+    <h2>Recent signups</h2>
+    <div id="emRecent">Loading…</div>
   </div>
 
   <!-- ═══ VOICE TELEMETRY (2026-05-12) ═══

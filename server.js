@@ -90,6 +90,12 @@ app.use('/api/monitoring', requireAuth, monitoringRoutes(pool));
 const trafficRoutes = require('./routes/traffic');
 app.use('/api/traffic', requireAuth, trafficRoutes(pool));
 
+/* E-mail Marketing — reads email_captures (migration v77 on -october-ai)
+   populated by the early-access popup. Powers the "E-mail Marketing"
+   sidebar page. Same shared Postgres. */
+const emailMarketingRoutes = require('./routes/emailMarketing');
+app.use('/api/email-marketing', requireAuth, emailMarketingRoutes(pool));
+
 /* 2026-05-24 — Internal CRM. Reads + writes crm_contacts / crm_emails /
    crm_templates (migration v67). Daily Gmail sync runs server-side via
    node-cron so contact freshness updates whether or not the founder's

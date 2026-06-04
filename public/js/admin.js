@@ -81,6 +81,7 @@ function loadPage(page) {
     case 'test-protocol': loadTestProtocol(); break;
     case 'client-portal': window.open('/client/demo/agent', '_blank'); break;
     case 'meta-lp': loadMetaLp(); break;
+    case 'email-marketing': loadEmailMarketing(); break;
     case 'voice-telemetry': loadVoiceTelemetry(); break;
     case 'affiliate-bonuses': loadAffiliateBonuses(); break;
     case 'canary': loadCanary(); break;
@@ -1583,6 +1584,89 @@ function loadMetaLp() {
       + (sub ? '<div class="lp-card-sub">' + esc(sub) + '</div>' : '')
       + '</div>';
   }
+}
+
+/* ═══════════════════════════════════════════════
+   E-MAIL MARKETING (2026-06-04)
+   Early-access list captured by the 10s popup on the marketing site.
+   Reads /api/email-marketing/stats (email_captures, migration v77).
+   ═══════════════════════════════════════════════ */
+function loadEmailMarketing() {
+  var daysEl = document.getElementById('emDays');
+  var days = (daysEl && daysEl.value) || 30;
+  var cardsEl = document.getElementById('emCards');
+  var sourcesEl = document.getElementById('emSources');
+  var recentEl = document.getElementById('emRecent');
+  if (!cardsEl) return;
+
+  cardsEl.innerHTML = '';
+  if (sourcesEl) sourcesEl.innerHTML = 'Loading…';
+  if (recentEl) recentEl.innerHTML = 'Loading…';
+
+  function card(label, val, sub) {
+    return '<div class="em-card">'
+      + '<div class="em-card-label">' + esc(label) + '</div>'
+      + '<div class="em-card-value">' + (val != null ? val : '—') + '</div>'
+      + (sub ? '<div class="em-card-sub">' + esc(sub) + '</div>' : '')
+      + '</div>';
+  }
+
+  api('/api/email-marketing/stats?days=' + days).then(function(d) {
+    if (!d || d.error) {
+      cardsEl.innerHTML = '<div class="em-empty">Error: ' + esc((d && d.error) || 'failed to load') + '</div>';
+      if (sourcesEl) sourcesEl.innerHTML = '';
+      if (recentEl) recentEl.innerHTML = '';
+      return;
+    }
+    var t = d.totals || {};
+    cardsEl.innerHTML =
+      card('Total subscribers', fmtNum(t.subscribed), (t.unsubscribed > 0 ? fmtNum(t.unsubscribed) + ' unsubscribed' : 'all-time')) +
+      card('Last ' + d.range_days + ' days', fmtNum(t.in_range), '') +
+      card('Last 7 days', fmtNum(t.last_7d), '') +
+      card('Today', fmtNum(t.today), '');
+
+    // Sources
+    var sources = d.sources || [];
+    if (!sources.length) {
+      if (sourcesEl) sourcesEl.innerHTML = '<div class="em-empty">No signups in this range.</div>';
+    } else {
+      var max = sources.reduce(function(m, s) { return Math.max(m, s.n); }, 0) || 1;
+      var sh = '';
+      sources.forEach(function(s) {
+        var pct = Math.round((s.n / max) * 100);
+        sh += '<div class="em-bar-row">'
+          + '<div class="em-bar-key">' + esc(s.source || '(direct)') + '</div>'
+          + '<div class="em-bar-track"><div class="em-bar-fill" style="width:' + pct + '%"></div></div>'
+          + '<div class="em-bar-n">' + s.n + '</div>'
+          + '</div>';
+      });
+      if (sourcesEl) sourcesEl.innerHTML = sh;
+    }
+
+    // Recent
+    var recent = d.recent || [];
+    if (!recent.length) {
+      if (recentEl) recentEl.innerHTML = '<div class="em-empty">No signups yet. The popup shows after 10s on marketing pages.</div>';
+    } else {
+      var rh = '<table><thead><tr><th>Email</th><th>Source</th><th>Page</th><th>Status</th><th style="text-align:right">When</th></tr></thead><tbody>';
+      recent.forEach(function(r) {
+        var badge = r.status === 'subscribed'
+          ? '<span class="em-badge sub">subscribed</span>'
+          : '<span class="em-badge unsub">' + esc(r.status || '—') + '</span>';
+        rh += '<tr>'
+          + '<td>' + esc(r.email) + '</td>'
+          + '<td>' + esc(r.source || '—') + '</td>'
+          + '<td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (r.page_path ? esc(r.page_path) : '—') + '</td>'
+          + '<td>' + badge + '</td>'
+          + '<td style="text-align:right;white-space:nowrap">' + new Date(r.created_at).toLocaleString() + '</td>'
+          + '</tr>';
+      });
+      rh += '</tbody></table>';
+      if (recentEl) recentEl.innerHTML = rh;
+    }
+  }).catch(function(err) {
+    cardsEl.innerHTML = '<div class="em-empty">Failed to load: ' + esc(err.message) + '</div>';
+  });
 }
 
 /* ── Escape HTML ── */
