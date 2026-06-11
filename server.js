@@ -171,11 +171,17 @@ app.get('/api/meta-lp/stats', requireAuth, async (req, res) => {
     const totals = await pool.query(`
       SELECT
         COUNT(*) FILTER (WHERE event_name = 'PageView')::int AS pageviews,
-        COUNT(*) FILTER (WHERE event_name = 'Lead' AND cta = 'primary_pricing')::int AS clicks_primary,
+        COUNT(*) FILTER (WHERE event_name = 'Lead' AND cta = 'primary_signup')::int AS clicks_primary,
         COUNT(*) FILTER (WHERE event_name = 'Lead' AND cta = 'secondary_free_trial')::int AS clicks_secondary,
         COUNT(*) FILTER (WHERE event_name = 'ViewContent')::int AS view_content,
         COUNT(*) FILTER (WHERE event_name = 'FAQ_Open')::int AS faq_opens,
-        COUNT(DISTINCT ip_hash) FILTER (WHERE event_name = 'PageView')::int AS unique_visitors
+        COUNT(DISTINCT ip_hash) FILTER (WHERE event_name = 'PageView')::int AS unique_visitors,
+        COUNT(*) FILTER (WHERE event_name = 'PricingView')::int AS pricing_views,
+        COUNT(*) FILTER (WHERE event_name = 'SignupView')::int AS signup_views,
+        COUNT(*) FILTER (WHERE event_name = 'CompleteRegistration')::int AS registrations,
+        COUNT(*) FILTER (WHERE event_name = 'InitiateCheckout')::int AS initiate_checkout,
+        COUNT(*) FILTER (WHERE event_name = 'Subscribe')::int AS subscribes,
+        COUNT(*) FILTER (WHERE event_name = 'StartTrial')::int AS start_trials
       FROM meta_lp_events
       WHERE created_at >= NOW() - ($1::int || ' days')::interval
     `, [range]);
@@ -183,8 +189,10 @@ app.get('/api/meta-lp/stats', requireAuth, async (req, res) => {
     const daily = await pool.query(`
       SELECT DATE_TRUNC('day', created_at) AS day,
              COUNT(*) FILTER (WHERE event_name = 'PageView')::int AS pageviews,
-             COUNT(*) FILTER (WHERE event_name = 'Lead' AND cta = 'primary_pricing')::int AS primary_clicks,
-             COUNT(*) FILTER (WHERE event_name = 'Lead' AND cta = 'secondary_free_trial')::int AS secondary_clicks
+             COUNT(*) FILTER (WHERE event_name = 'Lead' AND cta = 'primary_signup')::int AS primary_clicks,
+             COUNT(*) FILTER (WHERE event_name = 'SignupView')::int AS signup_views,
+             COUNT(*) FILTER (WHERE event_name = 'CompleteRegistration')::int AS registrations,
+             COUNT(*) FILTER (WHERE event_name = 'Subscribe')::int AS subscribes
       FROM meta_lp_events
       WHERE created_at >= NOW() - ($1::int || ' days')::interval
       GROUP BY day
@@ -192,10 +200,10 @@ app.get('/api/meta-lp/stats', requireAuth, async (req, res) => {
     `, [range]);
 
     const recent = await pool.query(`
-      SELECT id, created_at, event_name, cta, referrer, user_agent
+      SELECT id, created_at, event_name, cta, referrer, user_agent, url, payload
       FROM meta_lp_events
       ORDER BY created_at DESC
-      LIMIT 50
+      LIMIT 80
     `);
 
     const faqQuestions = await pool.query(`
@@ -214,9 +222,36 @@ app.get('/api/meta-lp/stats', requireAuth, async (req, res) => {
     const ctrPrimary = pv > 0 ? ((parseInt(t.clicks_primary || 0) / pv) * 100).toFixed(1) : '0.0';
     const ctrSecondary = pv > 0 ? ((parseInt(t.clicks_secondary || 0) / pv) * 100).toFixed(1) : '0.0';
 
+    /* Full customer-journey funnel — each step shows its own count, the
+       conversion rate from the previous step, and from the top (ad LP view).
+       Steps reflect the real path: ad LP → engage → CTA click → pricing →
+       signup page → account created → checkout → subscribed → agent live. */
+    const n = (k) => parseInt(t[k] || 0);
+    const funnelDef = [
+      { key: 'pageviews',        label: 'Landing page views' },
+      { key: 'view_content',     label: 'Engaged (5s+)' },
+      { key: 'clicks_primary',   label: 'Clicked "Start free"' },
+      { key: 'pricing_views',    label: 'Pricing page views' },
+      { key: 'signup_views',     label: 'Reached signup' },
+      { key: 'registrations',    label: 'Account created' },
+      { key: 'initiate_checkout',label: 'Started checkout' },
+      { key: 'subscribes',       label: 'Subscribed' },
+      { key: 'start_trials',     label: 'Agent live (onboarded)' }
+    ];
+    const top = pv || n(funnelDef[0].key) || 0;
+    let prev = null;
+    const funnel = funnelDef.map((s) => {
+      const c = n(s.key);
+      const fromTopPct = top > 0 ? ((c / top) * 100).toFixed(1) : '0.0';
+      const fromPrevPct = (prev != null && prev > 0) ? ((c / prev) * 100).toFixed(1) : null;
+      prev = c;
+      return { key: s.key, label: s.label, count: c, from_top_pct: fromTopPct, from_prev_pct: fromPrevPct };
+    });
+
     res.json({
       range_days: range,
       totals: { ...t, ctr_primary_pct: ctrPrimary, ctr_secondary_pct: ctrSecondary },
+      funnel,
       daily: daily.rows,
       recent: recent.rows,
       top_faqs: faqQuestions.rows

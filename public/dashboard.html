@@ -253,6 +253,17 @@
       #page-meta-lp .lp-link{color:var(--black);text-decoration:none;border-bottom:1px solid var(--border);padding-bottom:1px}
       #page-meta-lp .lp-link:hover{border-color:var(--black)}
       #page-meta-lp .lp-empty{padding:40px;text-align:center;color:var(--muted);background:var(--white);border:1px dashed var(--border);border-radius:8px}
+      #page-meta-lp .lp-funnel{display:flex;flex-direction:column;gap:8px;background:var(--white);border:1px solid var(--border);border-radius:10px;padding:18px;margin-bottom:32px}
+      #page-meta-lp .lp-fstep{display:flex;align-items:center;gap:14px}
+      #page-meta-lp .lp-fbar-wrap{flex:1;min-width:0}
+      #page-meta-lp .lp-frow{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px;gap:12px}
+      #page-meta-lp .lp-flabel{font-size:13px;color:var(--black);font-weight:500}
+      #page-meta-lp .lp-fmeta{font-size:12px;color:var(--muted);white-space:nowrap}
+      #page-meta-lp .lp-fcount{font-family:var(--serif);font-size:18px;color:var(--black);margin-right:8px}
+      #page-meta-lp .lp-fbar{height:10px;border-radius:6px;background:var(--cream-dark);overflow:hidden}
+      #page-meta-lp .lp-fbar > span{display:block;height:100%;border-radius:6px;background:linear-gradient(90deg,#1a1a1a,#4a4a4a);transition:width 0.4s ease}
+      #page-meta-lp .lp-fdrop{font-size:11px;color:#d97706;white-space:nowrap}
+      #page-meta-lp .lp-fdrop.good{color:#16a34a}
     </style>
 
     <div class="lp-header">
@@ -272,6 +283,11 @@
     </div>
 
     <div class="lp-cards" id="metaLpCards">
+      <!-- populated by JS -->
+    </div>
+
+    <h2>Customer journey funnel</h2>
+    <div class="lp-funnel" id="metaLpFunnel">
       <!-- populated by JS -->
     </div>
 

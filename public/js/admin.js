@@ -1494,6 +1494,7 @@ function loadMetaLp() {
 
   var statusEl = document.getElementById('metaLpStatus');
   var cardsEl = document.getElementById('metaLpCards');
+  var funnelEl = document.getElementById('metaLpFunnel');
   var dailyEl = document.getElementById('metaLpDaily');
   var faqsEl = document.getElementById('metaLpFaqs');
   var recentEl = document.getElementById('metaLpRecent');
@@ -1511,33 +1512,64 @@ function loadMetaLp() {
       var pv = parseInt(t.pageviews || 0);
       var uv = parseInt(t.unique_visitors || 0);
       var p1 = parseInt(t.clicks_primary || 0);
-      var p2 = parseInt(t.clicks_secondary || 0);
       var vc = parseInt(t.view_content || 0);
       var fq = parseInt(t.faq_opens || 0);
+      var reg = parseInt(t.registrations || 0);
+      var sub = parseInt(t.subscribes || 0);
 
       if (statusEl) {
-        statusEl.textContent = 'Last ' + d.range_days + ' days · ' + pv + ' pageviews · CTR ' + t.ctr_primary_pct + '% (paid) / ' + t.ctr_secondary_pct + '% (free)';
+        statusEl.textContent = 'Last ' + d.range_days + ' days · ' + pv + ' pageviews · '
+          + reg + ' accounts created · ' + sub + ' subscribed';
         statusEl.className = 'lp-status ' + (pv > 0 ? 'ok' : 'warn');
       }
 
       cardsEl.innerHTML =
-        cardHTML('Pageviews', pv, uv + ' unique visitors') +
+        cardHTML('Landing views', pv, uv + ' unique visitors') +
         cardHTML('Engaged (5s+)', vc, pv > 0 ? Math.round(vc/pv*100) + '% of visitors' : '') +
-        cardHTML('Clicks → /pricing', p1, t.ctr_primary_pct + '% CTR') +
-        cardHTML('Clicks → /start', p2, t.ctr_secondary_pct + '% CTR') +
-        cardHTML('FAQ opens', fq, '');
+        cardHTML('CTA clicks', p1, t.ctr_primary_pct + '% CTR → signup') +
+        cardHTML('Accounts created', reg, pv > 0 ? (pv > 0 ? (reg/pv*100).toFixed(1) : 0) + '% of views' : '') +
+        cardHTML('Subscribed', sub, reg > 0 ? Math.round(sub/reg*100) + '% of accounts' : '');
+
+      // Customer-journey funnel
+      if (funnelEl) {
+        var fr = d.funnel || [];
+        if (fr.length === 0 || (fr[0] && !fr[0].count)) {
+          funnelEl.innerHTML = '<div class="lp-empty">No funnel data in this range yet.</div>';
+        } else {
+          var topN = parseInt((fr[0] && fr[0].count) || 0) || 1;
+          funnelEl.innerHTML = fr.map(function(s){
+            var pct = Math.max(2, Math.round((parseInt(s.count||0) / topN) * 100));
+            var drop = '';
+            if (s.from_prev_pct != null) {
+              var pp = parseFloat(s.from_prev_pct);
+              drop = '<span class="lp-fdrop ' + (pp >= 50 ? 'good' : '') + '">' + s.from_prev_pct + '% of prev</span>';
+            }
+            return '<div class="lp-fstep">'
+              + '<div class="lp-fbar-wrap">'
+              +   '<div class="lp-frow">'
+              +     '<span class="lp-flabel"><span class="lp-fcount">' + (s.count||0) + '</span>' + esc(s.label) + '</span>'
+              +     '<span class="lp-fmeta">' + s.from_top_pct + '% of views' + (drop ? ' · ' : '') + drop + '</span>'
+              +   '</div>'
+              +   '<div class="lp-fbar"><span style="width:' + pct + '%"></span></div>'
+              + '</div>'
+              + '</div>';
+          }).join('');
+        }
+      }
 
       // Daily table
       if ((d.daily || []).length === 0) {
         dailyEl.innerHTML = '<div class="lp-empty">No traffic in this range.</div>';
       } else {
-        var dh = '<table><thead><tr><th>Day</th><th style="text-align:right">Views</th><th style="text-align:right">→ Pricing</th><th style="text-align:right">→ Free trial</th></tr></thead><tbody>';
+        var dh = '<table><thead><tr><th>Day</th><th style="text-align:right">Views</th><th style="text-align:right">CTA</th><th style="text-align:right">Signup</th><th style="text-align:right">Accounts</th><th style="text-align:right">Subscribed</th></tr></thead><tbody>';
         d.daily.forEach(function(row){
           dh += '<tr>'
             + '<td>' + fmtDateShort(row.day) + '</td>'
             + '<td style="text-align:right">' + (row.pageviews || 0) + '</td>'
             + '<td style="text-align:right">' + (row.primary_clicks || 0) + '</td>'
-            + '<td style="text-align:right">' + (row.secondary_clicks || 0) + '</td>'
+            + '<td style="text-align:right">' + (row.signup_views || 0) + '</td>'
+            + '<td style="text-align:right">' + (row.registrations || 0) + '</td>'
+            + '<td style="text-align:right">' + (row.subscribes || 0) + '</td>'
             + '</tr>';
         });
         dh += '</tbody></table>';
@@ -1560,13 +1592,28 @@ function loadMetaLp() {
       if ((d.recent || []).length === 0) {
         recentEl.innerHTML = '<div class="lp-empty">No events recorded yet.</div>';
       } else {
-        var rh = '<table><thead><tr><th>Time</th><th>Event</th><th>CTA</th><th>Referrer</th></tr></thead><tbody>';
+        var rh = '<table><thead><tr><th>Time</th><th>Event</th><th>CTA</th><th>Details</th><th>Referrer</th></tr></thead><tbody>';
         d.recent.forEach(function(e){
+          var det = '';
+          var p = e.payload;
+          if (p && typeof p === 'string') { try { p = JSON.parse(p); } catch(_){ p = null; } }
+          if (p && typeof p === 'object') {
+            var parts = [];
+            ['value','currency','qty','checkout','directPay','pay','status','tenant','question'].forEach(function(k){
+              if (p[k] !== undefined && p[k] !== null && p[k] !== '' && k !== 'cta') {
+                var v = p[k];
+                if (typeof v === 'boolean') v = v ? 'yes' : 'no';
+                parts.push(k + '=' + String(v).slice(0,40));
+              }
+            });
+            det = parts.join(' · ');
+          }
           rh += '<tr>'
-            + '<td>' + new Date(e.created_at).toLocaleString() + '</td>'
+            + '<td style="white-space:nowrap">' + new Date(e.created_at).toLocaleString() + '</td>'
             + '<td><span class="lp-badge">' + esc(e.event_name) + '</span></td>'
             + '<td>' + (e.cta ? esc(e.cta) : '—') + '</td>'
-            + '<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (e.referrer ? esc(e.referrer) : '—') + '</td>'
+            + '<td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)">' + (det ? esc(det) : '—') + '</td>'
+            + '<td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (e.referrer ? esc(e.referrer) : '—') + '</td>'
             + '</tr>';
         });
         rh += '</tbody></table>';
