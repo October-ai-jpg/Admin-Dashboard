@@ -2283,16 +2283,28 @@ function loadAffiliates() {
 
   api('/api/monitoring/affiliates').then(function(data) {
     var s = data.summary;
+    var list = data.affiliates || [];
+
+    /* Bank-connection status. `stripe_connected` is set true in the
+       app's /connect-return handler (details_submitted + transfers
+       capability active) and re-verified daily by
+       affiliatePayout.reverifyStripeConnections, so it's the
+       authoritative "ready to receive payouts" signal. A
+       stripe_account_id with stripe_connected=false means onboarding
+       was started but not finished. */
+    var connectedCount = list.filter(function(a) { return !!a.stripe_connected; }).length;
+
     var html = '<div class="page-label">AFFILIATES</div>'
       + '<h1 class="page-heading">Affiliate Partners</h1>'
-      + '<p class="page-sub">Performance and commission tracking.</p>'
+      + '<p class="page-sub">Performance, commission and payout-readiness tracking.</p>'
       + '<div class="kpi-grid">'
+      + kpiCard('Bank Connected', connectedCount + ' / ' + list.length)
       + kpiCard('Commission This Month', fmtMoney(s.this_month))
       + kpiCard('Total Paid Out', fmtMoney(s.total_paid))
       + kpiCard('Pending Commissions', fmtMoney(s.pending))
       + '</div>'
       + '<table class="data-table"><thead><tr>'
-      + '<th>Name</th><th>Email</th><th>Ref Code</th><th>Active Clients</th><th>Total Earned</th><th>Since</th>'
+      + '<th>Name</th><th>Email</th><th>Ref Code</th><th>Bank account</th><th>Active Clients</th><th>Total Earned</th><th>Since</th>'
       + '</tr></thead><tbody>';
 
     data.affiliates.forEach(function(a) {
@@ -2300,8 +2312,9 @@ function loadAffiliates() {
         + '<td>' + esc(a.name) + '</td>'
         + '<td>' + esc(a.email) + '</td>'
         + '<td><code>' + esc(a.ref_code) + '</code></td>'
+        + '<td>' + affiliateBankBadge(a) + '</td>'
         + '<td>' + (a.active_clients || 0) + '</td>'
-        + '<td>' + fmtMoney(a.total_earned) + '</td>'
+        + '<td>' + fmtMoney(a.total_commission != null ? a.total_commission : a.total_earned) + '</td>'
         + '<td>' + fmtDate(a.created_at) + '</td>'
         + '</tr>';
     });
@@ -2309,6 +2322,27 @@ function loadAffiliates() {
     html += '</tbody></table>';
     c.innerHTML = html;
   });
+}
+
+/* Renders a coloured pill for an affiliate's Stripe Connect / bank
+   payout status. Three states:
+     • Connected   — stripe_connected = true (payouts can be sent)
+     • Onboarding  — stripe_account_id exists but not yet connected
+     • Not connected — never started Stripe onboarding */
+function affiliateBankBadge(a) {
+  var bg, fg, label, dot;
+  if (a.stripe_connected) {
+    bg = '#E6F4EA'; fg = '#137333'; dot = '#137333'; label = 'Connected';
+  } else if (a.stripe_account_id) {
+    bg = '#FEF7E0'; fg = '#B06000'; dot = '#F29900'; label = 'Onboarding';
+  } else {
+    bg = '#F1F3F4'; fg = '#5F6368'; dot = '#9AA0A6'; label = 'Not connected';
+  }
+  return '<span style="display:inline-flex;align-items:center;gap:6px;'
+    + 'padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;'
+    + 'background:' + bg + ';color:' + fg + '">'
+    + '<span style="width:7px;height:7px;border-radius:50%;background:' + dot + '"></span>'
+    + label + '</span>';
 }
 
 /* ═══════════════════════════════════════════════
