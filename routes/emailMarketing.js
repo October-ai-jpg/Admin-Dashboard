@@ -64,5 +64,39 @@ module.exports = function(pool) {
     }
   });
 
+  /* GET /api/email-marketing/flows?days=N
+     Live send volume per email "kind" from the shared email_log table
+     (-october-ai services/email.js#_logEmailSend writes one row per send
+     attempt). The dashboard pairs this with a static catalogue of every
+     flow (name / audience / trigger) so the team gets a full overview of
+     which automated emails exist and how often each actually fires. */
+  router.get('/flows', async (req, res) => {
+    const days = rangeDays(req);
+    try {
+      const agg = await q(
+        `SELECT kind,
+                COUNT(*)::int                                                            AS total,
+                COUNT(*) FILTER (WHERE status = 'sent')::int                             AS sent,
+                COUNT(*) FILTER (WHERE status = 'failed')::int                           AS failed,
+                COUNT(*) FILTER (WHERE sent_at >= NOW() - ($1::int || ' days')::interval)::int AS in_range,
+                MAX(sent_at)                                                             AS last_sent
+           FROM email_log
+          GROUP BY kind`,
+        [days]
+      );
+      const flows = {};
+      (agg.rows || []).forEach(function (r) {
+        flows[r.kind || '(none)'] = {
+          total: r.total, sent: r.sent, failed: r.failed,
+          in_range: r.in_range, last_sent: r.last_sent
+        };
+      });
+      res.json({ range_days: days, flows: flows });
+    } catch (e) {
+      console.error('[email-marketing/flows]', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   return router;
 };

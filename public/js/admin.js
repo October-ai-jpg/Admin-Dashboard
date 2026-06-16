@@ -1650,6 +1650,70 @@ function loadMetaLp() {
    Early-access list captured by the 10s popup on the marketing site.
    Reads /api/email-marketing/stats (email_captures, migration v77).
    ═══════════════════════════════════════════════ */
+/* Static catalogue of every automated email the system can send. Source of
+   truth is -october-ai services/email.js + the inline sends in server.js /
+   wsCapacity.js / quotaMonitor.js / tts.js / affiliatePayout.js. `kind`
+   matches the email_log discriminator so each row merges with live counts
+   from /api/email-marketing/flows. Keep in sync when a new mail is added. */
+var EMAIL_FLOWS = [
+  { cat:'Kunde – onboarding & livscyklus', kind:'verification',     name:'Email-verifikation',      aud:'Kunde',          trigger:'Sendes ved signup. Verificér-link, udløber efter 24 timer.' },
+  { cat:'Kunde – onboarding & livscyklus', kind:'welcome',          name:'Velkomst',                aud:'Kunde',          trigger:'Efter verifikation/signup. Onboarding + gratis måned (500 min).' },
+  { cat:'Kunde – onboarding & livscyklus', kind:'data_reminder',    name:'Data-påmindelse',         aud:'Kunde',          trigger:'Når agentens data-score er lav. Opfordrer til at tilføje data.' },
+  { cat:'Kunde – konto',                   kind:'password_reset',   name:'Nulstil adgangskode',     aud:'Kunde',          trigger:'Ved anmodning om nulstilling. Link udløber efter 1 time.' },
+  { cat:'Besøgende & leads',               kind:'booking_summary',  name:'Visningsopsummering',     aud:'Besøgende',      trigger:'Efter en tour-samtale. Opsummering sendes til den besøgende.' },
+  { cat:'Besøgende & leads',               kind:'lead_briefing',    name:'Ny lead-notifikation',    aud:'Agent-ejer',     trigger:'Når en besøgende konverterer. Ejeren får besked (kan slås fra).' },
+  { cat:'Marketing',                       kind:'marketing_capture',name:'Early-access velkomst',   aud:'Marketing-liste',trigger:'Når 10-sekunders popup fanger en email på marketing-sitet.' },
+  { cat:'Affiliate / partner',             kind:'affiliate_welcome', name:'Partner-velkomst',       aud:'Affiliate',      trigger:'Ved affiliate-signup. Partner-link + privat dashboard-token.' },
+  { cat:'Affiliate / partner',             kind:'affiliate_payout_failed', name:'Payout fejlede',    aud:'Affiliate',      trigger:'Når en udbetaling fejler 3×. Beder partner rette bank-setup.' },
+  { cat:'Affiliate / partner',             kind:'affiliate_payout', name:'Payout fejlede (alarm)',  aud:'Admin',          trigger:'Intern advarsel når en affiliate-udbetaling fejler.' },
+  { cat:'Bestillinger & kontakt',          kind:'contact_form',     name:'Kontaktformular',         aud:'Admin',          trigger:'Kontaktformular indsendt → videresendt til admin-indbakke.' },
+  { cat:'Bestillinger & kontakt',          kind:'virtual_tour_order', name:'Tour-bestilling',       aud:'Admin',          trigger:'“Bestil virtuel tour”-formular → admin-indbakke.' },
+  { cat:'Bestillinger & kontakt',          kind:'virtual_tour_order_ack', name:'Tour-bestilling (kvittering)', aud:'Bestiller', trigger:'Automatisk kvittering til den der bestiller en tour.' },
+  { cat:'System-alarmer (intern)',         kind:'capacity_warning', name:'Kapacitets-/burst-advarsel', aud:'Admin',       trigger:'Når en tenant får for mange sessioner i et kort vindue.' },
+  { cat:'System-alarmer (intern)',         kind:'quota_alert',      name:'API-kvote-advarsel',      aud:'Admin',          trigger:'Når en udbyder (Deepgram/Cartesia m.fl.) når 80%/95% af månedskvoten.' },
+  { cat:'System-alarmer (intern)',         kind:'tts_circuit',      name:'TTS circuit breaker',     aud:'Admin',          trigger:'Når Cartesia fejler gentagne gange → skifter til ElevenLabs backup.' },
+  { cat:'System-alarmer (intern)',         kind:'test',             name:'Testmail',                aud:'Admin',          trigger:'Manuel Resend-test fra admin.' }
+];
+
+function loadEmailFlows(days) {
+  var el = document.getElementById('emFlows');
+  if (!el) return;
+  el.innerHTML = 'Loading…';
+  api('/api/email-marketing/flows?days=' + days).then(function (d) {
+    var live = (d && d.flows) || {};
+    var cats = [];
+    EMAIL_FLOWS.forEach(function (f) { if (cats.indexOf(f.cat) === -1) cats.push(f.cat); });
+    var html = '';
+    cats.forEach(function (cat) {
+      html += '<div class="em-flow-group"><h3>' + esc(cat) + '</h3>'
+        + '<table class="em-flow-table"><thead><tr>'
+        + '<th>Flow</th><th>Modtager</th><th>Trigger</th>'
+        + '<th class="em-num">Sendt (' + esc(String(d.range_days || days)) + 'd)</th>'
+        + '<th class="em-num">I alt</th><th class="em-num">Fejlet</th>'
+        + '<th class="em-num">Sidst sendt</th></tr></thead><tbody>';
+      EMAIL_FLOWS.filter(function (f) { return f.cat === cat; }).forEach(function (f) {
+        var s = live[f.kind] || { total: 0, sent: 0, failed: 0, in_range: 0, last_sent: null };
+        var everSent = (s.total || 0) > 0;
+        html += '<tr>'
+          + '<td><span class="em-dot ' + (everSent ? 'on' : 'off') + '"></span>'
+            + '<span class="em-flow-name">' + esc(f.name) + '</span>'
+            + '<span class="em-flow-kind">' + esc(f.kind) + '</span></td>'
+          + '<td><span class="em-aud">' + esc(f.aud) + '</span></td>'
+          + '<td class="em-flow-trigger">' + esc(f.trigger) + '</td>'
+          + '<td class="em-num' + (s.in_range ? '' : ' zero') + '">' + fmtNum(s.in_range) + '</td>'
+          + '<td class="em-num' + (s.total ? '' : ' zero') + '">' + fmtNum(s.total) + '</td>'
+          + '<td class="em-num' + (s.failed ? ' fail' : ' zero') + '">' + fmtNum(s.failed) + '</td>'
+          + '<td class="em-num">' + (s.last_sent ? fmtDateShort(s.last_sent) : '—') + '</td>'
+          + '</tr>';
+      });
+      html += '</tbody></table></div>';
+    });
+    el.innerHTML = html;
+  }).catch(function (err) {
+    el.innerHTML = '<div class="em-empty">Kunne ikke hente flows: ' + esc(err.message) + '</div>';
+  });
+}
+
 function loadEmailMarketing() {
   var daysEl = document.getElementById('emDays');
   var days = (daysEl && daysEl.value) || 30;
@@ -1657,6 +1721,8 @@ function loadEmailMarketing() {
   var sourcesEl = document.getElementById('emSources');
   var recentEl = document.getElementById('emRecent');
   if (!cardsEl) return;
+
+  loadEmailFlows(days);
 
   cardsEl.innerHTML = '';
   if (sourcesEl) sourcesEl.innerHTML = 'Loading…';

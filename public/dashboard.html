@@ -335,6 +335,20 @@
       #page-email-marketing .em-bar-row .em-bar-track{flex:1;background:#f3f0eb;border-radius:4px;height:6px;overflow:hidden}
       #page-email-marketing .em-bar-row .em-bar-fill{background:var(--accent-warm,#C4883C);height:100%}
       #page-email-marketing .em-bar-row .em-bar-n{flex:0 0 40px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+      /* Email-flows overview */
+      #page-email-marketing .em-flow-group{margin:0 0 26px}
+      #page-email-marketing .em-flow-group h3{font-size:12px;letter-spacing:0.06em;text-transform:uppercase;color:var(--muted);font-weight:700;margin:0 0 8px}
+      #page-email-marketing .em-flow-table td{vertical-align:top}
+      #page-email-marketing .em-flow-name{font-weight:600;color:var(--black)}
+      #page-email-marketing .em-flow-kind{display:block;font-size:11px;font-family:Menlo,monospace;color:var(--muted);margin-top:2px}
+      #page-email-marketing .em-flow-trigger{color:#555;font-size:12.5px;line-height:1.45}
+      #page-email-marketing .em-aud{display:inline-block;padding:2px 9px;border-radius:980px;font-size:11px;font-weight:600;background:#f3f0eb;color:#555;white-space:nowrap}
+      #page-email-marketing .em-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+      #page-email-marketing .em-num.zero{color:#bbb}
+      #page-email-marketing .em-num.fail{color:#b91c1c;font-weight:600}
+      #page-email-marketing .em-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:middle}
+      #page-email-marketing .em-dot.on{background:#16a34a}
+      #page-email-marketing .em-dot.off{background:#d0ccc4}
     </style>
 
     <div class="em-header">
@@ -350,10 +364,15 @@
       </select>
     </div>
 
+    <h2>Email flows i systemet</h2>
+    <p class="em-sub" style="margin-top:-6px">Alle automatiske mails systemet kan sende, grupperet efter modtager. Tal viser faktisk afsendelse i valgte periode (fra email_log). Grøn prik = har sendt mindst én gang.</p>
+    <div id="emFlows">Loading…</div>
+
+    <h2>Early-access list</h2>
     <div class="em-cards" id="emCards"></div>
-    <h2>Top sources</h2>
+    <h3 style="font-family:var(--serif);font-size:18px;font-weight:400;margin:18px 0 10px">Top sources</h3>
     <div id="emSources">Loading…</div>
-    <h2>Recent signups</h2>
+    <h3 style="font-family:var(--serif);font-size:18px;font-weight:400;margin:18px 0 10px">Recent signups</h3>
     <div id="emRecent">Loading…</div>
   </div>
 
