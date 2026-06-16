@@ -1676,5 +1676,55 @@ module.exports = function(pool) {
     });
   });
 
+  /* ═══════════════════════════════════════
+     DELETE affiliates — hard wipe by id.
+     Mirrors users/delete: explicit UUID list,
+     protects kontakt@eb-media.dk. Clears the
+     FK chain (users.affiliate_ref → NULL, then
+     commissions / bonuses / clawbacks) before
+     removing the affiliate row.
+     ═══════════════════════════════════════ */
+  router.post('/affiliates/delete', async (req, res) => {
+    if (!pool) return res.status(503).json({ error: 'DB not connected' });
+    const ids = Array.isArray(req.body && req.body.affiliateIds) ? req.body.affiliateIds : null;
+    if (!ids || ids.length === 0) return res.status(400).json({ error: 'affiliateIds[] required' });
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!ids.every(function(i) { return typeof i === 'string' && UUID.test(i); })) {
+      return res.status(400).json({ error: 'affiliateIds must be valid UUIDs' });
+    }
+
+    const rowsRes = await query('SELECT id, email, ref_code FROM affiliates WHERE id = ANY($1)', [ids]);
+    const rows = rowsRes.rows || [];
+    const PROTECTED = new Set(['kontakt@eb-media.dk']);
+    const blocked = rows.filter(function(r) { return PROTECTED.has(r.email); });
+    if (blocked.length) {
+      return res.status(403).json({
+        error: 'Refusing to delete protected affiliate(s)',
+        protected: blocked.map(function(r) { return r.email; })
+      });
+    }
+
+    const deleted = [];
+    for (const r of rows) {
+      const ref = r.ref_code;
+      try {
+        await pool.query('UPDATE users SET affiliate_ref = NULL WHERE affiliate_ref = $1', [ref]);
+        await pool.query('DELETE FROM affiliate_commissions WHERE affiliate_ref = $1', [ref]);
+        await pool.query('DELETE FROM affiliate_bonuses WHERE affiliate_ref = $1', [ref]).catch(function() {});
+        await pool.query('DELETE FROM commission_clawbacks WHERE affiliate_ref = $1', [ref]).catch(function() {});
+        await pool.query('DELETE FROM affiliates WHERE id = $1', [r.id]);
+        deleted.push({ id: r.id, email: r.email, ref_code: ref });
+      } catch (e) {
+        return res.status(500).json({ error: 'Failed on ' + r.email + ': ' + e.message, deleted: deleted });
+      }
+    }
+    res.json({
+      ok: true,
+      deleted: deleted,
+      requested: ids.length,
+      notFound: ids.filter(function(i) { return !rows.some(function(r) { return r.id === i; }); })
+    });
+  });
+
   return router;
 };
