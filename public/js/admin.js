@@ -85,6 +85,7 @@ function loadPage(page) {
     case 'voice-telemetry': loadVoiceTelemetry(); break;
     case 'affiliate-bonuses': loadAffiliateBonuses(); break;
     case 'canary': loadCanary(); break;
+    case 'audit': loadAudit(); break;
     case 'live-sessions': loadLiveSessions(); break;
     case 'traffic': loadTraffic(); break;
     case 'quiz': loadQuiz(); break;
@@ -1134,6 +1135,128 @@ function loadCanary() {
   });
 }
 
+/* ── System Audit (2026-06-16) ──
+   Renders the latest watchdog run grouped by env/suite with PASS/WARN/FAIL
+   badges + a 30-day pass-rate per check, plus a run-history table and a
+   "Kør audit nu" button that triggers a fresh run on demand. Reads
+   /api/system-audit/latest + /runs; POSTs /run. */
+function auFmtTime(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('en-GB', { hour12: false }).replace(/,/g, '');
+}
+function auRunVerdict(passed, warned, failed) {
+  if (failed > 0) return { cls: 'red', label: failed + ' FAIL' };
+  if (warned > 0) return { cls: 'yellow', label: 'WARN' };
+  return { cls: 'green', label: 'PASS' };
+}
+
+function loadAudit() {
+  var checksEl = document.getElementById('auChecks');
+  var cardsEl = document.getElementById('auCards');
+  var metaEl = document.getElementById('auRunMeta');
+  if (checksEl) checksEl.innerHTML = '<p class="au-empty">Loading…</p>';
+
+  api('/api/system-audit/latest').then(function (d) {
+    var checks = d.checks || [];
+    var rates = d.rates || {};
+    if (!d.run || !checks.length) {
+      if (cardsEl) cardsEl.innerHTML = '';
+      if (metaEl) metaEl.textContent = '';
+      if (checksEl) checksEl.innerHTML = '<p class="au-empty">Ingen audit kørt endnu. Watchdog kører ~30s efter boot + 3× dagligt — eller tryk “Kør audit nu”.</p>';
+      return;
+    }
+    var pass = 0, warn = 0, fail = 0;
+    checks.forEach(function (c) {
+      if (c.status === 'PASS') pass++; else if (c.status === 'WARN') warn++; else if (c.status === 'FAIL') fail++;
+    });
+    var verdict = auRunVerdict(pass, warn, fail);
+    if (cardsEl) {
+      cardsEl.innerHTML =
+        '<div class="au-card"><div class="au-card-label">Samlet status</div><div class="au-card-value ' + verdict.cls + '">' + (fail > 0 ? '✗' : warn > 0 ? '!' : '✓') + '</div><div class="au-card-sub">' + verdict.label + '</div></div>' +
+        '<div class="au-card"><div class="au-card-label">Pass</div><div class="au-card-value green">' + pass + '</div><div class="au-card-sub">checks bestået</div></div>' +
+        '<div class="au-card"><div class="au-card-label">Warn</div><div class="au-card-value ' + (warn ? 'yellow' : '') + '">' + warn + '</div><div class="au-card-sub">advarsler</div></div>' +
+        '<div class="au-card"><div class="au-card-label">Fail</div><div class="au-card-value ' + (fail ? 'red' : '') + '">' + fail + '</div><div class="au-card-sub">fejlede checks</div></div>';
+    }
+    if (metaEl) metaEl.textContent = 'Seneste run: ' + auFmtTime(d.run.ran_at) + ' · run-id ' + String(d.run.run_id).slice(0, 8);
+
+    // group by env|suite
+    var groups = [];
+    var byGroup = {};
+    checks.forEach(function (c) {
+      var g = (c.env || '?') + '|' + (c.suite || '?');
+      if (!byGroup[g]) { byGroup[g] = []; groups.push(g); }
+      byGroup[g].push(c);
+    });
+    var html = '';
+    groups.forEach(function (g) {
+      var parts = g.split('|');
+      html += '<div class="au-group"><h3>' + esc(parts[0]) + ' · ' + esc(parts[1]) + '</h3>' +
+        '<table><thead><tr><th>Check</th><th>Status</th><th>Detalje</th><th>30d pass-rate</th><th class="au-dur">Tid</th></tr></thead><tbody>';
+      byGroup[g].forEach(function (c) {
+        var rk = (c.env || '') + '|' + (c.suite || '') + '|' + c.check_name;
+        var rate = rates[rk];
+        var rateTxt = '—';
+        if (rate && rate.total > 0) {
+          rateTxt = Math.round((rate.passed / rate.total) * 100) + '% (' + rate.passed + '/' + rate.total + ')';
+        }
+        html += '<tr>' +
+          '<td><span class="au-check">' + esc(c.check_name) + '</span></td>' +
+          '<td><span class="au-badge ' + esc(c.status) + '">' + esc(c.status) + '</span></td>' +
+          '<td class="au-detail">' + esc(c.detail || '') + '</td>' +
+          '<td class="au-rate">' + rateTxt + '</td>' +
+          '<td class="au-dur">' + (c.duration_ms != null ? c.duration_ms + 'ms' : '—') + '</td>' +
+          '</tr>';
+      });
+      html += '</tbody></table></div>';
+    });
+    if (checksEl) checksEl.innerHTML = html;
+  }).catch(function (e) {
+    if (checksEl) checksEl.innerHTML = '<p class="au-empty" style="color:#b91c1c">Kunne ikke hente audit: ' + esc(e.message) + '</p>';
+  });
+
+  api('/api/system-audit/runs?limit=30').then(function (d) {
+    var tbody = document.getElementById('auRunsBody');
+    if (!tbody) return;
+    var runs = d.runs || [];
+    if (!runs.length) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:30px">Ingen runs endnu</td></tr>';
+      return;
+    }
+    tbody.innerHTML = runs.map(function (r) {
+      var v = auRunVerdict(r.passed || 0, r.warned || 0, r.failed || 0);
+      return '<tr>' +
+        '<td>' + auFmtTime(r.ran_at) + '</td>' +
+        '<td><span class="au-badge ' + (v.cls === 'green' ? 'PASS' : v.cls === 'yellow' ? 'WARN' : 'FAIL') + '">' + v.label + '</span></td>' +
+        '<td>' + (r.passed || 0) + '</td>' +
+        '<td>' + (r.warned || 0) + '</td>' +
+        '<td>' + (r.failed || 0) + '</td>' +
+        '</tr>';
+    }).join('');
+  }).catch(function (e) {
+    var tbody = document.getElementById('auRunsBody');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="5" style="color:#b91c1c;padding:20px">Fejl: ' + esc(e.message) + '</td></tr>';
+  });
+}
+
+function runAuditNow() {
+  var btn = document.getElementById('auRunBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Kører audit…'; }
+  showToast('Audit startet — kan tage op til et par minutter', 'success');
+  api('/api/system-audit/run', { method: 'POST', body: JSON.stringify({}) }).then(function (d) {
+    if (d && d.ok && d.summary) {
+      var s = d.summary;
+      showToast('Audit færdig: ' + s.pass + ' pass · ' + s.warn + ' warn · ' + s.fail + ' fail', s.fail ? 'error' : 'success');
+    } else {
+      showToast('Audit fejlede: ' + ((d && d.error) || 'ukendt fejl'), 'error');
+    }
+  }).catch(function (e) {
+    showToast('Audit fejlede: ' + e.message, 'error');
+  }).then(function () {
+    if (btn) { btn.disabled = false; btn.textContent = 'Kør audit nu'; }
+    loadAudit();
+  });
+}
+
 /* ── Affiliate Bonuses (2026-05-13) ──
    Admin approval queue. Reads from eb-tour-agent's
    /api/admin/affiliate-bonuses/* endpoints. */
@@ -1672,6 +1795,7 @@ var EMAIL_FLOWS = [
   { cat:'System-alarmer (intern)',         kind:'capacity_warning', name:'Kapacitets-/burst-advarsel', aud:'Admin',       trigger:'Når en tenant får for mange sessioner i et kort vindue.' },
   { cat:'System-alarmer (intern)',         kind:'quota_alert',      name:'API-kvote-advarsel',      aud:'Admin',          trigger:'Når en udbyder (Deepgram/Cartesia m.fl.) når 80%/95% af månedskvoten.' },
   { cat:'System-alarmer (intern)',         kind:'tts_circuit',      name:'TTS circuit breaker',     aud:'Admin',          trigger:'Når Cartesia fejler gentagne gange → skifter til ElevenLabs backup.' },
+  { cat:'System-alarmer (intern)',         kind:'audit_alert',      name:'System-audit alarm',      aud:'Admin',          trigger:'Når watchdog-auditten finder en ny fejlende check (grøn→rød). Én mail pr. transition, ikke spam.' },
   { cat:'System-alarmer (intern)',         kind:'test',             name:'Testmail',                aud:'Admin',          trigger:'Manuel Resend-test fra admin.' }
 ];
 

@@ -71,6 +71,10 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
     <span>Browser Canary</span>
   </a>
+  <a class="sidebar-link" data-page="audit">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
+    <span>System Audit</span>
+  </a>
   <a class="sidebar-link" data-page="live-sessions">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3" fill="currentColor"/><path d="M12 5a7 7 0 017 7M12 2a10 10 0 0110 10"/></svg>
     <span>Live Sessions</span>
@@ -603,6 +607,69 @@
     <table>
       <thead><tr><th>Time</th><th>Browser</th><th>Viewport</th><th>Scenario</th><th>Status</th><th>Duration</th><th>Failure step</th></tr></thead>
       <tbody id="cnRecentBody"><tr><td colspan="7" style="text-align:center;color:var(--muted);padding:30px">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- ═══ SYSTEM AUDIT (2026-06-16) ═══
+       Independent watchdog. Admin-Dashboard runs an audit ~3× daily that
+       black-box tests EVERY critical branch of the platform — prod read-only
+       (health/keys/voice samples/config/embed/landing/voice greeting) +
+       staging destructive (signup→trial→verify→agent build→voice LLM turn,
+       self-cleaning). Backed by system_audits; alerts via email_log
+       kind='audit_alert' on any green→red transition. -->
+  <div class="page-container" id="page-audit">
+    <style>
+      #page-audit{padding:32px}
+      #page-audit h1{font-family:var(--serif);font-size:32px;font-weight:400;margin:0 0 6px}
+      #page-audit .au-sub{color:var(--muted);font-size:14px;margin-bottom:18px;max-width:780px;line-height:1.5}
+      #page-audit h2{font-family:var(--serif);font-size:22px;font-weight:400;margin:28px 0 12px}
+      #page-audit .au-header{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px}
+      #page-audit .au-run-btn{padding:9px 18px;border:1px solid var(--black);background:var(--black);color:#fff;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap}
+      #page-audit .au-run-btn:disabled{opacity:0.5;cursor:not-allowed}
+      #page-audit .au-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin:8px 0 8px}
+      #page-audit .au-card{background:#fff;border:1px solid var(--border);border-radius:10px;padding:16px 18px}
+      #page-audit .au-card-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:600;margin-bottom:8px}
+      #page-audit .au-card-value{font-family:var(--serif);font-size:32px;font-weight:300;line-height:1}
+      #page-audit .au-card-value.green{color:#16a34a}
+      #page-audit .au-card-value.yellow{color:#a16207}
+      #page-audit .au-card-value.red{color:#b91c1c}
+      #page-audit .au-card-sub{font-size:12px;color:var(--muted);margin-top:5px}
+      #page-audit .au-group{margin:0 0 22px}
+      #page-audit .au-group h3{font-size:12px;letter-spacing:0.06em;text-transform:uppercase;color:var(--muted);font-weight:700;margin:0 0 8px}
+      #page-audit table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--border);border-radius:10px;overflow:hidden;font-size:13px}
+      #page-audit th{text-align:left;padding:10px 14px;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;font-weight:600;color:var(--muted);background:#fafafa;border-bottom:1px solid var(--border)}
+      #page-audit td{padding:10px 14px;border-bottom:1px solid #f5f5f5;vertical-align:top}
+      #page-audit .au-check{font-weight:600;color:var(--black);font-family:Menlo,monospace;font-size:12px}
+      #page-audit .au-detail{color:#555;font-size:12.5px;line-height:1.45}
+      #page-audit .au-rate{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}
+      #page-audit .au-dur{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+      #page-audit .au-badge{display:inline-block;padding:3px 9px;border-radius:99px;font-size:11px;font-weight:600;letter-spacing:0.04em}
+      #page-audit .au-badge.PASS{background:#dcfce7;color:#166534}
+      #page-audit .au-badge.WARN{background:#fef9c3;color:#854d0e}
+      #page-audit .au-badge.FAIL{background:#fee2e2;color:#991b1b}
+      #page-audit .au-hist{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px}
+      #page-audit .au-hist-cell{width:22px;height:22px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff}
+      #page-audit .au-empty{padding:40px;text-align:center;color:var(--muted);font-size:14px}
+    </style>
+
+    <div class="au-header">
+      <div>
+        <h1>System Audit</h1>
+        <p class="au-sub">Uafhængig watchdog. Admin-Dashboard kører ~3× dagligt en audit der black-box-tester HVER kritisk afgrening: prod read-only (health, API-nøgler, alle 4 voice-samples, tour-config, embed, landing, voice-greeting) + staging destructive (signup → trial-sub → verify → agent-builder → fuld voice-LLM-tur, selv-oprydning). Resultater i system_audits. Ny grøn→rød fejl udløser én alarm-mail (email_log kind='audit_alert').</p>
+      </div>
+      <button class="au-run-btn" id="auRunBtn" onclick="runAuditNow()">Kør audit nu</button>
+    </div>
+
+    <div class="au-cards" id="auCards"></div>
+    <p class="au-card-sub" id="auRunMeta" style="margin:0 0 8px"></p>
+
+    <h2>Seneste run — status pr. check</h2>
+    <div id="auChecks"><p class="au-empty">Loading…</p></div>
+
+    <h2>Historik</h2>
+    <table>
+      <thead><tr><th>Tidspunkt</th><th>Resultat</th><th>Pass</th><th>Warn</th><th>Fail</th></tr></thead>
+      <tbody id="auRunsBody"><tr><td colspan="5" style="text-align:center;color:var(--muted);padding:30px">Loading…</td></tr></tbody>
     </table>
   </div>
 

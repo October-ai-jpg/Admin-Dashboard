@@ -111,6 +111,14 @@ app.use('/api/crm', requireAuth, crmRoutes(pool));
 const linkedinRoutes = require('./routes/linkedin');
 app.use('/api/linkedin', requireAuth, linkedinRoutes(pool));
 
+/* 2026-06-16 — System Audit watchdog. Independent black-box auditor of the
+   October AI platform (prod read-only + staging destructive suites). Reads/
+   writes system_audits on the shared Postgres. Powers the "System Audit"
+   sidebar page; alerts on email_log kind='audit_alert'. The cron watchdog
+   itself is started further below (after the gmail block). */
+const systemAuditRoutes = require('./routes/systemAudit');
+app.use('/api/system-audit', requireAuth, systemAuditRoutes(pool));
+
 const gmailSync = require('./services/gmailSync');
 if (pool && process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
   /* Run 60s after boot + every 6h. Incremental syncs are cheap
@@ -140,6 +148,15 @@ if (pool && process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
   }, SYNC_INTERVAL_MS);
 } else {
   console.log('[crm] Gmail sync disabled (missing pool or GMAIL_USER/GMAIL_APP_PASSWORD)');
+}
+
+/* 2026-06-16 — Start the System Audit watchdog: ensures the system_audits
+   schema, runs once ~30s after boot, then on the AUDIT_CRON schedule
+   (default 3× daily). Needs the live Postgres pool; skipped without it. */
+if (pool) {
+  require('./services/systemAudit').startWatchdog(pool);
+} else {
+  console.log('[audit] watchdog disabled (no DB pool)');
 }
 
 /* ══════════════════════════════════════════
