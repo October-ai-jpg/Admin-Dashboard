@@ -1490,6 +1490,15 @@ function loadMetaLp() {
     range.addEventListener('change', loadMetaLp);
     range.__bound = true;
   }
+  /* 2026-06-16 — traffic-mode selector (real / all / test). Default
+     "real" hides automated test + bot traffic so the headline numbers
+     reflect actual visitors. */
+  var modeEl = document.getElementById('metaLpMode');
+  if (modeEl && !modeEl.__bound) {
+    modeEl.addEventListener('change', loadMetaLp);
+    modeEl.__bound = true;
+  }
+  var mode = (modeEl && modeEl.value) || 'real';
   var days = (range && range.value) || 30;
 
   var statusEl = document.getElementById('metaLpStatus');
@@ -1503,7 +1512,7 @@ function loadMetaLp() {
   if (statusEl) statusEl.textContent = 'Loading…';
   cardsEl.innerHTML = '';
 
-  fetch('/api/meta-lp/stats?days=' + days, { credentials: 'include' })
+  fetch('/api/meta-lp/stats?days=' + days + '&mode=' + encodeURIComponent(mode), { credentials: 'include' })
     .then(function(r){ return r.json(); })
     .then(function(d){
       if (d.error) { if (statusEl) statusEl.textContent = 'Error: ' + d.error; return; }
@@ -1518,7 +1527,10 @@ function loadMetaLp() {
       var sub = parseInt(t.subscribes || 0);
 
       if (statusEl) {
-        statusEl.textContent = 'Last ' + d.range_days + ' days · ' + pv + ' pageviews · '
+        var modeLabel = d.traffic_mode === 'test' ? 'Test/bots only'
+          : d.traffic_mode === 'all' ? 'All traffic (incl. test)'
+          : 'Real visitors';
+        statusEl.textContent = modeLabel + ' · last ' + d.range_days + ' days · ' + pv + ' pageviews · '
           + reg + ' accounts created · ' + sub + ' subscribed';
         statusEl.className = 'lp-status ' + (pv > 0 ? 'ok' : 'warn');
       }

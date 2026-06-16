@@ -168,6 +168,23 @@ app.get('/api/meta-lp/stats', requireAuth, async (req, res) => {
     const rangeRaw = parseInt(req.query.days || '30', 10);
     const range = (rangeRaw > 0 && rangeRaw <= 365) ? rangeRaw : 30;
 
+    /* 2026-06-16 — Traffic mode separates REAL visitors from automated /
+       internal test traffic. Backed by meta_lp_events.is_test (set at
+       write time in eb-tour-agent: explicit test flag OR bot/headless
+       user-agent). Modes:
+         real (default) → is_test = false AND UA is not bot-like
+         test           → is_test = true  OR  UA is bot-like
+         all            → no filter (real + test combined)
+       The bot-UA clause is a belt-and-suspenders read-time filter so
+       rows logged before v79 (is_test defaulting false) are still kept
+       out of "real" when their UA is obviously a bot. */
+    const mode = ['real', 'test', 'all'].includes(req.query.mode) ? req.query.mode : 'real';
+    const BOT_RE = "(user_agent ~* '(bot|crawl|spider|slurp|facebookexternalhit|preview|monitor|pingdom|uptimerobot|headlesschrome|phantomjs|puppeteer|playwright)')";
+    let trafficClause = '';
+    if (mode === 'real')      trafficClause = ` AND is_test = false AND NOT ${BOT_RE}`;
+    else if (mode === 'test') trafficClause = ` AND (is_test = true OR ${BOT_RE})`;
+    /* mode === 'all' → no clause */
+
     const totals = await pool.query(`
       SELECT
         COUNT(*) FILTER (WHERE event_name = 'PageView')::int AS pageviews,
@@ -179,11 +196,19 @@ app.get('/api/meta-lp/stats', requireAuth, async (req, res) => {
         COUNT(*) FILTER (WHERE event_name = 'PricingView')::int AS pricing_views,
         COUNT(*) FILTER (WHERE event_name = 'SignupView')::int AS signup_views,
         COUNT(*) FILTER (WHERE event_name = 'CompleteRegistration')::int AS registrations,
-        COUNT(*) FILTER (WHERE event_name = 'InitiateCheckout')::int AS initiate_checkout,
+        /* InitiateCheckout fires from BOTH /pricing and /signup, so the
+           raw count double-counts a single converter. Dedup to one
+           checkout-start per visitor per day (ip_hash + day). */
+        (SELECT COUNT(*)::int FROM (
+           SELECT DISTINCT ip_hash, DATE_TRUNC('day', created_at) AS d
+           FROM meta_lp_events
+           WHERE event_name = 'InitiateCheckout'
+             AND created_at >= NOW() - ($1::int || ' days')::interval${trafficClause}
+        ) ic) AS initiate_checkout,
         COUNT(*) FILTER (WHERE event_name = 'Subscribe')::int AS subscribes,
         COUNT(*) FILTER (WHERE event_name = 'StartTrial')::int AS start_trials
       FROM meta_lp_events
-      WHERE created_at >= NOW() - ($1::int || ' days')::interval
+      WHERE created_at >= NOW() - ($1::int || ' days')::interval${trafficClause}
     `, [range]);
 
     const daily = await pool.query(`
@@ -194,14 +219,15 @@ app.get('/api/meta-lp/stats', requireAuth, async (req, res) => {
              COUNT(*) FILTER (WHERE event_name = 'CompleteRegistration')::int AS registrations,
              COUNT(*) FILTER (WHERE event_name = 'Subscribe')::int AS subscribes
       FROM meta_lp_events
-      WHERE created_at >= NOW() - ($1::int || ' days')::interval
+      WHERE created_at >= NOW() - ($1::int || ' days')::interval${trafficClause}
       GROUP BY day
       ORDER BY day DESC
     `, [range]);
 
     const recent = await pool.query(`
-      SELECT id, created_at, event_name, cta, referrer, user_agent, url, payload
+      SELECT id, created_at, event_name, cta, referrer, user_agent, url, payload, is_test
       FROM meta_lp_events
+      WHERE TRUE${trafficClause}
       ORDER BY created_at DESC
       LIMIT 80
     `);
@@ -210,7 +236,7 @@ app.get('/api/meta-lp/stats', requireAuth, async (req, res) => {
       SELECT payload->>'question' AS question, COUNT(*)::int AS opens
       FROM meta_lp_events
       WHERE event_name = 'FAQ_Open'
-        AND created_at >= NOW() - ($1::int || ' days')::interval
+        AND created_at >= NOW() - ($1::int || ' days')::interval${trafficClause}
         AND payload->>'question' IS NOT NULL
       GROUP BY payload->>'question'
       ORDER BY opens DESC
@@ -242,14 +268,24 @@ app.get('/api/meta-lp/stats', requireAuth, async (req, res) => {
     let prev = null;
     const funnel = funnelDef.map((s) => {
       const c = n(s.key);
-      const fromTopPct = top > 0 ? ((c / top) * 100).toFixed(1) : '0.0';
-      const fromPrevPct = (prev != null && prev > 0) ? ((c / prev) * 100).toFixed(1) : null;
+      const fromTopPct = top > 0 ? Math.min(100, (c / top) * 100).toFixed(1) : '0.0';
+      /* 2026-06-16 — cap from_prev_pct at 100%. The funnel steps are NOT a
+         strict subset chain (a visitor can reach /signup without first
+         hitting /pricing), so a downstream step can legitimately have more
+         events than the one above it. Showing "138% of prev" is nonsense
+         to a human — clamp to 100% so the bar reads as "≥ everyone from
+         the previous step continued". from_top_pct (vs the LP view) is the
+         honest denominator and is clamped the same way. */
+      const fromPrevPct = (prev != null && prev > 0)
+        ? Math.min(100, (c / prev) * 100).toFixed(1)
+        : null;
       prev = c;
       return { key: s.key, label: s.label, count: c, from_top_pct: fromTopPct, from_prev_pct: fromPrevPct };
     });
 
     res.json({
       range_days: range,
+      traffic_mode: mode,
       totals: { ...t, ctr_primary_pct: ctrPrimary, ctr_secondary_pct: ctrSecondary },
       funnel,
       daily: daily.rows,

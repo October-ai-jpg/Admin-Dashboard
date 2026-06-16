@@ -272,6 +272,12 @@
         <div class="lp-status" id="metaLpStatus">Loading…</div>
       </div>
       <div class="lp-range">
+        <label style="font-size:12px;color:var(--muted);margin-right:8px">Traffic</label>
+        <select id="metaLpMode" style="margin-right:16px">
+          <option value="real" selected>Real visitors</option>
+          <option value="all">All (incl. test)</option>
+          <option value="test">Test / bots only</option>
+        </select>
         <label style="font-size:12px;color:var(--muted);margin-right:8px">Range</label>
         <select id="metaLpRange">
           <option value="7">Last 7 days</option>
