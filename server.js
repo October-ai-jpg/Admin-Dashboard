@@ -119,6 +119,12 @@ app.use('/api/linkedin', requireAuth, linkedinRoutes(pool));
 const systemAuditRoutes = require('./routes/systemAudit');
 app.use('/api/system-audit', requireAuth, systemAuditRoutes(pool));
 
+/* Self-editable budget / burn-rate / runway tool (finance_budget +
+   finance_balance_history on the shared pool). Schema is ensured lazily
+   on first request. */
+const budgetRoutes = require('./routes/budget');
+app.use('/api/budget', requireAuth, budgetRoutes(pool));
+
 const gmailSync = require('./services/gmailSync');
 if (pool && process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
   /* Run 60s after boot + every 6h. Incremental syncs are cheap

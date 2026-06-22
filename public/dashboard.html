@@ -47,6 +47,10 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
     <span>Unit Economics</span>
   </a>
+  <a class="sidebar-link" data-page="budget">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3v18h18"/><path d="M19 9l-5 5-4-4-3 3"/></svg>
+    <span>Budget &amp; Burn</span>
+  </a>
   <a class="sidebar-link" data-page="health">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
     <span>System Health</span>
@@ -231,6 +235,93 @@
     <div id="ueChart"></div>
 
     <div class="ue-rates" id="ueRates"></div>
+  </div>
+
+  <!-- ═══ BUDGET & BURN RATE (self-editable) ═══ -->
+  <div class="page-container" id="page-budget">
+    <style>
+      #page-budget{padding:32px}
+      #page-budget h1{font-family:var(--serif);font-size:32px;font-weight:400;margin:0 0 6px}
+      #page-budget .bg-sub{color:var(--muted);font-size:14px;margin:0 0 24px}
+      #page-budget .bg-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:16px;margin-bottom:28px}
+      #page-budget .bg-card{background:var(--white);border:1px solid var(--border);border-radius:10px;padding:18px}
+      #page-budget .bg-card-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.07em;font-weight:600;margin-bottom:8px}
+      #page-budget .bg-card-value{font-family:var(--serif);font-size:34px;font-weight:300;line-height:1;color:var(--black)}
+      #page-budget .bg-card-sub{font-size:12px;color:var(--muted);margin-top:6px}
+      #page-budget .bg-card.warn .bg-card-value{color:#d97706}
+      #page-budget .bg-card.bad .bg-card-value{color:#dc2626}
+      #page-budget .bg-card.good .bg-card-value{color:#16a34a}
+      #page-budget h2{font-family:var(--serif);font-size:22px;font-weight:400;margin:30px 0 12px}
+      #page-budget .bg-chartwrap{background:var(--white);border:1px solid var(--border);border-radius:10px;padding:18px;height:320px}
+      #page-budget .bg-grid{display:grid;grid-template-columns:2fr 1fr;gap:24px;align-items:start}
+      @media(max-width:900px){#page-budget .bg-grid{grid-template-columns:1fr}}
+      #page-budget table{width:100%;border-collapse:collapse;background:var(--white);border:1px solid var(--border);border-radius:8px;overflow:hidden;font-size:14px}
+      #page-budget th{text-align:left;padding:10px 14px;background:var(--cream-dark);color:var(--muted);font-weight:600;font-size:11px;letter-spacing:0.04em;text-transform:uppercase;border-bottom:1px solid var(--border)}
+      #page-budget td{padding:8px 12px;border-bottom:0.5px solid var(--border)}
+      #page-budget tr:last-child td{border-bottom:none}
+      #page-budget input.bg-inp{width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:14px;font-family:inherit;background:var(--white)}
+      #page-budget input.bg-num{text-align:right}
+      #page-budget .bg-del{cursor:pointer;color:var(--muted);border:none;background:none;font-size:18px;line-height:1;padding:4px 8px;border-radius:6px}
+      #page-budget .bg-del:hover{color:#dc2626;background:rgba(220,38,38,0.08)}
+      #page-budget .bg-btn{display:inline-flex;align-items:center;gap:6px;padding:9px 16px;border-radius:8px;border:1px solid var(--border);background:var(--white);color:var(--black);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
+      #page-budget .bg-btn:hover{background:var(--cream-dark)}
+      #page-budget .bg-btn.primary{background:var(--black);color:#fff;border-color:var(--black)}
+      #page-budget .bg-btn.primary:hover{opacity:0.9}
+      #page-budget .bg-field{margin-bottom:14px}
+      #page-budget .bg-field label{display:block;font-size:12px;color:var(--muted);font-weight:600;margin-bottom:6px}
+      #page-budget .bg-field .bg-hint{font-size:11px;color:var(--muted);margin-top:5px}
+      #page-budget .bg-panel{background:var(--white);border:1px solid var(--border);border-radius:10px;padding:18px}
+      #page-budget .bg-actions{display:flex;gap:12px;align-items:center;margin-top:18px}
+      #page-budget .bg-saved{font-size:13px;color:#16a34a;opacity:0;transition:opacity .3s}
+      #page-budget .bg-saved.show{opacity:1}
+      #page-budget .bg-total-row td{font-weight:700;background:var(--cream-dark)}
+    </style>
+
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px">
+      <div>
+        <h1>Budget &amp; Burn rate</h1>
+        <p class="bg-sub" id="bgUpdated">Edit anything below and hit Save. Runway = bank balance ÷ monthly burn.</p>
+      </div>
+    </div>
+
+    <div class="bg-cards" id="bgCards"></div>
+
+    <h2>Bank balance &amp; runway</h2>
+    <div class="bg-chartwrap"><canvas id="bgChart"></canvas></div>
+
+    <div class="bg-grid" style="margin-top:30px">
+      <div>
+        <h2 style="margin-top:0">Fixed monthly costs</h2>
+        <table>
+          <thead><tr><th>Post</th><th style="text-align:right;width:160px">Kr / md.</th><th style="width:40px"></th></tr></thead>
+          <tbody id="bgItems"></tbody>
+          <tfoot><tr class="bg-total-row"><td>Total fixed</td><td style="text-align:right" id="bgFixedTotal">–</td><td></td></tr></tfoot>
+        </table>
+        <button class="bg-btn" id="bgAddItem" style="margin-top:12px">+ Add line</button>
+      </div>
+
+      <div class="bg-panel">
+        <h2 style="margin-top:0;font-size:18px">Variable &amp; balance</h2>
+        <div class="bg-field">
+          <label>Meta Ads — kr / day</label>
+          <input class="bg-inp bg-num" type="number" id="bgMetaDaily" min="0" step="10">
+          <div class="bg-hint" id="bgMetaMonthly">× 30 = –</div>
+        </div>
+        <div class="bg-field">
+          <label>API / variable usage — kr / md.</label>
+          <input class="bg-inp bg-num" type="number" id="bgApiUsage" min="0" step="50">
+        </div>
+        <div class="bg-field">
+          <label>Bank balance — kr</label>
+          <input class="bg-inp bg-num" type="number" id="bgBank" min="0" step="100">
+          <div class="bg-hint">What's in the account right now.</div>
+        </div>
+        <div class="bg-actions">
+          <button class="bg-btn primary" id="bgSave">Save</button>
+          <span class="bg-saved" id="bgSaved">Saved ✓</span>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- ═══ META LANDING PAGE ANALYTICS ═══ -->

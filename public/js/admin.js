@@ -71,6 +71,7 @@ function loadPage(page) {
     case 'affiliates': loadAffiliates(); break;
     case 'revenue': loadRevenue(); break;
     case 'unit-economics': loadUnitEconomics(); break;
+    case 'budget': loadBudget(); break;
     case 'health': loadHealth(); break;
     case 'default-system': loadDefaultSystem(); break;
     case 'sandbox': loadSandbox(); break;
@@ -7108,6 +7109,209 @@ function ueCostRow(label, cost, revenue) {
   var r = parseFloat(revenue) || 0;
   var pct = r > 0 ? ((c / r) * 100).toFixed(1) + '%' : '—';
   return '<tr><td>' + esc(label) + '</td><td style="text-align:right">' + fmtUSD(c) + '</td><td style="text-align:right">' + pct + '</td></tr>';
+}
+
+/* ════════════════════════════════════════════════════════════════
+   Budget & Burn rate (2026-06-22) — fully self-editable.
+   Reads/writes /api/budget. Fixed-cost line items + Meta ads + a
+   variable/API figure + bank balance → live monthly burn + runway,
+   with a balance-over-time + projected-runway chart.
+   ════════════════════════════════════════════════════════════════ */
+var _budgetItems = [];     // [{label, monthly_dkk}]
+var _budgetHistory = [];   // [{recorded_on, bank_balance_dkk, monthly_burn_dkk}]
+
+function bgKr(n) {
+  n = Math.round(Number(n) || 0);
+  return n.toLocaleString('da-DK') + ' kr';
+}
+
+function loadBudget() {
+  api('/api/budget').then(function (d) {
+    if (!d || d.error) {
+      document.getElementById('bgCards').innerHTML =
+        '<div class="bg-card"><div class="bg-card-label">Error</div><div class="bg-card-sub">' +
+        esc((d && d.error) || 'Could not load budget') + '</div></div>';
+      return;
+    }
+    var c = d.config || {};
+    _budgetItems = (c.line_items || []).map(function (it) {
+      return { label: it.label || '', monthly_dkk: Number(it.monthly_dkk) || 0 };
+    });
+    _budgetHistory = d.history || [];
+
+    document.getElementById('bgMetaDaily').value = Number(c.meta_ads_daily_dkk) || 0;
+    document.getElementById('bgApiUsage').value = Number(c.api_usage_dkk) || 0;
+    document.getElementById('bgBank').value = Number(c.bank_balance_dkk) || 0;
+    if (c.updated_at) {
+      document.getElementById('bgUpdated').textContent =
+        'Last saved ' + new Date(c.updated_at).toLocaleString('da-DK') + '. Runway = bank balance ÷ monthly burn.';
+    }
+
+    bgRenderItems();
+    bgRecompute();
+    bgWire();
+  });
+}
+
+function bgRenderItems() {
+  document.getElementById('bgItems').innerHTML = _budgetItems.map(function (it, i) {
+    return '<tr>'
+      + '<td><input class="bg-inp" data-bg="label" data-i="' + i + '" value="' + esc(it.label) + '"></td>'
+      + '<td><input class="bg-inp bg-num" data-bg="amount" data-i="' + i + '" type="number" min="0" step="5" value="' + (Number(it.monthly_dkk) || 0) + '"></td>'
+      + '<td style="text-align:center"><button class="bg-del" data-del="' + i + '" title="Remove">×</button></td>'
+      + '</tr>';
+  }).join('');
+}
+
+/* Pull the live values from the inputs into _budgetItems + return totals. */
+function bgReadInputs() {
+  document.querySelectorAll('#bgItems input[data-bg]').forEach(function (inp) {
+    var i = parseInt(inp.getAttribute('data-i'), 10);
+    if (!_budgetItems[i]) return;
+    if (inp.getAttribute('data-bg') === 'label') _budgetItems[i].label = inp.value;
+    else _budgetItems[i].monthly_dkk = Number(inp.value) || 0;
+  });
+  var metaDaily = Number(document.getElementById('bgMetaDaily').value) || 0;
+  var apiUsage = Number(document.getElementById('bgApiUsage').value) || 0;
+  var bank = Number(document.getElementById('bgBank').value) || 0;
+  var fixed = _budgetItems.reduce(function (s, it) { return s + (Number(it.monthly_dkk) || 0); }, 0);
+  var metaMonthly = metaDaily * 30;
+  var burn = fixed + metaMonthly + apiUsage;
+  return { metaDaily: metaDaily, apiUsage: apiUsage, bank: bank, fixed: fixed, metaMonthly: metaMonthly, burn: burn };
+}
+
+function bgRecompute() {
+  var t = bgReadInputs();
+  document.getElementById('bgFixedTotal').textContent = bgKr(t.fixed);
+  document.getElementById('bgMetaMonthly').textContent = '× 30 = ' + bgKr(t.metaMonthly) + ' / md.';
+
+  var runwayMonths = t.burn > 0 && t.bank > 0 ? t.bank / t.burn : null;
+  var runwayDate = null;
+  if (runwayMonths != null) {
+    var rd = new Date();
+    rd.setDate(rd.getDate() + Math.round(runwayMonths * 30.44));
+    runwayDate = rd;
+  }
+  var rwClass = runwayMonths == null ? '' : (runwayMonths < 3 ? 'bad' : (runwayMonths < 6 ? 'warn' : 'good'));
+
+  document.getElementById('bgCards').innerHTML =
+      bgCard('Monthly burn', bgKr(t.burn), 'fixed ' + bgKr(t.fixed) + ' · ads ' + bgKr(t.metaMonthly) + ' · api ' + bgKr(t.apiUsage))
+    + bgCard('Bank balance', bgKr(t.bank), 'in the account now')
+    + bgCard('Runway', runwayMonths == null ? '–' : runwayMonths.toFixed(1) + ' mo', runwayMonths == null ? 'set burn + balance' : '≈ ' + Math.round(runwayMonths * 30.44) + ' days', rwClass)
+    + bgCard('Out of money', runwayDate ? runwayDate.toLocaleDateString('da-DK', { day: 'numeric', month: 'short', year: 'numeric' }) : '–', runwayDate ? 'at current burn' : '', rwClass);
+
+  bgRenderChart(t, runwayDate);
+}
+
+function bgCard(label, value, sub, cls) {
+  return '<div class="bg-card' + (cls ? ' ' + cls : '') + '">'
+    + '<div class="bg-card-label">' + esc(label) + '</div>'
+    + '<div class="bg-card-value">' + esc(String(value)) + '</div>'
+    + (sub ? '<div class="bg-card-sub">' + esc(sub) + '</div>' : '')
+    + '</div>';
+}
+
+function bgRenderChart(t, runwayDate) {
+  var ctx = document.getElementById('bgChart');
+  if (!ctx) return;
+  if (CHARTS['bgChart']) CHARTS['bgChart'].destroy();
+
+  var labels = _budgetHistory.map(function (h) { return h.recorded_on; });
+  var balance = _budgetHistory.map(function (h) { return Number(h.bank_balance_dkk); });
+
+  // Append the projected depletion point (balance → 0 at runway date).
+  var projection = labels.map(function () { return null; });
+  var lastIdx = balance.length - 1;
+  if (runwayDate && lastIdx >= 0) {
+    var rdLabel = runwayDate.toISOString().slice(0, 10);
+    labels = labels.concat([rdLabel]);
+    balance = balance.concat([null]);
+    projection = projection.concat([0]);
+    projection[lastIdx] = balance[lastIdx] != null ? balance[lastIdx] : t.bank;
+  }
+  // If there's no history yet, seed a single "today" point so the chart isn't blank.
+  if (_budgetHistory.length === 0) {
+    var today = new Date().toISOString().slice(0, 10);
+    labels = [today].concat(labels);
+    balance = [t.bank].concat(balance.slice(1));
+    if (runwayDate) { projection = [t.bank].concat(projection.slice(1)); }
+  }
+
+  CHARTS['bgChart'] = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [
+        { label: 'Bank balance', data: balance, borderColor: '#1A1A1A', backgroundColor: 'rgba(26,26,26,0.06)', borderWidth: 2, fill: true, tension: 0.25, pointRadius: 3, spanGaps: true },
+        { label: 'Projected runway', data: projection, borderColor: '#d97706', borderDash: [6, 5], borderWidth: 2, fill: false, tension: 0, pointRadius: 0, spanGaps: true }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: true, labels: { boxWidth: 12, font: { size: 11 } } } },
+      scales: {
+        y: { beginAtZero: true, ticks: { callback: function (v) { return (v / 1000) + 'k'; } } },
+        x: { ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 8 } }
+      }
+    }
+  });
+}
+
+var _bgWired = false;
+function bgWire() {
+  if (_bgWired) return;
+  _bgWired = true;
+  var items = document.getElementById('bgItems');
+  // Live recompute on any edit (event delegation for the dynamic rows).
+  items.addEventListener('input', bgRecompute);
+  items.addEventListener('click', function (e) {
+    var del = e.target.getAttribute('data-del');
+    if (del != null) {
+      bgReadInputs();
+      _budgetItems.splice(parseInt(del, 10), 1);
+      bgRenderItems();
+      bgRecompute();
+    }
+  });
+  ['bgMetaDaily', 'bgApiUsage', 'bgBank'].forEach(function (id) {
+    document.getElementById(id).addEventListener('input', bgRecompute);
+  });
+  document.getElementById('bgAddItem').addEventListener('click', function () {
+    bgReadInputs();
+    _budgetItems.push({ label: '', monthly_dkk: 0 });
+    bgRenderItems();
+    bgRecompute();
+  });
+  document.getElementById('bgSave').addEventListener('click', bgSave);
+}
+
+function bgSave() {
+  var t = bgReadInputs();
+  var btn = document.getElementById('bgSave');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  api('/api/budget', {
+    method: 'PUT',
+    body: JSON.stringify({
+      line_items: _budgetItems.filter(function (it) { return String(it.label).trim() !== ''; }),
+      meta_ads_daily_dkk: t.metaDaily,
+      api_usage_dkk: t.apiUsage,
+      bank_balance_dkk: t.bank
+    })
+  }).then(function (d) {
+    btn.disabled = false; btn.textContent = 'Save';
+    if (d && !d.error) {
+      _budgetHistory = d.history || _budgetHistory;
+      var saved = document.getElementById('bgSaved');
+      saved.classList.add('show');
+      setTimeout(function () { saved.classList.remove('show'); }, 1800);
+      bgRecompute();
+    } else {
+      alert('Save failed: ' + ((d && d.error) || 'unknown'));
+    }
+  }).catch(function (e) {
+    btn.disabled = false; btn.textContent = 'Save';
+    alert('Save failed: ' + e.message);
+  });
 }
 
 /* ════════════════════════════════════════════════════════════════
